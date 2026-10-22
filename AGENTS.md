@@ -99,6 +99,12 @@ The codebase adheres strictly to **Clean Architecture / Hexagonal Principles**:
 3. **Transition-Edge Event Logging (No Request-Level Flooding)**:
    - State transitions (e.g. switching from primary to secondary model upon 429, predictive fallback on quota exhaustion, or quota restoration) must emit user-facing logs **strictly once per transition**.
    - Subsequent in-flight requests and streaming SSE chunks during the degraded state must proceed silently without repeating the transition banner, preserving clean terminal output and preventing log pollution.
+4. **Cross-Platform Compatibility (Linux, macOS, Windows)**:
+   - Zero CGO ensures seamless static compilation across all target platforms (`GOOS=windows`, `darwin`, `linux`).
+   - Process lifecycle manages Linux-specific signaling (`lifecycle_linux.go`) alongside safe stubs for Windows and macOS (`lifecycle_other.go`).
+   - Browser launching handles platform-specific tools (`open` on macOS, `rundll32` on Windows, `xdg-open` on Linux).
+   - Local `language_server` discovery via `/proc` on Linux automatically and transparently falls back to direct Google Cloud Code PA endpoint polling on Windows and macOS.
+   - For full deployment steps, architecture, and native parity requirements on Windows, see `WINDOWS_COMPATIBILITY.md`.
 
 ---
 
