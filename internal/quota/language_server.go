@@ -448,3 +448,6 @@ func DefaultModelCatalog() []*domain.ModelInfo {
 		{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B (Medium)", Category: "claude_gpt", Recommended: true},
 	}
 }
+
+// CategorizeModelID returns the category string (claude_gpt, gemini_argon, gemini) for a model ID.
+func CategorizeModelID(id string) string { return categorizeModelID(id) }

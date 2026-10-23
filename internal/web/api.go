@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
@@ -146,7 +147,9 @@ func (a *APIHandler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 // AccountWithBuckets encapsulates an Account and its associated quota buckets.
 type AccountWithBuckets struct {
 	*domain.Account
-	Buckets []*domain.QuotaBucket `json:"buckets"`
+	Buckets          []*domain.QuotaBucket      `json:"buckets"`
+	ActiveCategories []string                   `json:"active_categories"`
+	ModelRules       []*domain.AccountModelRule `json:"model_rules"`
 }
 
 // HandleAccounts serves GET /api/accounts and DELETE /api/accounts/{id}.
@@ -169,6 +172,15 @@ func (a *APIHandler) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "select" {
 		if r.Method == http.MethodPost {
 			a.selectAccount(w, r, accountID)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "models" {
+		if r.Method == http.MethodPut {
+			a.updateAccountModelRule(w, r, accountID)
 			return
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -210,6 +222,8 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 		allBuckets, _ = a.quotaRepo.ListAll(ctx)
 	}
 
+	activeCats, _ := a.accountRepo.GetActiveCategoriesByAccount(ctx)
+
 	result := make([]*AccountWithBuckets, 0, len(accounts))
 	for _, acc := range accounts {
 		var b []*domain.QuotaBucket
@@ -219,9 +233,19 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 		if b == nil {
 			b = []*domain.QuotaBucket{}
 		}
+		rules, _ := a.accountRepo.ListAccountModelRules(ctx, acc.ID)
+		if rules == nil {
+			rules = []*domain.AccountModelRule{}
+		}
+		cats := make([]string, 0, len(activeCats[acc.ID]))
+		for _, c := range activeCats[acc.ID] {
+			cats = append(cats, c.String())
+		}
 		result = append(result, &AccountWithBuckets{
-			Account: acc,
-			Buckets: b,
+			Account:          acc,
+			Buckets:          b,
+			ActiveCategories: cats,
+			ModelRules:       rules,
 		})
 	}
 
@@ -253,9 +277,21 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 		buckets = []*domain.QuotaBucket{}
 	}
 
+	rules, _ := a.accountRepo.ListAccountModelRules(ctx, id)
+	if rules == nil {
+		rules = []*domain.AccountModelRule{}
+	}
+	cats := []string{}
+	if m, err := a.accountRepo.GetActiveCategoriesByAccount(ctx); err == nil {
+		for _, c := range m[id] {
+			cats = append(cats, c.String())
+		}
+	}
 	writeJSON(w, http.StatusOK, &AccountWithBuckets{
-		Account: acc,
-		Buckets: buckets,
+		Account:          acc,
+		Buckets:          buckets,
+		ActiveCategories: cats,
+		ModelRules:       rules,
 	})
 }
 
@@ -276,7 +312,23 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
-	if err := a.accountRepo.SetActive(ctx, id); err != nil {
+	var body struct {
+		Category string `json:"category"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body) // empty body = "all"
+	}
+	switch body.Category {
+	case "", "all":
+		body.Category = "all"
+		err = a.accountRepo.SetActive(ctx, id)
+	case "claude_gpt", "gemini", "gemini_argon":
+		err = a.accountRepo.SetActiveForCategory(ctx, domain.ModelCategory(body.Category), id)
+	default:
+		writeErrorJSON(w, http.StatusBadRequest, "invalid category", nil)
+		return
+	}
+	if err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "failed to activate account", err)
 		return
 	}
@@ -304,7 +356,73 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		"success":    true,
 		"account_id": id,
 		"email":      acc.Email,
+		"category":   body.Category,
 	})
+}
+
+// updateAccountModelRule serves PUT /api/accounts/{id}/models.
+func (a *APIHandler) updateAccountModelRule(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := r.Context()
+	if a.accountRepo == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "account repository unavailable", nil)
+		return
+	}
+	var req struct {
+		ModelID           string  `json:"model_id"`
+		Enabled           *bool   `json:"enabled"`
+		FallbackAccountID *string `json:"fallback_account_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ModelID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "model_id required", err)
+		return
+	}
+	if _, err := a.accountRepo.GetByID(ctx, id); err != nil {
+		if errors.Is(err, domain.ErrAccountNotFound) {
+			writeErrorJSON(w, http.StatusNotFound, "account not found", err)
+			return
+		}
+		writeErrorJSON(w, http.StatusInternalServerError, "failed to lookup account", err)
+		return
+	}
+	if req.FallbackAccountID != nil {
+		fb := *req.FallbackAccountID
+		if fb != domain.FallbackAccountAuto && fb != domain.FallbackAccountNone {
+			if fb == id {
+				writeErrorJSON(w, http.StatusBadRequest, "fallback cannot be the same account", nil)
+				return
+			}
+			if _, err := a.accountRepo.GetByID(ctx, fb); err != nil {
+				writeErrorJSON(w, http.StatusBadRequest, "fallback account not found", err)
+				return
+			}
+		}
+	}
+
+	rule := &domain.AccountModelRule{AccountID: id, ModelID: req.ModelID, Enabled: true}
+	rules, _ := a.accountRepo.ListAccountModelRules(ctx, id)
+	for _, ex := range rules {
+		if ex.ModelID == req.ModelID {
+			*rule = *ex
+			break
+		}
+	}
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
+	}
+	if req.FallbackAccountID != nil {
+		rule.FallbackAccountID = *req.FallbackAccountID
+	}
+	if rule.DisplayName == "" {
+		rule.DisplayName = req.ModelID
+	}
+	if rule.Category == "" || rule.Category == "unknown" {
+		rule.Category = quota.CategorizeModelID(req.ModelID)
+	}
+	if err := a.accountRepo.UpdateAccountModelRule(ctx, rule); err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "failed to update model rule", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rule)
 }
 
 func (a *APIHandler) deleteAccount(w http.ResponseWriter, r *http.Request, id string) {
@@ -752,21 +870,54 @@ func (a *APIHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, string) {
-	// 1. Try querying running language_server on localhost
-	if lsModels, err := quota.QueryAvailableModels(ctx); err == nil && len(lsModels) > 0 {
-		return a.ensureConfiguredModelsPresent(lsModels), "language_server"
-	}
-
-	// 2. Try querying Cloud Code PA directly if active account token exists
-	if a.accountRepo != nil {
-		if activeAcc, err := a.accountRepo.GetActive(ctx); err == nil && activeAcc != nil && activeAcc.AccessToken != "" {
-			if ccModels, err := quota.FetchAvailableModelsFromCloudCode(ctx, activeAcc.AccessToken); err == nil && len(ccModels) > 0 {
-				return a.ensureConfiguredModelsPresent(ccModels), "cloud_code_pa"
+	var union []*domain.ModelInfo
+	seen := map[string]bool{}
+	add := func(ms []*domain.ModelInfo) {
+		for _, m := range ms {
+			if m != nil && !seen[m.ID] {
+				seen[m.ID] = true
+				union = append(union, m)
 			}
 		}
 	}
+	source := ""
 
-	// 3. Fallback to comprehensive Antigravity model catalog
+	if a.accountRepo != nil {
+		accounts, _ := a.accountRepo.List(ctx)
+		for _, acc := range accounts {
+			var ms []*domain.ModelInfo
+			src := ""
+			// The local language_server reflects only the primary IDE login.
+			if acc.IsActive {
+				if lm, err := quota.QueryAvailableModels(ctx); err == nil && len(lm) > 0 {
+					ms, src = lm, "language_server"
+				}
+			}
+			if ms == nil && acc.AccessToken != "" {
+				if cm, err := quota.FetchAvailableModelsFromCloudCode(ctx, acc.AccessToken); err == nil && len(cm) > 0 {
+					ms, src = cm, "cloud_code_pa"
+				}
+			}
+			if ms == nil {
+				continue
+			}
+			if err := a.accountRepo.UpsertAccountModels(ctx, acc.ID, ms); err != nil {
+				slog.Warn("failed to persist account models", "account", acc.ID, "error", err)
+			}
+			add(ms)
+			if source == "" || src == "language_server" {
+				source = src
+			}
+		}
+	}
+	if len(union) > 0 {
+		return a.ensureConfiguredModelsPresent(union), source
+	}
+
+	// No account yielded models: try the local language_server, then the static catalog.
+	if lsModels, err := quota.QueryAvailableModels(ctx); err == nil && len(lsModels) > 0 {
+		return a.ensureConfiguredModelsPresent(lsModels), "language_server"
+	}
 	return a.ensureConfiguredModelsPresent(quota.DefaultModelCatalog()), "catalog"
 }
 
