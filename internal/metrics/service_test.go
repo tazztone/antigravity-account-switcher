@@ -60,6 +60,30 @@ func (m *mockAccountRepo) GetNextAvailableForCategory(ctx context.Context, categ
 	return nil, nil
 }
 
+func (m *mockAccountRepo) GetActiveCategoriesByAccount(ctx context.Context) (map[string][]domain.ModelCategory, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) UpsertAccountModels(ctx context.Context, accountID string, models []*domain.ModelInfo) error {
+	return nil
+}
+
+func (m *mockAccountRepo) ListAccountModelRules(ctx context.Context, accountID string) ([]*domain.AccountModelRule, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) UpdateAccountModelRule(ctx context.Context, rule *domain.AccountModelRule) error {
+	return nil
+}
+
+func (m *mockAccountRepo) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, string, error) {
+	return true, domain.FallbackAccountAuto, nil
+}
+
+func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
+	return nil, nil
+}
+
 type mockMetricsRepo struct {
 	summaryRes        *domain.AggregatedMetrics
 	summariesRes      map[string]*domain.AggregatedMetrics

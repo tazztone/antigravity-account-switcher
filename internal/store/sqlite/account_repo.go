@@ -18,8 +18,9 @@ type AccountRepository struct {
 }
 
 // bucketCategoryPredicate matches quota_buckets rows (alias qb) belonging to a
-// model category: Claude/GPT third-party buckets for "claude_gpt", and Gemini
-// buckets for "gemini". Two placeholders are bound to the category string.
+// model category: Claude/GPT third-party buckets for "claude_gpt", Gemini 4 Argon
+// weekly buckets for "gemini_argon", and regular Gemini buckets (explicitly not
+// Argon) for "gemini". Two placeholders are bound to the category string.
 const bucketCategoryPredicate = `
 	AND (
 		(? = 'claude_gpt' AND (
@@ -27,8 +28,13 @@ const bucketCategoryPredicate = `
 			LOWER(qb.display_name) LIKE '%claude%' OR LOWER(qb.display_name) LIKE '%gpt%' OR LOWER(qb.display_name) LIKE '%3p%'
 		))
 		OR
+		(? = 'gemini_argon' AND (
+			LOWER(qb.bucket_id) LIKE '%argon%' OR LOWER(qb.display_name) LIKE '%argon%'
+		))
+		OR
 		(? = 'gemini' AND (
-			LOWER(qb.bucket_id) LIKE '%gemini%' OR LOWER(qb.display_name) LIKE '%gemini%'
+			(LOWER(qb.bucket_id) LIKE '%gemini%' OR LOWER(qb.display_name) LIKE '%gemini%')
+			AND LOWER(qb.bucket_id) NOT LIKE '%argon%' AND LOWER(qb.display_name) NOT LIKE '%argon%'
 		))
 	)
 `
@@ -364,14 +370,16 @@ func (r *AccountRepository) hasExhaustedBucketForCategory(ctx context.Context, a
 		  AND qb.reset_time > ?
 	` + bucketCategoryPredicate
 	var count int
-	if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr).Scan(&count); err != nil {
+	if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr, catStr).Scan(&count); err != nil {
 		return false, err
 	}
 	return count > 0, nil
 }
 
 // SetActiveForCategory sets the active account pointer for a specific model category.
-// It keeps accounts.is_active updated for full backward compatibility.
+// It only touches active_category_accounts: accounts.is_active remains the global
+// primary IDE login managed solely by SetActive, so per-category failover never
+// misattributes the local IDE quota buckets polled via acc.IsActive.
 func (r *AccountRepository) SetActiveForCategory(ctx context.Context, category domain.ModelCategory, accountID string) error {
 	if accountID == "" {
 		return domain.ErrAccountNotFound
@@ -386,8 +394,6 @@ func (r *AccountRepository) SetActiveForCategory(ctx context.Context, category d
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	nowStr := time.Now().UTC().Format(time.RFC3339)
 
 	// 1. Verify target account exists
 	var count int
@@ -407,14 +413,6 @@ func (r *AccountRepository) SetActiveForCategory(ctx context.Context, category d
 	`
 	if _, err := tx.ExecContext(ctx, upsertSQL, catStr, accountID); err != nil {
 		return fmt.Errorf("failed to set active account for category %s: %w", catStr, err)
-	}
-
-	// 3. Keep accounts.is_active updated for backward compatibility (at most one account has is_active = 1)
-	if _, err := tx.ExecContext(ctx, "UPDATE accounts SET is_active = 0, updated_at = ? WHERE is_active = 1 AND id != ?", nowStr, accountID); err != nil {
-		return fmt.Errorf("failed to deactivate previous active account: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "UPDATE accounts SET is_active = 1, status = 'active', updated_at = ? WHERE id = ?", nowStr, accountID); err != nil {
-		return fmt.Errorf("failed to activate target account %s: %w", accountID, err)
 	}
 
 	return tx.Commit()
@@ -464,7 +462,7 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, nowStr, catStr, catStr)
+	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, catStr, nowStr, catStr, catStr, catStr)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
 		return nil, domain.ErrNoAvailableAccount
@@ -506,4 +504,247 @@ func (r *AccountRepository) scanAccount(scanner rowScanner) (*domain.Account, er
 	acc.UpdatedAt, _ = parseDBTime(updatedStr)
 
 	return &acc, nil
+}
+
+// GetActiveCategoriesByAccount returns the pinned model categories per account ID
+// by inverting the active_category_accounts table.
+func (r *AccountRepository) GetActiveCategoriesByAccount(ctx context.Context) (map[string][]domain.ModelCategory, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT account_id, category FROM active_category_accounts")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active category accounts: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]domain.ModelCategory)
+	for rows.Next() {
+		var accountID, category string
+		if err := rows.Scan(&accountID, &category); err != nil {
+			return nil, fmt.Errorf("failed to scan active category account: %w", err)
+		}
+		result[accountID] = append(result[accountID], domain.ModelCategory(category))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate active category accounts: %w", err)
+	}
+	return result, nil
+}
+
+// UpsertAccountModels persists a discovered model catalog for an account.
+// New models are inserted enabled; existing rows keep their enabled/fallback overrides.
+func (r *AccountRepository) UpsertAccountModels(ctx context.Context, accountID string, models []*domain.ModelInfo) error {
+	if accountID == "" || len(models) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at)
+		VALUES (?, ?, ?, ?, 1, '', ?)
+		ON CONFLICT(account_id, model_id) DO UPDATE SET
+			display_name = excluded.display_name,
+			category = excluded.category,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare upsert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, m := range models {
+		if m == nil || m.ID == "" {
+			continue
+		}
+		displayName := m.DisplayName
+		if displayName == "" {
+			displayName = m.ID
+		}
+		category := m.Category
+		if category == "" {
+			category = domain.CategoryUnknown.String()
+		}
+		if _, err := stmt.ExecContext(ctx, accountID, m.ID, displayName, category, nowStr); err != nil {
+			return fmt.Errorf("failed to upsert model rule %s: %w", m.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ListAccountModelRules returns per-model eligibility rules for an account.
+func (r *AccountRepository) ListAccountModelRules(ctx context.Context, accountID string) ([]*domain.AccountModelRule, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at
+		FROM account_model_rules
+		WHERE account_id = ?
+		ORDER BY model_id ASC
+	`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list account model rules: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*domain.AccountModelRule
+	for rows.Next() {
+		var rule domain.AccountModelRule
+		var enabledInt int
+		var updatedStr string
+		if err := rows.Scan(&rule.AccountID, &rule.ModelID, &rule.DisplayName, &rule.Category, &enabledInt, &rule.FallbackAccountID, &updatedStr); err != nil {
+			return nil, fmt.Errorf("failed to scan account model rule: %w", err)
+		}
+		rule.Enabled = enabledInt == 1
+		rule.UpdatedAt, _ = parseDBTime(updatedStr)
+		result = append(result, &rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate account model rules: %w", err)
+	}
+	return result, nil
+}
+
+// UpdateAccountModelRule upserts the enabled flag and fallback target for one
+// model on an account. Missing rows are inserted with the provided values.
+func (r *AccountRepository) UpdateAccountModelRule(ctx context.Context, rule *domain.AccountModelRule) error {
+	if rule == nil || rule.AccountID == "" || rule.ModelID == "" {
+		return domain.ErrAccountNotFound
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM accounts WHERE id = ?", rule.AccountID).Scan(&count); err != nil {
+		return fmt.Errorf("failed to verify account %s: %w", rule.AccountID, err)
+	}
+	if count == 0 {
+		return domain.ErrAccountNotFound
+	}
+
+	enabledInt := 0
+	if rule.Enabled {
+		enabledInt = 1
+	}
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(account_id, model_id) DO UPDATE SET
+			enabled = excluded.enabled,
+			fallback_account_id = excluded.fallback_account_id,
+			updated_at = excluded.updated_at
+	`, rule.AccountID, rule.ModelID, rule.DisplayName, rule.Category, enabledInt, rule.FallbackAccountID, nowStr)
+	if err != nil {
+		return fmt.Errorf("failed to update model rule %s: %w", rule.ModelID, err)
+	}
+
+	return tx.Commit()
+}
+
+// IsAccountEligibleForModel reports whether an account may serve a model, plus
+// its configured fallback target. Fail-open: an account with no model rules at
+// all is eligible for everything; once rules exist, the model must be present
+// with enabled = 1.
+func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, string, error) {
+	if accountID == "" {
+		return false, domain.FallbackAccountAuto, domain.ErrAccountNotFound
+	}
+	if modelID == "" {
+		return true, domain.FallbackAccountAuto, nil
+	}
+
+	var ruleCount int
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM account_model_rules WHERE account_id = ?", accountID).Scan(&ruleCount); err != nil {
+		return false, domain.FallbackAccountAuto, fmt.Errorf("failed to count model rules: %w", err)
+	}
+	if ruleCount == 0 {
+		return true, domain.FallbackAccountAuto, nil
+	}
+
+	var enabledInt int
+	var fallbackID string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT enabled, fallback_account_id FROM account_model_rules
+		WHERE account_id = ? AND model_id = ?
+	`, accountID, modelID).Scan(&enabledInt, &fallbackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Catalog populated but this model never discovered on this account.
+		return false, domain.FallbackAccountAuto, nil
+	}
+	if err != nil {
+		return false, domain.FallbackAccountAuto, fmt.Errorf("failed to query model rule: %w", err)
+	}
+	return enabledInt == 1, fallbackID, nil
+}
+
+// GetNextAvailableForModel selects the next account eligible for a specific model:
+// active status, not exhausted for the category, not excluded, and either without
+// model rules or with the model present and enabled.
+func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
+	// Base candidate query mirrors GetNextAvailableForCategory (category quota +
+	// status), then adds the per-account model eligibility constraint.
+	next, err := r.GetNextAvailableForCategory(ctx, category, excludeID)
+	if err != nil || next == nil {
+		return next, err
+	}
+
+	eligible, _, err := r.IsAccountEligibleForModel(ctx, next.ID, modelID)
+	if err != nil {
+		return nil, err
+	}
+	if eligible {
+		return next, nil
+	}
+
+	// Candidate ineligible for this model: fall back to a model-aware SQL scan.
+	catStr := category.String()
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	query := `
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at
+		FROM accounts a
+		WHERE (? = '' OR a.id != ?)
+		  AND (
+			a.status = 'active'
+			OR (
+				a.status = 'exhausted'
+				AND EXISTS (
+					SELECT 1 FROM quota_buckets qb
+					WHERE qb.account_id = a.id
+					  AND qb.remaining_fraction > 0.0
+	` + bucketCategoryPredicate + `
+				)
+			)
+		  )
+		  AND NOT EXISTS (
+			  SELECT 1 FROM quota_buckets qb
+			  WHERE qb.account_id = a.id
+			    AND qb.remaining_fraction <= 0.0
+			    AND qb.reset_time > ?
+	` + bucketCategoryPredicate + `
+		  )
+		  AND (
+			NOT EXISTS (SELECT 1 FROM account_model_rules mr WHERE mr.account_id = a.id)
+			OR EXISTS (
+				SELECT 1 FROM account_model_rules mr
+				WHERE mr.account_id = a.id AND mr.model_id = ? AND mr.enabled = 1
+			)
+		  )
+		ORDER BY a.updated_at ASC
+		LIMIT 1
+	`
+	args := []any{excludeID, excludeID, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, modelID}
+	row := r.db.QueryRowContext(ctx, query, args...)
+	acc, err := r.scanAccount(row)
+	if errors.Is(err, domain.ErrAccountNotFound) {
+		return nil, domain.ErrNoAvailableAccount
+	}
+	return acc, err
 }

@@ -1460,7 +1460,7 @@ func TestTier3_Combination_PredictiveThenReactive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	active, err := env.AccountRepo.GetActive(ctx)
+	active, err := env.AccountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
 	if err != nil || active.ID != "acc-comb-2" {
 		t.Errorf("expected Account 2 active after double exhaustion, got: %v", active)
 	}
@@ -1845,8 +1845,11 @@ func TestTier4_Scenario4_DoubleExhaustion_RotatesAndResetsToPrimary(t *testing.T
 		t.Fatalf("expected 200 OK after failover to Account 2, got %d", resp.StatusCode)
 	}
 
+	// Rotation is driven by the 429 on the replayed secondary (claude-3-5-sonnet),
+	// so the claude_gpt pin moves to acc-rot-2; the gemini pin only advances once
+	// its own bucket shows exhaustion.
 	ctx := context.Background()
-	active, err := env.AccountRepo.GetActive(ctx)
+	active, err := env.AccountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
 	if err != nil || active.ID != "acc-rot-2" {
 		t.Errorf("expected active account to be acc-rot-2, got: %v", active)
 	}
@@ -1872,7 +1875,7 @@ func TestTier4_Scenario5_StrictEnterpriseMode_InstantRotation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	active, _ := env.AccountRepo.GetActive(ctx)
+	active, _ := env.AccountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
 	if active == nil || active.ID != "acc-ent-2" {
 		t.Errorf("expected immediate rotation to acc-ent-2 in strict enterprise mode")
 	}

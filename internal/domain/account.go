@@ -29,6 +29,8 @@ const (
 	CategoryClaudeGPT ModelCategory = "claude_gpt"
 	// CategoryGemini covers Google Gemini and Gemma first-party models.
 	CategoryGemini ModelCategory = "gemini"
+	// CategoryGeminiArgon covers Gemini 4 Argon tiers with their own weekly quota buckets.
+	CategoryGeminiArgon ModelCategory = "gemini_argon"
 )
 
 // String returns the string representation of ModelCategory.
@@ -110,4 +112,25 @@ type AccountRepository interface {
 	// GetNextAvailableForCategory selects the next eligible account for a model category,
 	// excluding the specified account ID and accounts whose quota for that category is exhausted.
 	GetNextAvailableForCategory(ctx context.Context, category ModelCategory, excludeID string) (*Account, error)
+
+	// GetActiveCategoriesByAccount returns the pinned model categories per account ID.
+	GetActiveCategoriesByAccount(ctx context.Context) (map[string][]ModelCategory, error)
+
+	// UpsertAccountModels persists a discovered model catalog for an account, inserting new rows
+	// with enabled = 1 and preserving existing enabled/fallback overrides on conflict.
+	UpsertAccountModels(ctx context.Context, accountID string, models []*ModelInfo) error
+
+	// ListAccountModelRules returns per-model eligibility rules for an account.
+	ListAccountModelRules(ctx context.Context, accountID string) ([]*AccountModelRule, error)
+
+	// UpdateAccountModelRule upserts the enabled flag and fallback target for one model on an account.
+	UpdateAccountModelRule(ctx context.Context, rule *AccountModelRule) error
+
+	// IsAccountEligibleForModel reports whether an account may serve a model, and its
+	// configured fallback target. Accounts without any model rules are eligible for all models.
+	IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (eligible bool, fallbackAccountID string, err error)
+
+	// GetNextAvailableForModel selects the next account eligible for a specific model,
+	// excluding excludeID and accounts where the model is disabled or category quota is exhausted.
+	GetNextAvailableForModel(ctx context.Context, category ModelCategory, modelID, excludeID string) (*Account, error)
 }

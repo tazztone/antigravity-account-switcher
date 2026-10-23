@@ -102,6 +102,25 @@ CREATE TABLE IF NOT EXISTS active_category_accounts (
 );
 `,
 	},
+	{
+		Version:     3,
+		Description: "account_model_rules",
+		SQL: `
+-- 7. Per-account model eligibility and fallback routing rules
+CREATE TABLE IF NOT EXISTS account_model_rules (
+    account_id          TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    model_id            TEXT NOT NULL,
+    display_name        TEXT NOT NULL DEFAULT '',
+    category            TEXT NOT NULL DEFAULT 'unknown',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    fallback_account_id TEXT NOT NULL DEFAULT '',
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY (account_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_model_rules_model ON account_model_rules(model_id, enabled);
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.
@@ -155,7 +174,9 @@ func Migrate(db *DB) error {
 	INSERT OR IGNORE INTO active_category_accounts (category, account_id)
 	SELECT 'claude_gpt', id FROM accounts WHERE is_active = 1
 	UNION ALL
-	SELECT 'gemini', id FROM accounts WHERE is_active = 1;`
+	SELECT 'gemini', id FROM accounts WHERE is_active = 1
+	UNION ALL
+	SELECT 'gemini_argon', id FROM accounts WHERE is_active = 1;`
 	if _, err := db.ExecContext(ctx, seedSQL); err != nil {
 		return fmt.Errorf("failed to seed active_category_accounts: %w", err)
 	}

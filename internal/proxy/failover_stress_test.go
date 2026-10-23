@@ -240,7 +240,7 @@ func TestFailover_Stress_Concurrent429_IntraAccountFallbackStampede(t *testing.T
 	}
 
 	// Verify Anti-Stampede invariant: Account A MUST STILL BE ACTIVE!
-	activeAcc, err := env.accountRepo.GetActive(ctx)
+	activeAcc, err := env.accountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
 	if err != nil {
 		t.Fatalf("failed to get active account: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestFailover_Stress_ConcurrentDoubleExhaustion_AntiStampedeRotation(t *test
 	}
 
 	// Verify Anti-Stampede invariant: Account B MUST BE THE ACTIVE ACCOUNT!
-	activeAcc, err := env.accountRepo.GetActive(ctx)
+	activeAcc, err := env.accountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
 	if err != nil {
 		t.Fatalf("failed to get active account: %v", err)
 	}
@@ -424,10 +424,10 @@ func TestFailover_Stress_ConcurrentDoubleExhaustion_AntiStampedeRotation(t *test
 		t.Errorf("ANTI-STAMPEDE VIOLATION: Account C received %d requests; stampede over-rotated past Account B!", reqsOnC)
 	}
 
-	// Account A must be exhausted in DB
+	// Account A must be exhausted in DB; global is_active stays with the primary IDE login
 	dbAccA, _ := env.accountRepo.GetByID(ctx, accA.ID)
-	if dbAccA.Status != domain.AccountStatusExhausted || dbAccA.IsActive {
-		t.Errorf("expected accA status=exhausted is_active=false, got status=%s is_active=%v", dbAccA.Status, dbAccA.IsActive)
+	if dbAccA.Status != domain.AccountStatusExhausted {
+		t.Errorf("expected accA status=exhausted, got status=%s", dbAccA.Status)
 	}
 }
 
@@ -583,7 +583,7 @@ func TestFailover_Stress_ConcurrentDirectRotation_FallbackDisabled(t *testing.T)
 	}
 
 	// Anti-stampede verification
-	activeAcc, err := env.accountRepo.GetActive(ctx)
+	activeAcc, err := env.accountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
 	if err != nil {
 		t.Fatalf("get active: %v", err)
 	}
