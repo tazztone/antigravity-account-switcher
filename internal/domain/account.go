@@ -133,4 +133,9 @@ type AccountRepository interface {
 	// GetNextAvailableForModel selects the next account eligible for a specific model,
 	// excluding excludeID and accounts where the model is disabled or category quota is exhausted.
 	GetNextAvailableForModel(ctx context.Context, category ModelCategory, modelID, excludeID string) (*Account, error)
+
+	// IsAccountAvailableForCategory reports whether one specific account may serve traffic
+	// for a model category right now, using the same eligibility rules as
+	// GetNextAvailableForCategory (status plus per-category quota evidence).
+	IsAccountAvailableForCategory(ctx context.Context, accountID string, category ModelCategory) (bool, error)
 }

@@ -1,0 +1,476 @@
+package proxy_test
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/proxy"
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/store/sqlite"
+)
+
+// upstreamResponder decides the upstream reply for an Authorization token and
+// request body, letting each test model its own quota behaviour.
+type upstreamResponder func(token, body string) (status int, payload string)
+
+// eligibilityFixture wires a SQLite-backed account pool to a proxy handler and a
+// stub upstream that echoes the serving account's token in its response body.
+type eligibilityFixture struct {
+	ctx     context.Context
+	db      *sqlite.DB
+	repo    *sqlite.AccountRepository
+	handler *proxy.ProxyHandler
+	hits    *int64
+}
+
+func newEligibilityFixture(t *testing.T, accounts []*domain.Account, respond upstreamResponder) *eligibilityFixture {
+	t.Helper()
+
+	db, err := sqlite.Open(t.TempDir() + "/proxy_eligibility.db")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	repo := sqlite.NewAccountRepository(db)
+
+	for _, acc := range accounts {
+		if acc.Status == "" {
+			acc.Status = domain.AccountStatusActive
+		}
+		if err := repo.Create(ctx, acc); err != nil {
+			t.Fatalf("Create %s: %v", acc.ID, err)
+		}
+	}
+
+	var hits int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		var body string
+		if r.Body != nil {
+			raw, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+			body = string(raw)
+		}
+		status, payload := http.StatusOK, `{"ok":true,"account":"`+token+`"}`
+		if respond != nil {
+			status, payload = respond(token, body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := proxy.NewProxyHandler(repo, proxy.WithTargetURL(upstream.URL))
+	if err != nil {
+		t.Fatalf("NewProxyHandler: %v", err)
+	}
+
+	return &eligibilityFixture{ctx: ctx, db: db, repo: repo, handler: handler, hits: &hits}
+}
+
+func (f *eligibilityFixture) seedModels(t *testing.T, accountID string, models ...*domain.ModelInfo) {
+	t.Helper()
+	if err := f.repo.UpsertAccountModels(f.ctx, accountID, models); err != nil {
+		t.Fatalf("UpsertAccountModels %s: %v", accountID, err)
+	}
+}
+
+func (f *eligibilityFixture) setUpdatedAt(t *testing.T, accountID, rfc3339 string) {
+	t.Helper()
+	if _, err := f.db.ExecContext(f.ctx, "UPDATE accounts SET updated_at = ? WHERE id = ?", rfc3339, accountID); err != nil {
+		t.Fatalf("set updated_at for %s: %v", accountID, err)
+	}
+}
+
+// requestModel performs a Cloud Code generateContent call and returns the recorder.
+func (f *eligibilityFixture) requestModel(t *testing.T, model string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"model":    model,
+		"contents": []map[string]any{{"parts": []map[string]string{{"text": "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1internal:generateContent", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func (f *eligibilityFixture) activeAccount(t *testing.T, category domain.ModelCategory) string {
+	t.Helper()
+	acc, err := f.repo.GetActiveForCategory(f.ctx, category)
+	if err != nil || acc == nil {
+		return ""
+	}
+	return acc.ID
+}
+
+// newTwoAccountPool mirrors the reported setup: a Paid account that can serve
+// Claude Opus 5.5, Gemini 4 Argon and Gemini, plus a Trial account limited to
+// Claude Opus 4.6 and Gemini.
+func newTwoAccountPool(t *testing.T, respond upstreamResponder) *eligibilityFixture {
+	t.Helper()
+	f := newEligibilityFixture(t, []*domain.Account{
+		{ID: "acc-paid", Email: "paid@example.com", AccessToken: "paid-token", IsActive: true},
+		{ID: "acc-trial", Email: "trial@example.com", AccessToken: "trial-token"},
+	}, respond)
+
+	f.seedModels(t, "acc-paid",
+		&domain.ModelInfo{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"},
+		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon"},
+		&domain.ModelInfo{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini"},
+	)
+	f.seedModels(t, "acc-trial",
+		&domain.ModelInfo{ID: "claude-opus-4-6-thinking", DisplayName: "Claude Opus 4.6 (Thinking)", Category: "claude_gpt"},
+		&domain.ModelInfo{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini"},
+	)
+	return f
+}
+
+func TestPreFlightEligibility_RoutesIneligibleModelToEligibleAccount(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	// Claude/GPT traffic is pinned to the Trial account, which cannot serve Opus 5.5.
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-trial"); err != nil {
+		t.Fatalf("pin claude_gpt to trial: %v", err)
+	}
+
+	rec := f.requestModel(t, "claude-opus-5-5")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 routed to paid account, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "paid-token") {
+		t.Errorf("expected request dispatched via paid account, got: %s", rec.Body.String())
+	}
+	if got := atomic.LoadInt64(f.hits); got != 1 {
+		t.Errorf("expected exactly 1 upstream hit, got %d", got)
+	}
+	// Eligibility is a per-model constraint: the category pin must stay on the
+	// preferred account so other Claude models keep using it.
+	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-trial" {
+		t.Errorf("claude_gpt pin must stay on acc-trial, got %q", got)
+	}
+}
+
+func TestPreFlightEligibility_EligibleModelStaysOnActiveAccount(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-trial"); err != nil {
+		t.Fatalf("pin claude_gpt to trial: %v", err)
+	}
+
+	rec := f.requestModel(t, "claude-opus-4-6-thinking")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on trial, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "trial-token") {
+		t.Errorf("expected request to stay on the pinned trial account, got: %s", rec.Body.String())
+	}
+	if got := atomic.LoadInt64(f.hits); got != 1 {
+		t.Errorf("expected exactly 1 upstream hit, got %d", got)
+	}
+}
+
+func TestPreFlightEligibility_NoneRuleKeepsPinnedAccount(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-trial"); err != nil {
+		t.Fatalf("pin claude_gpt to trial: %v", err)
+	}
+	// Explicitly disable Opus 5.5 on Trial and opt out of re-routing.
+	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
+		AccountID:         "acc-trial",
+		ModelID:           "claude-opus-5-5",
+		Category:          "claude_gpt",
+		Enabled:           false,
+		FallbackAccountID: domain.FallbackAccountNone,
+	}); err != nil {
+		t.Fatalf("disable model on trial: %v", err)
+	}
+
+	rec := f.requestModel(t, "claude-opus-5-5")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from pinned trial account, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "trial-token") {
+		t.Errorf("fallback_account_id=none must not re-route, got: %s", rec.Body.String())
+	}
+}
+
+func TestFailover_NoneRuleForwardsUpstream429WithoutReplay(t *testing.T) {
+	f := newTwoAccountPool(t, func(token, body string) (int, string) {
+		if token == "paid-token" && strings.Contains(body, "claude-opus-5-5") {
+			return http.StatusTooManyRequests, `{"error":{"code":429,"message":"RESOURCE_EXHAUSTED"}}`
+		}
+		return http.StatusOK, `{"ok":true,"account":"` + token + `"}`
+	})
+
+	// Both accounts can serve Opus 5.5, so only the fallback rule can stop rotation.
+	f.seedModels(t, "acc-trial",
+		&domain.ModelInfo{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"},
+	)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-paid"); err != nil {
+		t.Fatalf("pin claude_gpt to paid: %v", err)
+	}
+	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
+		AccountID:         "acc-paid",
+		ModelID:           "claude-opus-5-5",
+		Category:          "claude_gpt",
+		Enabled:           true,
+		FallbackAccountID: domain.FallbackAccountNone,
+	}); err != nil {
+		t.Fatalf("set none rule: %v", err)
+	}
+
+	rec := f.requestModel(t, "claude-opus-5-5")
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected upstream 429 to surface, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt64(f.hits); got != 1 {
+		t.Errorf("account rotation must be blocked, upstream hits = %d", got)
+	}
+	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-paid" {
+		t.Errorf("claude_gpt pin must stay on acc-paid, got %q", got)
+	}
+	trial, err := f.repo.GetByID(f.ctx, "acc-trial")
+	if err != nil {
+		t.Fatalf("GetByID trial: %v", err)
+	}
+	if trial.IsActive {
+		t.Error("trial account must not be activated when rotation is blocked")
+	}
+}
+
+func TestGeminiArgonExhaustion_DoesNotLockOutRegularGemini(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
+		t.Fatalf("pin argon to paid: %v", err)
+	}
+
+	// Argon weekly bucket exhausted on paid; regular gemini buckets stay healthy.
+	reset := "2026-12-31T00:00:00Z"
+	if _, err := f.db.ExecContext(f.ctx, `
+		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
+		VALUES ('acc-paid', 'argon-weekly', 'Gemini Argon (weekly)', 'weekly', 0.0, ?, ?)
+	`, reset, reset); err != nil {
+		t.Fatalf("seed argon bucket: %v", err)
+	}
+	if _, err := f.db.ExecContext(f.ctx, `
+		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
+		VALUES ('acc-paid', 'gemini-5h', 'Gemini (5h)', '5h', 1.0, ?, ?)
+	`, reset, reset); err != nil {
+		t.Fatalf("seed gemini bucket: %v", err)
+	}
+
+	// A regular Gemini request must still reach the paid account.
+	rec := f.requestModel(t, "gemini-2.5-pro")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for regular gemini despite argon exhaustion, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "paid-token") {
+		t.Errorf("argon exhaustion must not lock out regular gemini, got: %s", rec.Body.String())
+	}
+	if got := atomic.LoadInt64(f.hits); got != 1 {
+		t.Errorf("expected exactly 1 upstream hit, got %d", got)
+	}
+}
+
+func TestExhaustionOnArgon_MarksOnlyArgonExhausted(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
+		t.Fatalf("pin argon to paid: %v", err)
+	}
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
+		t.Fatalf("pin gemini to paid: %v", err)
+	}
+
+	paid, err := f.repo.GetByID(f.ctx, "acc-paid")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+
+	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
+	if _, err := engine.RotateAccountForCategory(f.ctx, paid, domain.CategoryGeminiArgon); err != nil {
+		t.Fatalf("RotateAccountForCategory(argon): %v", err)
+	}
+
+	if got := f.activeAccount(t, domain.CategoryGeminiArgon); got != "acc-trial" {
+		t.Errorf("argon pin should move to the next account, got %q", got)
+	}
+	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-paid" {
+		t.Errorf("regular gemini pin must stay on acc-paid after argon exhaustion, got %q", got)
+	}
+}
+
+func TestFailover_RotatesToModelEligibleAccount(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-trial"); err != nil {
+		t.Fatalf("pin gemini to trial: %v", err)
+	}
+	trial, err := f.repo.GetByID(f.ctx, "acc-trial")
+	if err != nil {
+		t.Fatalf("GetByID trial: %v", err)
+	}
+
+	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
+	_, _, next, rotErr := engine.HandleExhaustion(f.ctx, trial, "gemini-2.5-pro")
+	if rotErr != nil {
+		t.Fatalf("HandleExhaustion: %v", rotErr)
+	}
+	if next == nil || next.ID != "acc-paid" {
+		t.Fatalf("expected rotation to acc-paid, got %+v", next)
+	}
+	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-paid" {
+		t.Errorf("gemini pin should follow the rotation, got %q", got)
+	}
+}
+
+func TestFailover_IgnoresIneligiblePinnedAccount(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	// Another request pinned Claude/GPT to Trial, which cannot serve Opus 5.5.
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-trial"); err != nil {
+		t.Fatalf("pin claude_gpt to trial: %v", err)
+	}
+	paid, err := f.repo.GetByID(f.ctx, "acc-paid")
+	if err != nil {
+		t.Fatalf("GetByID paid: %v", err)
+	}
+
+	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
+	_, _, next, rotErr := engine.HandleExhaustion(f.ctx, paid, "claude-opus-5-5")
+
+	if rotErr == nil {
+		t.Fatalf("expected no eligible account error, got rotation to %+v", next)
+	}
+	if next != nil {
+		t.Errorf("must not replay Opus 5.5 on an ineligible account, got %+v", next)
+	}
+	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-trial" {
+		t.Errorf("claude_gpt pin must stay on acc-trial, got %q", got)
+	}
+}
+
+func TestFailover_UsesExplicitFallbackAccount(t *testing.T) {
+	f := newEligibilityFixture(t, []*domain.Account{
+		{ID: "acc-main", Email: "main@example.com", AccessToken: "main-token", IsActive: true},
+		{ID: "acc-pool", Email: "pool@example.com", AccessToken: "pool-token"},
+		{ID: "acc-dedicated", Email: "dedicated@example.com", AccessToken: "dedicated-token"},
+	}, nil)
+
+	for _, id := range []string{"acc-main", "acc-pool", "acc-dedicated"} {
+		f.seedModels(t, id, &domain.ModelInfo{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"})
+	}
+	// Pool order favours acc-pool; the explicit rule must override it.
+	f.setUpdatedAt(t, "acc-pool", "2026-01-01T00:00:00Z")
+	f.setUpdatedAt(t, "acc-dedicated", "2026-01-02T00:00:00Z")
+	f.setUpdatedAt(t, "acc-main", "2026-01-03T00:00:00Z")
+
+	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
+		AccountID:         "acc-main",
+		ModelID:           "claude-opus-5-5",
+		Category:          "claude_gpt",
+		Enabled:           true,
+		FallbackAccountID: "acc-dedicated",
+	}); err != nil {
+		t.Fatalf("set explicit fallback: %v", err)
+	}
+
+	main, err := f.repo.GetByID(f.ctx, "acc-main")
+	if err != nil {
+		t.Fatalf("GetByID main: %v", err)
+	}
+
+	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
+	_, _, next, rotErr := engine.HandleExhaustion(f.ctx, main, "claude-opus-5-5")
+	if rotErr != nil {
+		t.Fatalf("HandleExhaustion: %v", rotErr)
+	}
+	if next == nil || next.ID != "acc-dedicated" {
+		t.Fatalf("expected rotation to the explicit fallback acc-dedicated, got %+v", next)
+	}
+	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-dedicated" {
+		t.Errorf("claude_gpt pin should follow the explicit fallback, got %q", got)
+	}
+}
+
+func TestFailover_ArgonExhaustionIsolatesRegularGemini(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+
+	// Trial can serve Argon too, so the argon rotation has a valid destination.
+	f.seedModels(t, "acc-trial",
+		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon"},
+	)
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
+		t.Fatalf("pin argon to paid: %v", err)
+	}
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
+		t.Fatalf("pin gemini to paid: %v", err)
+	}
+
+	// The poller reports a healthy regular Gemini bucket on the paid account.
+	reset := "2026-12-31T00:00:00Z"
+	if _, err := f.db.ExecContext(f.ctx, `
+		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
+		VALUES ('acc-paid', 'gemini-5h', 'Gemini (5h)', '5h', 0.8, ?, ?)
+	`, reset, reset); err != nil {
+		t.Fatalf("seed gemini bucket: %v", err)
+	}
+
+	paid, err := f.repo.GetByID(f.ctx, "acc-paid")
+	if err != nil {
+		t.Fatalf("GetByID paid: %v", err)
+	}
+
+	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
+	_, _, next, rotErr := engine.HandleExhaustion(f.ctx, paid, "gemini-4-argon-medium")
+	if rotErr != nil {
+		t.Fatalf("HandleExhaustion(argon): %v", rotErr)
+	}
+	if next == nil || next.ID != "acc-trial" {
+		t.Fatalf("expected argon traffic to rotate to acc-trial, got %+v", next)
+	}
+
+	// Only the argon category moved: regular Gemini keeps using the paid account.
+	if got := f.activeAccount(t, domain.CategoryGeminiArgon); got != "acc-trial" {
+		t.Errorf("argon pin should move to acc-trial, got %q", got)
+	}
+	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-paid" {
+		t.Errorf("gemini pin must stay on acc-paid, got %q", got)
+	}
+	available, err := f.repo.IsAccountAvailableForCategory(f.ctx, "acc-paid", domain.CategoryGemini)
+	if err != nil {
+		t.Fatalf("IsAccountAvailableForCategory(gemini): %v", err)
+	}
+	if !available {
+		t.Error("acc-paid must stay available for regular gemini after argon exhaustion")
+	}
+	available, err = f.repo.IsAccountAvailableForCategory(f.ctx, "acc-paid", domain.CategoryGeminiArgon)
+	if err != nil {
+		t.Fatalf("IsAccountAvailableForCategory(argon): %v", err)
+	}
+	if available {
+		t.Error("acc-paid must be unavailable for argon after argon exhaustion")
+	}
+}

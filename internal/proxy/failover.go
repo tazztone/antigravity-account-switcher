@@ -920,13 +920,14 @@ func (f *FailoverEngine) HandleExhaustion(
 	} else {
 		currentActive, err = f.accountRepo.GetActive(ctx)
 	}
-	if err == nil && currentActive != nil && currentActive.ID != acc.ID && currentActive.IsAvailable() {
+	if err == nil && currentActive != nil && currentActive.ID != acc.ID && currentActive.IsAvailable() &&
+		f.eligibleForModel(ctx, currentActive.ID, failedModel) {
 		return ActionRotateAccount, primary, currentActive, nil
 	}
 
 	// 2. If fallback is disabled or no model was requested, rotate immediately to next account for this category
 	if !f.fallbackSecondaryEnabled || strings.TrimSpace(failedModel) == "" {
-		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, &eventsToEmit)
+		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
 		if rotErr != nil {
 			return ActionRotateAccount, primary, nil, rotErr
 		}
@@ -940,7 +941,7 @@ func (f *FailoverEngine) HandleExhaustion(
 	// If failed model is neither primary nor secondary, it is outside the fallback tier:
 	// rotate immediately for this category without mutating primary/secondary fallback state.
 	if !isPrimary && !isSecondary {
-		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, &eventsToEmit)
+		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
 		if rotErr != nil {
 			return ActionRotateAccount, primary, nil, rotErr
 		}
@@ -1030,7 +1031,7 @@ func (f *FailoverEngine) HandleExhaustion(
 		f.markModelExhaustedLocked(acc.ID, secondary, secReset)
 	}
 
-	next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, &eventsToEmit)
+	next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
 	if rotErr != nil {
 		return ActionRotateAccount, primary, nil, rotErr
 	}
@@ -1060,13 +1061,14 @@ func (f *FailoverEngine) RotateAccountForCategory(ctx context.Context, exhausted
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.rotateAccountForCategoryLocked(ctx, exhaustedAcc, category, &eventsToEmit)
+	return f.rotateAccountForCategoryLocked(ctx, exhaustedAcc, category, "", &eventsToEmit)
 }
 
 func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	ctx context.Context,
 	exhaustedAcc *domain.Account,
 	category ModelCategory,
+	failedModel string,
 	eventsToEmit *[]*domain.ProxyEvent,
 ) (*domain.Account, error) {
 	emit := func(ev *domain.ProxyEvent) {
@@ -1077,17 +1079,46 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 		}
 	}
 
-	// 1. Anti-stampede check: Did another concurrent request already rotate away from exhaustedAcc for this category?
-	var currentActive *domain.Account
-	var err error
-	if category != CategoryUnknown {
-		currentActive, err = f.accountRepo.GetActiveForCategory(ctx, category)
-	} else {
-		currentActive, err = f.accountRepo.GetActive(ctx)
+	// Model-aware rotation constraint: when the exhaustion was on a specific model,
+	// consult its per-account fallback rule and eligibility. "none" blocks account
+	// rotation entirely; a specific account ID routes there; otherwise the pool scan
+	// must skip accounts that cannot serve the model.
+	modelConstrained := strings.TrimSpace(failedModel) != ""
+	normModel := NormalizeModelName(failedModel)
+	fallbackTarget := domain.FallbackAccountAuto
+	if modelConstrained {
+		if _, fallbackID, ruleErr := f.accountRepo.IsAccountEligibleForModel(ctx, exhaustedAcc.ID, normModel); ruleErr == nil {
+			fallbackTarget = fallbackID
+		}
 	}
-	if err == nil && currentActive != nil && currentActive.ID != exhaustedAcc.ID && currentActive.IsAvailable() {
-		delete(f.accountStates, currentActive.ID)
-		return currentActive, nil
+	blockRotation := modelConstrained && fallbackTarget == domain.FallbackAccountNone
+	explicitTarget := domain.FallbackAccountAuto
+	if modelConstrained && !blockRotation && fallbackTarget != exhaustedAcc.ID {
+		explicitTarget = fallbackTarget
+	}
+
+	// 1. Resolve the rotation target. An explicitly configured fallback account for
+	// the failed model wins; otherwise reuse the account another concurrent request
+	// already rotated to for this category (anti-stampede), as long as it can serve
+	// the failed model. A "none" rule opts out of every implicit target.
+	var target *domain.Account
+	if explicitTarget != domain.FallbackAccountAuto {
+		target = f.resolveExplicitFallbackLocked(ctx, explicitTarget, exhaustedAcc.ID, normModel, category)
+	}
+
+	var err error
+	if target == nil && !blockRotation {
+		var currentActive *domain.Account
+		if category != CategoryUnknown {
+			currentActive, err = f.accountRepo.GetActiveForCategory(ctx, category)
+		} else {
+			currentActive, err = f.accountRepo.GetActive(ctx)
+		}
+		if err == nil && currentActive != nil && currentActive.ID != exhaustedAcc.ID && currentActive.IsAvailable() &&
+			f.eligibleForModel(ctx, currentActive.ID, failedModel) {
+			delete(f.accountStates, currentActive.ID)
+			return currentActive, nil
+		}
 	}
 
 	// 2. Mark the exhausted account in the repository and quota persistence
@@ -1141,23 +1172,50 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	})
 
 	// 3. Find next available account for this category
-	var nextAcc *domain.Account
-	if category != CategoryUnknown {
-		nextAcc, err = f.accountRepo.GetNextAvailableForCategory(ctx, category, exhaustedAcc.ID)
-	} else {
-		nextAcc, err = f.accountRepo.GetNextAvailable(ctx, exhaustedAcc.ID)
-	}
-
-	if err != nil || nextAcc == nil {
-		// Category (or pool) is completely exhausted
+	if blockRotation {
 		emit(&domain.ProxyEvent{
 			Type:      domain.EventTypeQuotaExhausted,
 			AccountID: exhaustedAcc.ID,
-			Message:   "All accounts in the pool are exhausted",
+			Message:   fmt.Sprintf("Account rotation blocked by fallback rule (none) for model %s", normModel),
 			Details: map[string]any{
 				"last_account_id": exhaustedAcc.ID,
 				"last_email":      exhaustedAcc.Email,
+				"model":           normModel,
+				"reason":          "fallback_blocked",
 			},
+			Timestamp: time.Now().UTC(),
+		})
+		return nil, domain.ErrNoAvailableAccount
+	}
+
+	nextAcc := target
+	if nextAcc == nil {
+		if modelConstrained {
+			nextAcc, err = f.accountRepo.GetNextAvailableForModel(ctx, category, normModel, exhaustedAcc.ID)
+		} else if category != CategoryUnknown {
+			nextAcc, err = f.accountRepo.GetNextAvailableForCategory(ctx, category, exhaustedAcc.ID)
+		} else {
+			nextAcc, err = f.accountRepo.GetNextAvailable(ctx, exhaustedAcc.ID)
+		}
+	}
+
+	if err != nil || nextAcc == nil {
+		// Category (or pool) is completely exhausted, or no account can serve this model
+		message := "All accounts in the pool are exhausted"
+		details := map[string]any{
+			"last_account_id": exhaustedAcc.ID,
+			"last_email":      exhaustedAcc.Email,
+		}
+		if modelConstrained {
+			message = fmt.Sprintf("No account in the pool is eligible for model %s after %s exhausted", normModel, exhaustedAcc.Email)
+			details["model"] = normModel
+			details["reason"] = "no_eligible_account_for_model"
+		}
+		emit(&domain.ProxyEvent{
+			Type:      domain.EventTypeQuotaExhausted,
+			AccountID: exhaustedAcc.ID,
+			Message:   message,
+			Details:   details,
 			Timestamp: time.Now().UTC(),
 		})
 		return nil, domain.ErrNoAvailableAccount
@@ -1196,6 +1254,47 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	})
 
 	return nextAcc, nil
+}
+
+// eligibleForModel reports whether an account is allowed to serve a model according to
+// its per-model routing rules. Empty model identifiers and repository failures fail open
+// so a storage hiccup never blocks failover.
+func (f *FailoverEngine) eligibleForModel(ctx context.Context, accountID, modelID string) bool {
+	if strings.TrimSpace(modelID) == "" {
+		return true
+	}
+	eligible, _, err := f.accountRepo.IsAccountEligibleForModel(ctx, accountID, NormalizeModelName(modelID))
+	if err != nil {
+		return true
+	}
+	return eligible
+}
+
+// resolveExplicitFallbackLocked returns the account configured as an explicit fallback
+// target for a model, or nil when that target is unusable (missing, unavailable for the
+// category, or ineligible for the model). Callers must hold f.mu.
+func (f *FailoverEngine) resolveExplicitFallbackLocked(
+	ctx context.Context,
+	targetID string,
+	exhaustedID string,
+	modelID string,
+	category ModelCategory,
+) *domain.Account {
+	if targetID == "" || targetID == domain.FallbackAccountNone || targetID == exhaustedID {
+		return nil
+	}
+	candidate, err := f.accountRepo.GetByID(ctx, targetID)
+	if err != nil || candidate == nil || candidate.ID == exhaustedID {
+		return nil
+	}
+	available, err := f.accountRepo.IsAccountAvailableForCategory(ctx, candidate.ID, category)
+	if err != nil || !available {
+		return nil
+	}
+	if !f.eligibleForModel(ctx, candidate.ID, modelID) {
+		return nil
+	}
+	return candidate
 }
 
 func (f *FailoverEngine) emitEvent(event *domain.ProxyEvent) {

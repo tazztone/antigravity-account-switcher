@@ -232,6 +232,16 @@ func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category
 	return m.GetNextAvailable(ctx, excludeID)
 }
 
+func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, accountID string, category domain.ModelCategory) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acc, ok := m.accounts[accountID]
+	if !ok {
+		return false, domain.ErrAccountNotFound
+	}
+	return acc.IsAvailable(), nil
+}
+
 type mockEventRepo struct {
 	mu     sync.Mutex
 	events []*domain.ProxyEvent

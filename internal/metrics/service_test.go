@@ -84,6 +84,10 @@ func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category
 	return nil, nil
 }
 
+func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, accountID string, category domain.ModelCategory) (bool, error) {
+	return false, nil
+}
+
 type mockMetricsRepo struct {
 	summaryRes        *domain.AggregatedMetrics
 	summariesRes      map[string]*domain.AggregatedMetrics

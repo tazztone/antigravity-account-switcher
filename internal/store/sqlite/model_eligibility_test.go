@@ -314,10 +314,10 @@ func TestGetActiveCategoriesByAccount(t *testing.T) {
 	if len(bCats) != 1 || bCats[0] != domain.CategoryGeminiArgon {
 		t.Errorf("expected [gemini_argon] for acc-b, got %v", bCats)
 	}
-	// acc-a was created active: Create seeds claude_gpt + gemini pins on it
+	// acc-a was created active, then lost the argon pin to acc-b: claude_gpt + gemini remain
 	aCats := cats["acc-a"]
 	if len(aCats) != 2 {
-		t.Errorf("expected seeded [claude_gpt gemini] for acc-a, got %v", aCats)
+		t.Errorf("expected [claude_gpt gemini] for acc-a after argon pin moved, got %v", aCats)
 	}
 	for _, c := range aCats {
 		if c == domain.CategoryGeminiArgon {
@@ -381,4 +381,56 @@ func TestGeminiArgonBucketIsolation(t *testing.T) {
 	if !errors.Is(err, domain.ErrNoAvailableAccount) {
 		t.Fatalf("expected no available argon account, got %+v err=%v", next, err)
 	}
+}
+
+func TestIsAccountAvailableForCategory(t *testing.T) {
+	ctx, db, repo := newEligibilityTestRepo(t)
+	createEligibilityAccount(t, repo, ctx, "acc-1", "one@example.com", true)
+
+	reset := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	seedBucket := func(accountID, bucketID, displayName, window string, fraction float64) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, accountID, bucketID, displayName, window, fraction, reset, reset); err != nil {
+			t.Fatalf("seed bucket %s: %v", bucketID, err)
+		}
+	}
+	assertAvailable := func(category domain.ModelCategory, want bool) {
+		t.Helper()
+		got, err := repo.IsAccountAvailableForCategory(ctx, "acc-1", category)
+		if err != nil {
+			t.Fatalf("IsAccountAvailableForCategory(%s): %v", category, err)
+		}
+		if got != want {
+			t.Errorf("category %s: expected available=%v, got %v", category, want, got)
+		}
+	}
+
+	// Active account without quota rows is available everywhere.
+	assertAvailable(domain.CategoryClaudeGPT, true)
+	assertAvailable(domain.CategoryUnknown, true)
+
+	// Exhausted claude bucket only blocks the claude category.
+	seedBucket("acc-1", "claude-5h", "Claude (5h)", "5h", 0.0)
+	seedBucket("acc-1", "gemini-5h", "Gemini (5h)", "5h", 1.0)
+	assertAvailable(domain.CategoryClaudeGPT, false)
+	assertAvailable(domain.CategoryGemini, true)
+
+	// An 'exhausted' global status stays usable while a healthy category bucket exists.
+	if err := repo.UpdateStatus(ctx, "acc-1", domain.AccountStatusExhausted); err != nil {
+		t.Fatalf("UpdateStatus exhausted: %v", err)
+	}
+	assertAvailable(domain.CategoryGemini, true)
+	assertAvailable(domain.CategoryClaudeGPT, false)
+	// Unknown category has no quota evidence, so it follows the raw status.
+	assertAvailable(domain.CategoryUnknown, false)
+
+	// Disabled accounts are never available.
+	if err := repo.UpdateStatus(ctx, "acc-1", domain.AccountStatusDisabled); err != nil {
+		t.Fatalf("UpdateStatus disabled: %v", err)
+	}
+	assertAvailable(domain.CategoryGemini, false)
+	assertAvailable(domain.CategoryUnknown, false)
 }

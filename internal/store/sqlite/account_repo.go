@@ -97,9 +97,10 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 
 	if acc.IsActive {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO active_category_accounts (category, account_id) VALUES ('claude_gpt', ?), ('gemini', ?)
+			INSERT INTO active_category_accounts (category, account_id)
+			VALUES ('claude_gpt', ?), ('gemini', ?), ('gemini_argon', ?)
 			ON CONFLICT(category) DO UPDATE SET account_id = excluded.account_id
-		`, acc.ID, acc.ID); err != nil {
+		`, acc.ID, acc.ID, acc.ID); err != nil {
 			return fmt.Errorf("failed to seed active_category_accounts on create: %w", err)
 		}
 	}
@@ -199,11 +200,12 @@ func (r *AccountRepository) SetActive(ctx context.Context, id string) error {
 		return domain.ErrAccountNotFound
 	}
 
-	// Step 3: Populate active_category_accounts for both categories
+	// Step 3: Populate active_category_accounts for every model category
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO active_category_accounts (category, account_id) VALUES ('claude_gpt', ?), ('gemini', ?)
+		INSERT INTO active_category_accounts (category, account_id)
+		VALUES ('claude_gpt', ?), ('gemini', ?), ('gemini_argon', ?)
 		ON CONFLICT(category) DO UPDATE SET account_id = excluded.account_id
-	`, id, id); err != nil {
+	`, id, id, id); err != nil {
 		return fmt.Errorf("failed to update active_category_accounts: %w", err)
 	}
 
@@ -652,7 +654,8 @@ func (r *AccountRepository) UpdateAccountModelRule(ctx context.Context, rule *do
 // IsAccountEligibleForModel reports whether an account may serve a model, plus
 // its configured fallback target. Fail-open: an account with no model rules at
 // all is eligible for everything; once rules exist, the model must be present
-// with enabled = 1.
+// with enabled = 1. The lookup runs as a single statement because it sits on the
+// per-request proxy dispatch path.
 func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, string, error) {
 	if accountID == "" {
 		return false, domain.FallbackAccountAuto, domain.ErrAccountNotFound
@@ -661,26 +664,25 @@ func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accou
 		return true, domain.FallbackAccountAuto, nil
 	}
 
-	var ruleCount int
-	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM account_model_rules WHERE account_id = ?", accountID).Scan(&ruleCount); err != nil {
-		return false, domain.FallbackAccountAuto, fmt.Errorf("failed to count model rules: %w", err)
+	query := `
+		SELECT
+			(SELECT COUNT(*) FROM account_model_rules WHERE account_id = ?),
+			COALESCE((SELECT enabled FROM account_model_rules WHERE account_id = ? AND model_id = ?), -1),
+			COALESCE((SELECT fallback_account_id FROM account_model_rules WHERE account_id = ? AND model_id = ?), '')
+	`
+	var ruleCount, enabledInt int
+	var fallbackID string
+	if err := r.db.QueryRowContext(ctx, query, accountID, accountID, modelID, accountID, modelID).
+		Scan(&ruleCount, &enabledInt, &fallbackID); err != nil {
+		return false, domain.FallbackAccountAuto, fmt.Errorf("failed to query model rule: %w", err)
 	}
+
 	if ruleCount == 0 {
 		return true, domain.FallbackAccountAuto, nil
 	}
-
-	var enabledInt int
-	var fallbackID string
-	err := r.db.QueryRowContext(ctx, `
-		SELECT enabled, fallback_account_id FROM account_model_rules
-		WHERE account_id = ? AND model_id = ?
-	`, accountID, modelID).Scan(&enabledInt, &fallbackID)
-	if errors.Is(err, sql.ErrNoRows) {
-		// Catalog populated but this model never discovered on this account.
+	if enabledInt < 0 {
+		// Catalog populated but this model was never discovered on this account.
 		return false, domain.FallbackAccountAuto, nil
-	}
-	if err != nil {
-		return false, domain.FallbackAccountAuto, fmt.Errorf("failed to query model rule: %w", err)
 	}
 	return enabledInt == 1, fallbackID, nil
 }
@@ -747,4 +749,61 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		return nil, domain.ErrNoAvailableAccount
 	}
 	return acc, err
+}
+
+// IsAccountAvailableForCategory reports whether one specific account may serve
+// traffic for a model category right now. It mirrors the eligibility rules of
+// GetNextAvailableForCategory: 'active' accounts need no unexpired exhausted
+// bucket for the category, 'exhausted' accounts need positive healthy bucket
+// evidence for it, and 'error'/'disabled' accounts are never available.
+func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, accountID string, category domain.ModelCategory) (bool, error) {
+	if accountID == "" {
+		return false, domain.ErrAccountNotFound
+	}
+
+	catStr := category.String()
+	if catStr == "unknown" || catStr == "" {
+		acc, err := r.GetByID(ctx, accountID)
+		if err != nil {
+			return false, err
+		}
+		return acc.IsAvailable(), nil
+	}
+
+	dead, err := r.hasExhaustedBucketForCategory(ctx, accountID, catStr)
+	if err != nil {
+		return false, err
+	}
+	if dead {
+		return false, nil
+	}
+
+	var statusStr string
+	if err := r.db.QueryRowContext(ctx, "SELECT status FROM accounts WHERE id = ?", accountID).Scan(&statusStr); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, domain.ErrAccountNotFound
+		}
+		return false, fmt.Errorf("failed to read status for account %s: %w", accountID, err)
+	}
+
+	switch domain.AccountStatus(statusStr) {
+	case domain.AccountStatusActive:
+		return true, nil
+	case domain.AccountStatusExhausted:
+		// Exhausted accounts stay usable for a category only when quota rows
+		// positively show a healthy bucket for it (a 429 in one category must not
+		// lock the account out of the others).
+		query := `
+			SELECT COUNT(1) FROM quota_buckets qb
+			WHERE qb.account_id = ?
+			  AND qb.remaining_fraction > 0.0
+		` + bucketCategoryPredicate
+		var healthy int
+		if err := r.db.QueryRowContext(ctx, query, accountID, catStr, catStr, catStr).Scan(&healthy); err != nil {
+			return false, fmt.Errorf("failed to inspect quota buckets for account %s: %w", accountID, err)
+		}
+		return healthy > 0, nil
+	default:
+		return false, nil
+	}
 }

@@ -416,6 +416,47 @@ func (h *ProxyHandler) rewriteRequestModel(
 	return newBuffered
 }
 
+// resolveEligibleAccount picks the account that must serve a model when the pinned
+// account for its category cannot. It honours an explicit per-model fallback target
+// first, then scans the pool for an available account where the model is enabled.
+//
+// It returns nil when the request should stay on currentAcc: the account is already
+// eligible, the fallback rule is "none" (block re-routing), or no alternative exists.
+// The category pin is deliberately untouched because eligibility is a per-model
+// constraint while the pin states the account preference for the whole category.
+func (h *ProxyHandler) resolveEligibleAccount(
+	ctx context.Context,
+	currentAcc *domain.Account,
+	category ModelCategory,
+	model string,
+) *domain.Account {
+	if h.accountRepo == nil || currentAcc == nil || model == "" {
+		return nil
+	}
+	normModel := NormalizeModelName(model)
+	eligible, fallbackAccountID, err := h.accountRepo.IsAccountEligibleForModel(ctx, currentAcc.ID, normModel)
+	if err != nil || eligible || fallbackAccountID == domain.FallbackAccountNone {
+		return nil
+	}
+
+	if fallbackAccountID != "" && fallbackAccountID != currentAcc.ID {
+		candidate, cErr := h.accountRepo.GetByID(ctx, fallbackAccountID)
+		if cErr == nil && candidate != nil && candidate.IsAvailable() {
+			if candEligible, _, eErr := h.accountRepo.IsAccountEligibleForModel(ctx, candidate.ID, normModel); eErr == nil && candEligible {
+				if available, aErr := h.accountRepo.IsAccountAvailableForCategory(ctx, candidate.ID, category); aErr == nil && available {
+					return candidate
+				}
+			}
+		}
+	}
+
+	next, nErr := h.accountRepo.GetNextAvailableForModel(ctx, category, normModel, currentAcc.ID)
+	if nErr != nil || next == nil || next.ID == currentAcc.ID {
+		return nil
+	}
+	return next
+}
+
 // applyPredictiveFallback checks whether the incoming request targets an exhausted primary
 // model on the active account, and if so, proactively rewrites it to the secondary model.
 // Returns the updated BufferedRequest, the effective model name, and whether rewrite occurred.
@@ -579,6 +620,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		isPassThrough = true
+	}
+
+	// Pre-flight model eligibility check before initial upstream dispatch: when the
+	// pinned account cannot serve the requested model (disabled in account_model_rules
+	// or never discovered on it), transparently re-route to an eligible account
+	// instead of wasting an upstream request.
+	if isCloudCode && !isPassThrough && currentAcc != nil && origModel != "" && origCategory != CategoryUnknown {
+		if target := h.resolveEligibleAccount(ctx, currentAcc, origCategory, origModel); target != nil {
+			currentAcc = target
+		}
 	}
 
 	// Predictive fallback check before initial upstream dispatch
