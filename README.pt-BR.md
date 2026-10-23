@@ -196,6 +196,8 @@ Quando a cota do modelo principal se esgota (ex.: `gemini-2.5-pro` ou `claude-3-
 Você pode gerenciar as preferências de modelos diretamente pelo navegador (`http://127.0.0.1:8080` ou `launch --open`):
 - **Toggle em Tempo Real**: Ative ou desative o fallback intra-conta instantaneamente.
 - **Descoberta de Modelos**: Clique em **Buscar Modelos** para inspecionar os endpoints do `language_server` / Cloud Code PA e listar todos os modelos disponíveis.
+- **Elegibilidade de Modelos por Conta**: O botão **Buscar Modelos** consulta todas as contas do pool. Cada cartão de conta exibe uma gaveta *Elegibilidade de Modelos & Fallbacks*: defina se a conta pode atender a um modelo e escolha o alvo de fallback (`Automático`, `Bloquear Fallback (None)`, ou uma conta específica). Requisições são roteadas para uma conta elegível antes do envio, e em 429 apenas contas elegíveis são tentadas.
+- **Fixação por Categoria**: Fixe uma conta separadamente para Claude/GPT, Gemini ou Gemini 4 Argon (`POST /api/accounts/{id}/select` com `{"category": "..."}`); a cota semanal do Argon é rastreada independentemente do Gemini regular.
 - **Recarregamento Sem Reiniciar**: Ao salvar as configurações, o `config.json` é atualizado e o motor de proxy aplica as mudanças imediatamente sem necessidade de reiniciar o Antigravity 2.0 ou o daemon.
 
 ### 3. Recuperação Automática de Assinatura de Pensamento (HTTP 400)
