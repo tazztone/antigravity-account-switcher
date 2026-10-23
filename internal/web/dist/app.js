@@ -398,22 +398,24 @@
 
     const buckets = acc.buckets || [];
 
-    function findBucket(windowPattern, namePattern) {
+    function findBucket(windowPattern, namePattern, excludePattern) {
       return buckets.find(b => {
         const idOrName = ((b.bucket_id || '') + ' ' + (b.display_name || '')).toLowerCase();
         const windowMatch = (b.window || '').toLowerCase().includes(windowPattern.toLowerCase());
-        const nameMatch = idOrName.includes(namePattern.toLowerCase());
+        const nameMatch = idOrName.includes(namePattern.toLowerCase()) &&
+          !(excludePattern && idOrName.includes(excludePattern.toLowerCase()));
         return windowMatch && nameMatch;
       }) || null;
     }
 
     const claude5h = findBucket('5h', '3p') || findBucket('5h', 'claude');
     const claudeWeekly = findBucket('weekly', '3p') || findBucket('weekly', 'claude');
-    const gemini5h = findBucket('5h', 'gemini');
-    const geminiWeekly = findBucket('weekly', 'gemini');
+    const argonWeekly = findBucket('weekly', 'argon');
+    const gemini5h = findBucket('5h', 'gemini', 'argon');
+    const geminiWeekly = findBucket('weekly', 'gemini', 'argon');
 
     // Identify standard buckets to find any custom/other buckets
-    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly].filter(Boolean));
+    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly, argonWeekly].filter(Boolean));
     const extraBuckets = buckets.filter(b => !standardBucketSet.has(b));
 
     function renderQuotaRow(label, bucket) {
@@ -516,9 +518,60 @@
           ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
         </div>
 
+        ${argonWeekly ? `
+        <div class="quota-group">
+          <div class="quota-group-header">
+            <span class="quota-group-name">Gemini 4 Argon</span>
+            <span class="quota-group-models">Argon High, Medium, Low</span>
+          </div>
+          ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
+        </div>` : ''}
+
         ${extraHtml}
       `;
     }
+
+    // Per-category active badges & pin buttons
+    const activeCats = acc.active_categories || [];
+    const CATS = [
+      { key: 'claude_gpt', label: 'Claude/GPT', pin: 'Pin Claude' },
+      { key: 'gemini', label: 'Gemini', pin: 'Pin Gemini' },
+      { key: 'gemini_argon', label: 'Argon', pin: 'Pin Argon' },
+    ];
+    const catBadgesHtml = activeCats.length === 0 ? '' : `
+      <div class="category-badges">
+        ${CATS.filter(c => activeCats.includes(c.key)).map(c =>
+          `<span class="badge badge-success">${c.label}</span>`).join('')}
+      </div>`;
+    const pinButtonsHtml = `
+      <div class="category-pins">
+        ${CATS.filter(c => !activeCats.includes(c.key)).map(c =>
+          `<button class="btn btn-secondary btn-pin-category" data-id="${escapeHtml(acc.id)}" data-category="${c.key}">${c.pin}</button>`).join('')}
+      </div>`;
+
+    // Model eligibility & fallbacks drawer
+    const rules = acc.model_rules || [];
+    const otherAccounts = rawAccountsData.filter(a => a.id !== acc.id);
+    function fallbackOptions(selected) {
+      const opt = (v, t) => `<option value="${escapeHtml(v)}" ${v === selected ? 'selected' : ''}>${escapeHtml(t)}</option>`;
+      return opt('', 'Auto (Next Eligible)') + opt('none', 'Block Fallback (None)') +
+        otherAccounts.map(a => opt(a.id, isPrivacyMode ? a.id.slice(0, 8) : a.email)).join('');
+    }
+    const rulesHtml = rules.length === 0
+      ? '<div class="text-xs text-muted">No models discovered yet. Click Fetch Models.</div>'
+      : rules.map(r => `
+        <div class="model-rule-row" data-model-id="${escapeHtml(r.model_id)}">
+          <label class="model-rule-name" title="${escapeHtml(r.model_id)}">
+            <input type="checkbox" class="model-rule-enabled" ${r.enabled ? 'checked' : ''}>
+            ${escapeHtml(r.display_name || r.model_id)}
+          </label>
+          <select class="model-rule-fallback" aria-label="Fallback target">${fallbackOptions(r.fallback_account_id || '')}</select>
+        </div>`).join('');
+    const drawerHtml = `
+      <details class="model-rules-drawer" data-account-id="${escapeHtml(acc.id)}" ${openRuleDrawers.has(acc.id) ? 'open' : ''}>
+        <summary>Model Eligibility &amp; Fallbacks (${rules.length})</summary>
+        ${rulesHtml}
+      </details>`;
 
     // Status badge formatting
     let statusBadgeClass = 'badge-neutral';
@@ -549,9 +602,15 @@
         </div>
       </div>
 
+      ${catBadgesHtml}
+
       <div class="quota-matrix">
         ${quotaBodyHtml}
       </div>
+
+      ${drawerHtml}
+
+      ${pinButtonsHtml}
 
       <div class="account-actions">
         ${isActive ? `
@@ -560,7 +619,7 @@
           </div>
         ` : `
           <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;">
-            Make Active
+            Make Active (All)
           </button>
         `}
         <button class="btn btn-danger-subtle btn-delete-account" data-id="${escapeHtml(acc.id)}" title="Remove Account" aria-label="Remove Account">
@@ -585,6 +644,24 @@
     const switchBtn = card.querySelector('.btn-switch-account');
     if (switchBtn) {
       switchBtn.addEventListener('click', () => handleSwitchAccount(acc.id));
+    }
+
+    card.querySelectorAll('.btn-pin-category').forEach(btn => {
+      btn.addEventListener('click', () => handleSwitchAccount(btn.dataset.id, btn.dataset.category));
+    });
+
+    const drawer = card.querySelector('.model-rules-drawer');
+    if (drawer) {
+      drawer.addEventListener('toggle', () => {
+        if (drawer.open) openRuleDrawers.add(acc.id); else openRuleDrawers.delete(acc.id);
+      });
+      drawer.querySelectorAll('.model-rule-row').forEach(row => {
+        const modelId = row.dataset.modelId;
+        row.querySelector('.model-rule-enabled').addEventListener('change', e =>
+          saveModelRule(acc.id, { model_id: modelId, enabled: e.target.checked }));
+        row.querySelector('.model-rule-fallback').addEventListener('change', e =>
+          saveModelRule(acc.id, { model_id: modelId, fallback_account_id: e.target.value }));
+      });
     }
 
     // Bind safe two-step delete button (inline confirmation without window.confirm)
@@ -731,23 +808,19 @@
     if (lower.includes('claude') || lower.includes('gpt') || lower.includes('sonnet') || lower.includes('opus') || lower.includes('haiku') || lower.includes('3p')) {
       return 'claude_gpt';
     }
+    if (lower.includes('argon')) return 'gemini_argon';
     return 'gemini';
   }
 
   function updateSecondaryOptions() {
     if (!selectModelPrimary || !selectModelSecondary) return;
     const primaryVal = selectModelPrimary.value;
-    const primaryCat = getModelCategory(primaryVal);
     const prevSecondary = selectModelSecondary.value || currentAppConfig.model_secondary;
 
-    const allowedModels = rawModelsData.filter(m => {
-      const cat = m.category || getModelCategory(m.id);
-      return cat !== primaryCat;
-    });
+    // Intra-family fallback allowed: any model distinct from primary.
+    const allowedModels = rawModelsData.filter(m => m.id !== primaryVal);
 
-    let html = '';
-    const label = primaryCat === 'gemini' ? 'Claude & GPT (Standby Fallback)' : 'Google Gemini (Standby Fallback)';
-    html += `<optgroup label="${label}">`;
+    let html = '<optgroup label="Standby Fallback Model">';
     allowedModels.forEach(m => {
       const isSelected = m.id === prevSecondary ? 'selected' : '';
       const star = m.recommended ? ' ★' : '';
@@ -843,14 +916,10 @@
     const secondaryVal = selectModelSecondary ? selectModelSecondary.value : currentAppConfig.model_secondary;
     const isFallbackEnabled = fallbackToggle ? fallbackToggle.checked : false;
 
-    // Client-side cross-vendor validation
-    if (isFallbackEnabled && primaryVal && secondaryVal) {
-      const pCat = getModelCategory(primaryVal);
-      const sCat = getModelCategory(secondaryVal);
-      if (pCat === sCat) {
-        showToast('Primary and Secondary models cannot be from the same provider. Choose Gemini ↔ Claude/GPT.', 'error', 5000);
-        return;
-      }
+    // Client-side validation: models must be distinct (intra-family fallback allowed)
+    if (isFallbackEnabled && primaryVal && secondaryVal && primaryVal === secondaryVal) {
+      showToast('Primary and Secondary models must be different.', 'error', 5000);
+      return;
     }
 
     const origText = btnSaveConfig.textContent;
@@ -1197,13 +1266,37 @@
   // Account Actions: Switch & Delete
   // =========================================================================
 
-  async function handleSwitchAccount(accountID) {
+  const openRuleDrawers = new Set();
+
+  async function saveModelRule(accountID, rule) {
     try {
-      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/select`, {
-        method: 'POST'
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/models`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rule)
       });
       if (res.ok) {
-        showToast(`Active proxy account switched to ${accountID.slice(0, 8)}`, 'success');
+        showToast('Model rule saved', 'success');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error?.message || 'Failed to save model rule', 'error');
+      }
+    } catch (e) {
+      showToast(`Network error saving model rule: ${e.message}`, 'error');
+    }
+    await fetchAccounts();
+  }
+
+  async function handleSwitchAccount(accountID, category = 'all') {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category })
+      });
+      if (res.ok) {
+        const what = category === 'all' ? 'Active proxy account' : `Active ${category} account`;
+        showToast(`${what} switched to ${accountID.slice(0, 8)}`, 'success');
         await Promise.all([fetchStatus(), fetchAccounts()]);
       } else {
         const err = await res.json().catch(() => ({}));

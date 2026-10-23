@@ -1604,3 +1604,12 @@ body.privacy-mode .blurred-email {
   }
 }
 
+
+/* Per-category routing & model rules */
+.category-badges, .category-pins { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0; }
+.category-pins .btn { font-size: 0.7rem; padding: 0.2rem 0.5rem; }
+.model-rules-drawer { margin: 0.5rem 0; font-size: 0.75rem; }
+.model-rules-drawer summary { cursor: pointer; color: var(--color-text-secondary, inherit); }
+.model-rule-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.25rem 0; }
+.model-rule-name { display: flex; align-items: center; gap: 0.35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-rule-fallback { max-width: 50%; font-size: 0.7rem; }

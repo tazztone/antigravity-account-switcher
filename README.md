@@ -196,6 +196,8 @@ When your active account runs out of quota on a heavy model tier (e.g. `gemini-2
 You can configure model fallback directly from the browser dashboard (`http://127.0.0.1:8080` or `launch --open`):
 - **Live Toggle**: Enable or disable intra-account secondary fallback on the fly.
 - **Model Discovery**: Click **Fetch Models** to query active `language_server` / Cloud Code PA endpoints and populate model selectors with currently supported models.
+- **Per-Account Model Eligibility**: **Fetch Models** queries every account in the pool. Each account card has a *Model Eligibility & Fallbacks* drawer: toggle whether the account may serve a model and pick its fallback target (`Auto`, `Block Fallback (None)`, or a specific account). Requests for a model are routed to an eligible account before dispatch, and on 429 only eligible accounts are tried.
+- **Per-Category Pins**: Pin an account separately for Claude/GPT, Gemini, or Gemini 4 Argon (`POST /api/accounts/{id}/select` with `{"category": "..."}`); Argon weekly quota is tracked independently from regular Gemini.
 - **Instant Hot-Reload**: Clicking **Save Settings** persists changes to `config.json` and immediately applies them to the running proxy engine without restarting Antigravity 2.0 or the daemon.
 
 ### 3. Automatic 400 Thought Signature Recovery
