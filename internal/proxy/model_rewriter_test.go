@@ -518,6 +518,14 @@ func TestCategorizeModel_Catalog(t *testing.T) {
 		{"flash", proxy.CategoryGemini},
 		{"pro", proxy.CategoryGemini},
 
+		// Gemini 4 Argon (isolated from regular gemini)
+		{"gemini-4-argon-high", proxy.CategoryGeminiArgon},
+		{"gemini-4-argon-medium", proxy.CategoryGeminiArgon},
+		{"gemini-4-argon-low", proxy.CategoryGeminiArgon},
+		{"models/gemini-4-argon-high", proxy.CategoryGeminiArgon},
+		{"Gemini 4 Argon (Medium)", proxy.CategoryGeminiArgon},
+		{"argon", proxy.CategoryGeminiArgon},
+
 		// Unknown / Anti-collision Edge cases
 		{"llama-3.3-70b", proxy.CategoryUnknown},
 		{"deepseek-r1", proxy.CategoryUnknown},
@@ -613,6 +621,27 @@ func TestMatchesBucketCategory(t *testing.T) {
 			displayName: "Gemini (weekly)",
 			bucketID:    "acc_1-gemini_weekly",
 			expected:    true,
+		},
+		{
+			name:        "Argon weekly matches gemini_argon category",
+			category:    proxy.CategoryGeminiArgon,
+			displayName: "Gemini Argon (weekly)",
+			bucketID:    "argon-weekly",
+			expected:    true,
+		},
+		{
+			name:        "Argon bucket does NOT match regular gemini category",
+			category:    proxy.CategoryGemini,
+			displayName: "Gemini Argon (weekly)",
+			bucketID:    "argon-weekly",
+			expected:    false,
+		},
+		{
+			name:        "Regular gemini bucket does NOT match argon category",
+			category:    proxy.CategoryGeminiArgon,
+			displayName: "Gemini Models (5h)",
+			bucketID:    "gemini-5h",
+			expected:    false,
 		},
 		{
 			name:        "Cross Check: Gemini bucket against Claude category",

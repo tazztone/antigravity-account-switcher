@@ -598,6 +598,8 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 			groupName := g.DisplayName
 			if strings.Contains(strings.ToLower(groupName), "claude") {
 				groupName = "Claude and GPT models"
+			} else if strings.Contains(strings.ToLower(groupName), "argon") {
+				groupName = "Gemini Argon Models"
 			} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 				groupName = "Gemini Models"
 			}

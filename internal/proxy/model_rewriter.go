@@ -37,6 +37,8 @@ const (
 	CategoryClaudeGPT = domain.CategoryClaudeGPT
 	// CategoryGemini covers Google Gemini and Gemma first-party models.
 	CategoryGemini = domain.CategoryGemini
+	// CategoryGeminiArgon covers Gemini 4 Argon tiers with their own weekly quota buckets.
+	CategoryGeminiArgon = domain.CategoryGeminiArgon
 )
 
 // ModelSource identifies where the model was discovered in the request.
@@ -102,7 +104,12 @@ func CategorizeModel(model string) ModelCategory {
 		return CategoryClaudeGPT
 	}
 
-	// 2. Gemini Family Check
+	// 2. Gemini 4 Argon Check (before generic gemini to avoid bucket collision)
+	if strings.Contains(lower, "argon") {
+		return CategoryGeminiArgon
+	}
+
+	// 3. Gemini Family Check
 	if strings.Contains(lower, "gemini") ||
 		strings.Contains(lower, "gemma") ||
 		strings.Contains(lower, "flash") ||
@@ -497,9 +504,16 @@ func MatchesBucketCategory(cat ModelCategory, displayName, bucketID string) bool
 			strings.Contains(id, "_3p") ||
 			strings.Contains(id, "-3p")
 
+	case CategoryGeminiArgon:
+		return strings.Contains(name, "argon") ||
+			strings.Contains(id, "argon")
+
 	case CategoryGemini:
-		return strings.Contains(name, "gemini") ||
+		hasGemini := strings.Contains(name, "gemini") ||
 			strings.Contains(id, "gemini")
+		hasArgon := strings.Contains(name, "argon") ||
+			strings.Contains(id, "argon")
+		return hasGemini && !hasArgon
 
 	default:
 		return false
