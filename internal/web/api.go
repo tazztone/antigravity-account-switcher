@@ -359,6 +359,7 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 	case "claude_gpt", "gemini", "gemini_argon":
 		cat := domain.ModelCategory(body.Category)
 		err = a.accountRepo.SetActiveForCategory(ctx, cat, id)
+		_ = a.accountRepo.SetAccountCategoryDisabled(ctx, id, cat, false)
 		if body.Mode == domain.RoutingModeSolo || body.Mode == domain.RoutingModePool {
 			_ = a.accountRepo.SetCategoryRoutingMode(ctx, cat, body.Mode)
 		}

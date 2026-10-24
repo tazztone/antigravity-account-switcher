@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -962,6 +963,7 @@ func (r *AccountRepository) SetAccountCategoryDisabled(ctx context.Context, acco
 	for c := range catMap {
 		newCats = append(newCats, c)
 	}
+	sort.Strings(newCats)
 	newStr := strings.Join(newCats, ",")
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 

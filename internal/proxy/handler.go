@@ -953,7 +953,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							nextAcc, rotateErr = h.accountRepo.GetNextAvailableForCategory(ctx, currentCategory, currentAcc.ID)
 						}
 					}
-					if rotateErr != nil || nextAcc == nil {
+					if (rotateErr != nil || nextAcc == nil) && currentCategory == CategoryUnknown {
 						nextAcc, rotateErr = h.accountRepo.GetNextAvailable(ctx, currentAcc.ID)
 					}
 					if rotateErr != nil || nextAcc == nil {

@@ -654,7 +654,8 @@
               <button type="button" class="pill-label-zone"
                       data-id="${escapeHtml(acc.id)}"
                       data-category="${c.key}"
-                      title="${isPinned ? `${c.label} is currently serving traffic on this account` : `Click to pin ${c.label} to this account`}">
+                      title="${isPinned ? `${c.label} is currently serving traffic on this account` : `Click to pin ${c.label} to this account`}"
+                      aria-label="${isPinned ? `${c.label} active on ${escapeHtml(acc.id.slice(0, 8))}` : `Pin ${c.label} to ${escapeHtml(acc.id.slice(0, 8))}`}">
                 <span class="pin-icon">${isPinned ? '📌' : (isDisabled ? '🚫' : '○')}</span>
                 <span class="pin-label">${c.label}</span>
               </button>
@@ -664,7 +665,8 @@
                       data-is-pinned="${isPinned ? 'true' : 'false'}"
                       data-next-mode="${nextMode}"
                       data-next-enabled="${nextEnabled ? 'true' : 'false'}"
-                      title="${actionTitle}">
+                      title="${actionTitle}"
+                      aria-label="${actionTitle}">
                 <span class="action-icon">${actionIcon}</span>
                 <span class="action-text">${actionText}</span>
               </button>
