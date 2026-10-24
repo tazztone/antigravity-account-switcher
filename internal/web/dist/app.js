@@ -525,28 +525,40 @@
             <span class="quota-group-models">Argon High, Medium, Low</span>
           </div>
           ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
-        </div>` : ''}
+        </div>` : `
+        <div class="quota-group quota-group-standby">
+          <div class="quota-group-header">
+            <span class="quota-group-name">Gemini 4 Argon</span>
+            <span class="quota-group-models text-muted">Standard Quota Pool</span>
+          </div>
+          <div class="quota-row-standby">Active via Google Cloud Code PA • Dynamic upstream bucket</div>
+        </div>`}
 
         ${extraHtml}
       `;
     }
 
-    // Per-category active badges & pin buttons
+    // Per-category interactive pin bar
     const activeCats = acc.active_categories || [];
     const CATS = [
-      { key: 'claude_gpt', label: 'Claude/GPT', pin: 'Pin Claude' },
-      { key: 'gemini', label: 'Gemini', pin: 'Pin Gemini' },
-      { key: 'gemini_argon', label: 'Argon', pin: 'Pin Argon' },
+      { key: 'claude_gpt', label: 'CLAUDE/GPT' },
+      { key: 'gemini', label: 'GEMINI' },
+      { key: 'gemini_argon', label: 'ARGON' },
     ];
-    const catBadgesHtml = activeCats.length === 0 ? '' : `
-      <div class="category-badges">
-        ${CATS.filter(c => activeCats.includes(c.key)).map(c =>
-          `<span class="badge badge-success">${c.label}</span>`).join('')}
-      </div>`;
-    const pinButtonsHtml = `
-      <div class="category-pins">
-        ${CATS.filter(c => !activeCats.includes(c.key)).map(c =>
-          `<button class="btn btn-secondary btn-pin-category" data-id="${escapeHtml(acc.id)}" data-category="${c.key}">${c.pin}</button>`).join('')}
+    const catPillsHtml = `
+      <div class="category-pin-bar" role="group" aria-label="Category Routing Pins">
+        ${CATS.map(c => {
+          const isPinned = activeCats.includes(c.key);
+          return `
+            <button type="button" class="category-pin-pill ${isPinned ? 'pinned' : ''}"
+                    data-id="${escapeHtml(acc.id)}"
+                    data-category="${c.key}"
+                    title="${isPinned ? `${c.label} is active on this account (Click to re-confirm)` : `Click to pin ${c.label} to this account`}">
+              <span class="pin-icon">${isPinned ? '📌' : '○'}</span>
+              <span class="pin-label">${c.label}</span>
+            </button>
+          `;
+        }).join('')}
       </div>`;
 
     // Model eligibility & fallbacks drawer
@@ -557,27 +569,92 @@
       return opt('', 'Auto (Next Eligible)') + opt('none', 'Block Fallback (None)') +
         otherAccounts.map(a => opt(a.id, isPrivacyMode ? a.id.slice(0, 8) : a.email)).join('');
     }
-    const rulesHtml = rules.length === 0
-      ? '<div class="text-xs text-muted">No models discovered yet. Click Fetch Models.</div>'
-      : rules.map(r => `
-        <div class="model-rule-row" data-model-id="${escapeHtml(r.model_id)}">
-          <label class="model-rule-name" title="${escapeHtml(r.model_id)}">
-            <input type="checkbox" class="model-rule-enabled" ${r.enabled ? 'checked' : ''}>
-            ${escapeHtml(r.display_name || r.model_id)}
-          </label>
-          <select class="model-rule-fallback" aria-label="Fallback target">${fallbackOptions(r.fallback_account_id || '')}</select>
-        </div>`).join('');
+
+    function categorizeRule(r) {
+      const mid = (r.model_id || '').toLowerCase();
+      const cat = (r.category || '').toLowerCase();
+      if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
+        return 'claude';
+      }
+      if (cat === 'gemini_argon' || /argon/i.test(mid)) {
+        return 'argon';
+      }
+      if (/^chat_|^tab_|preview/i.test(mid)) {
+        return 'preview';
+      }
+      return 'gemini';
+    }
+
+    const GROUPS = [
+      { key: 'claude', title: 'Claude & GPT Models' },
+      { key: 'gemini', title: 'Gemini Models' },
+      { key: 'argon', title: 'Gemini 4 Argon Models' },
+      { key: 'preview', title: 'Internal & Preview Models' },
+    ];
+
+    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
+    rules.forEach(r => {
+      const g = categorizeRule(r);
+      groupedRules[g].push(r);
+    });
+
+    let rulesContentHtml = '';
+    if (rules.length === 0) {
+      rulesContentHtml = '<div class="text-xs text-muted" style="padding: 0.5rem;">No models discovered yet. Click Fetch Models.</div>';
+    } else {
+      rulesContentHtml = GROUPS.filter(g => groupedRules[g.key].length > 0).map(g => {
+        const grpList = groupedRules[g.key];
+        const rowsHtml = grpList.map(r => `
+          <div class="model-rule-row ${r.enabled ? '' : 'model-rule-disabled'}" data-model-id="${escapeHtml(r.model_id)}" data-group="${g.key}">
+            <label class="model-rule-name" title="${escapeHtml(r.model_id)}">
+              <input type="checkbox" class="model-rule-enabled" ${r.enabled ? 'checked' : ''}>
+              <span class="model-label-text">${escapeHtml(r.display_name || r.model_id)}</span>
+            </label>
+            <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when 429 occurs">${fallbackOptions(r.fallback_account_id || '')}</select>
+          </div>
+        `).join('');
+
+        return `
+          <div class="model-group-section" data-group="${g.key}">
+            <div class="model-group-header">
+              <span class="model-group-title">${escapeHtml(g.title)} (${grpList.length})</span>
+              <div class="model-group-actions">
+                <button type="button" class="btn-group-toggle" data-action="all" data-group="${g.key}">All</button>
+                <button type="button" class="btn-group-toggle" data-action="none" data-group="${g.key}">None</button>
+              </div>
+            </div>
+            <div class="model-group-rows">
+              ${rowsHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
     const drawerHtml = `
       <details class="model-rules-drawer" data-account-id="${escapeHtml(acc.id)}" ${openRuleDrawers.has(acc.id) ? 'open' : ''}>
         <summary>Model Eligibility &amp; Fallbacks (${rules.length})</summary>
-        ${rulesHtml}
+        <div class="model-rules-container">
+          ${rulesContentHtml}
+        </div>
       </details>`;
 
     // Status badge formatting
     let statusBadgeClass = 'badge-neutral';
-    if (isExhausted) statusBadgeClass = 'badge-danger';
-    else if (isActive) statusBadgeClass = 'badge-success';
-    else if (acc.status === 'error') statusBadgeClass = 'badge-danger';
+    let statusText = 'STANDBY';
+    if (isExhausted) {
+      statusBadgeClass = 'badge-danger';
+      statusText = 'EXHAUSTED';
+    } else if (acc.status === 'error') {
+      statusBadgeClass = 'badge-danger';
+      statusText = 'ERROR';
+    } else if (acc.status === 'disabled') {
+      statusBadgeClass = 'badge-neutral';
+      statusText = 'DISABLED';
+    } else if (activeCats.length > 0) {
+      statusBadgeClass = 'badge-success';
+      statusText = `ROUTING (${activeCats.length}/3)`;
+    }
 
     const cardTitle = isPrivacyMode ? '[Protected in Privacy Mode]' : escapeHtml(acc.email);
     const copyTitle = isPrivacyMode ? 'Copy redacted email' : 'Copy email address';
@@ -598,11 +675,11 @@
           </div>
         </div>
         <div class="badge ${statusBadgeClass}">
-          ${escapeHtml((acc.status || 'ACTIVE').toUpperCase())}
+          ${escapeHtml(statusText)}
         </div>
       </div>
 
-      ${catBadgesHtml}
+      ${catPillsHtml}
 
       <div class="quota-matrix">
         ${quotaBodyHtml}
@@ -610,16 +687,14 @@
 
       ${drawerHtml}
 
-      ${pinButtonsHtml}
-
       <div class="account-actions">
-        ${isActive ? `
+        ${activeCats.length === 3 ? `
           <div class="active-pill" aria-current="true">
-            Active Routing Target
+            All Categories Active
           </div>
         ` : `
-          <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;">
-            Make Active (All)
+          <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Pin all model categories to this account">
+            Pin All Categories
           </button>
         `}
         <button class="btn btn-danger-subtle btn-delete-account" data-id="${escapeHtml(acc.id)}" title="Remove Account" aria-label="Remove Account">
@@ -646,7 +721,7 @@
       switchBtn.addEventListener('click', () => handleSwitchAccount(acc.id));
     }
 
-    card.querySelectorAll('.btn-pin-category').forEach(btn => {
+    card.querySelectorAll('.category-pin-pill').forEach(btn => {
       btn.addEventListener('click', () => handleSwitchAccount(btn.dataset.id, btn.dataset.category));
     });
 
@@ -657,10 +732,33 @@
       });
       drawer.querySelectorAll('.model-rule-row').forEach(row => {
         const modelId = row.dataset.modelId;
-        row.querySelector('.model-rule-enabled').addEventListener('change', e =>
-          saveModelRule(acc.id, { model_id: modelId, enabled: e.target.checked }));
+        const cb = row.querySelector('.model-rule-enabled');
+        cb.addEventListener('change', e => {
+          row.classList.toggle('model-rule-disabled', !e.target.checked);
+          saveModelRule(acc.id, { model_id: modelId, enabled: e.target.checked });
+        });
         row.querySelector('.model-rule-fallback').addEventListener('change', e =>
           saveModelRule(acc.id, { model_id: modelId, fallback_account_id: e.target.value }));
+      });
+
+      drawer.querySelectorAll('.btn-group-toggle').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const action = btn.dataset.action;
+          const groupKey = btn.dataset.group;
+          const enabled = action === 'all';
+          const targetRows = drawer.querySelectorAll(`.model-rule-row[data-group="${groupKey}"]`);
+          for (const row of targetRows) {
+            const cb = row.querySelector('.model-rule-enabled');
+            if (cb && cb.checked !== enabled) {
+              cb.checked = enabled;
+              row.classList.toggle('model-rule-disabled', !enabled);
+              await saveModelRule(acc.id, { model_id: row.dataset.modelId, enabled }, false);
+            }
+          }
+          await fetchAccounts();
+        });
       });
     }
 
@@ -1268,7 +1366,7 @@
 
   const openRuleDrawers = new Set();
 
-  async function saveModelRule(accountID, rule) {
+  async function saveModelRule(accountID, rule, shouldRefetch = true) {
     try {
       const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/models`, {
         method: 'PUT',
@@ -1276,7 +1374,9 @@
         body: JSON.stringify(rule)
       });
       if (res.ok) {
-        showToast('Model rule saved', 'success');
+        if (shouldRefetch) {
+          showToast('Model rule saved', 'success');
+        }
       } else {
         const err = await res.json().catch(() => ({}));
         showToast(err.error?.message || 'Failed to save model rule', 'error');
@@ -1284,7 +1384,9 @@
     } catch (e) {
       showToast(`Network error saving model rule: ${e.message}`, 'error');
     }
-    await fetchAccounts();
+    if (shouldRefetch) {
+      await fetchAccounts();
+    }
   }
 
   async function handleSwitchAccount(accountID, category = 'all') {
