@@ -334,6 +334,11 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	row := r.db.QueryRowContext(ctx, query, catStr)
 	acc, err := r.scanAccount(row)
 	if err == nil {
+		mode, _ := r.GetCategoryRoutingMode(ctx, category)
+		if mode == domain.RoutingModeSolo {
+			return acc, nil
+		}
+
 		if acc.IsCategoryDisabled(category) {
 			next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
 			if nErr == nil && next != nil {
