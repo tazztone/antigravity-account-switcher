@@ -106,12 +106,13 @@ func NewAPIHandler(
 
 // StatusResponse represents server health and active account info.
 type StatusResponse struct {
-	Status        string          `json:"status"`
-	Version       string          `json:"version"`
-	UptimeSeconds int64           `json:"uptime_seconds"`
-	ActiveAccount *domain.Account `json:"active_account,omitempty"`
-	TotalAccounts int             `json:"total_accounts"`
-	Timestamp     time.Time       `json:"timestamp"`
+	Status        string            `json:"status"`
+	Version       string            `json:"version"`
+	UptimeSeconds int64             `json:"uptime_seconds"`
+	ActiveAccount *domain.Account   `json:"active_account,omitempty"`
+	CategoryModes map[string]string `json:"category_modes,omitempty"`
+	TotalAccounts int               `json:"total_accounts"`
+	Timestamp     time.Time         `json:"timestamp"`
 }
 
 // HandleStatus serves GET /api/status.
@@ -123,12 +124,19 @@ func (a *APIHandler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	var active *domain.Account
+	var categoryModes map[string]string
 	total := 0
 
 	if a.accountRepo != nil {
 		active, _ = a.accountRepo.GetActive(ctx)
 		if list, err := a.accountRepo.List(ctx); err == nil {
 			total = len(list)
+		}
+		if modes, err := a.accountRepo.GetAllCategoryRoutingModes(ctx); err == nil {
+			categoryModes = make(map[string]string)
+			for k, v := range modes {
+				categoryModes[k.String()] = v
+			}
 		}
 	}
 
@@ -137,6 +145,7 @@ func (a *APIHandler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		Version:       a.version,
 		UptimeSeconds: int64(time.Since(a.startTime).Seconds()),
 		ActiveAccount: active,
+		CategoryModes: categoryModes,
 		TotalAccounts: total,
 		Timestamp:     time.Now().UTC(),
 	}
@@ -150,6 +159,7 @@ type AccountWithBuckets struct {
 	Buckets          []*domain.QuotaBucket      `json:"buckets"`
 	ActiveCategories []string                   `json:"active_categories"`
 	ModelRules       []*domain.AccountModelRule `json:"model_rules"`
+	CategoryModes    map[string]string          `json:"category_modes,omitempty"`
 }
 
 // HandleAccounts serves GET /api/accounts and DELETE /api/accounts/{id}.
@@ -172,6 +182,15 @@ func (a *APIHandler) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "select" {
 		if r.Method == http.MethodPost {
 			a.selectAccount(w, r, accountID)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "categories" {
+		if r.Method == http.MethodPut {
+			a.updateAccountCategory(w, r, accountID)
 			return
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -223,6 +242,12 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	activeCats, _ := a.accountRepo.GetActiveCategoriesByAccount(ctx)
+	categoryModes := make(map[string]string)
+	if modes, err := a.accountRepo.GetAllCategoryRoutingModes(ctx); err == nil {
+		for k, v := range modes {
+			categoryModes[k.String()] = v
+		}
+	}
 
 	result := make([]*AccountWithBuckets, 0, len(accounts))
 	for _, acc := range accounts {
@@ -246,6 +271,7 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 			Buckets:          b,
 			ActiveCategories: cats,
 			ModelRules:       rules,
+			CategoryModes:    categoryModes,
 		})
 	}
 
@@ -287,11 +313,18 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 			cats = append(cats, c.String())
 		}
 	}
+	categoryModes := make(map[string]string)
+	if modes, err := a.accountRepo.GetAllCategoryRoutingModes(ctx); err == nil {
+		for k, v := range modes {
+			categoryModes[k.String()] = v
+		}
+	}
 	writeJSON(w, http.StatusOK, &AccountWithBuckets{
 		Account:          acc,
 		Buckets:          buckets,
 		ActiveCategories: cats,
 		ModelRules:       rules,
+		CategoryModes:    categoryModes,
 	})
 }
 
@@ -314,6 +347,7 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 
 	var body struct {
 		Category string `json:"category"`
+		Mode     string `json:"mode"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body) // empty body = "all"
@@ -323,7 +357,11 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		body.Category = "all"
 		err = a.accountRepo.SetActive(ctx, id)
 	case "claude_gpt", "gemini", "gemini_argon":
-		err = a.accountRepo.SetActiveForCategory(ctx, domain.ModelCategory(body.Category), id)
+		cat := domain.ModelCategory(body.Category)
+		err = a.accountRepo.SetActiveForCategory(ctx, cat, id)
+		if body.Mode == domain.RoutingModeSolo || body.Mode == domain.RoutingModePool {
+			_ = a.accountRepo.SetCategoryRoutingMode(ctx, cat, body.Mode)
+		}
 	default:
 		writeErrorJSON(w, http.StatusBadRequest, "invalid category", nil)
 		return
@@ -333,10 +371,23 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
+	currentMode := domain.RoutingModePool
+	if body.Category != "all" && body.Category != "" {
+		if m, mErr := a.accountRepo.GetCategoryRoutingMode(ctx, domain.ModelCategory(body.Category)); mErr == nil {
+			currentMode = m
+		}
+	}
+
 	evt := &domain.ProxyEvent{
 		Type:      domain.EventTypeAccountSwitched,
 		AccountID: id,
 		Message:   fmt.Sprintf("Account %s (%s) set as active via dashboard", acc.Email, id),
+		Details: map[string]any{
+			"account_id": id,
+			"email":      acc.Email,
+			"category":   body.Category,
+			"mode":       currentMode,
+		},
 		Timestamp: time.Now().UTC(),
 	}
 	if a.broadcaster != nil {
@@ -357,6 +408,71 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		"account_id": id,
 		"email":      acc.Email,
 		"category":   body.Category,
+		"mode":       currentMode,
+	})
+}
+
+// updateAccountCategory serves PUT /api/accounts/{id}/categories.
+func (a *APIHandler) updateAccountCategory(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := r.Context()
+	if a.accountRepo == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "account repository unavailable", nil)
+		return
+	}
+	var req struct {
+		Category string `json:"category"`
+		Enabled  *bool  `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Category == "" || req.Enabled == nil {
+		writeErrorJSON(w, http.StatusBadRequest, "category and enabled flag required", err)
+		return
+	}
+	cat := domain.ModelCategory(req.Category)
+	if cat != domain.CategoryClaudeGPT && cat != domain.CategoryGemini && cat != domain.CategoryGeminiArgon {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid category", nil)
+		return
+	}
+
+	acc, err := a.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrAccountNotFound) {
+			writeErrorJSON(w, http.StatusNotFound, "account not found", err)
+			return
+		}
+		writeErrorJSON(w, http.StatusInternalServerError, "failed to lookup account", err)
+		return
+	}
+
+	disabled := !(*req.Enabled)
+	if err := a.accountRepo.SetAccountCategoryDisabled(ctx, id, cat, disabled); err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "failed to update account category", err)
+		return
+	}
+
+	evt := &domain.ProxyEvent{
+		Type:      domain.EventTypeAccountSwitched,
+		AccountID: id,
+		Message:   fmt.Sprintf("Category %s updated on account %s (enabled=%v)", req.Category, acc.Email, *req.Enabled),
+		Details: map[string]any{
+			"account_id": id,
+			"email":      acc.Email,
+			"category":   req.Category,
+			"enabled":    *req.Enabled,
+		},
+		Timestamp: time.Now().UTC(),
+	}
+	if a.broadcaster != nil {
+		a.broadcaster.Broadcast(evt)
+	}
+	if a.eventRepo != nil {
+		_ = a.eventRepo.Record(ctx, evt)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":    true,
+		"account_id": id,
+		"category":   req.Category,
+		"enabled":    *req.Enabled,
 	})
 }
 
