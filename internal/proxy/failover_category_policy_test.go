@@ -105,7 +105,7 @@ func TestFailover_SoloMode_AllowsIntraAccountFallback(t *testing.T) {
 	}
 
 	// Now exhaust the secondary model: since claude_gpt is Solo, cross-account rotation must be blocked!
-	action, _, targetAcc, err = engine.HandleExhaustion(ctx, acc1, "claude-3-5-haiku")
+	_, _, targetAcc, err = engine.HandleExhaustion(ctx, acc1, "claude-3-5-haiku")
 	if err != domain.ErrNoAvailableAccount {
 		t.Fatalf("expected ErrNoAvailableAccount when secondary exhausted in solo mode, got err=%v", err)
 	}
