@@ -1079,6 +1079,15 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 		}
 	}
 
+	// Category routing mode check: in Solo mode, account rotation for this category is blocked.
+	isSoloMode := false
+	if category != CategoryUnknown {
+		mode, rErr := f.accountRepo.GetCategoryRoutingMode(ctx, category)
+		if rErr == nil && mode == domain.RoutingModeSolo {
+			isSoloMode = true
+		}
+	}
+
 	// Model-aware rotation constraint: when the exhaustion was on a specific model,
 	// consult its per-account fallback rule and eligibility. "none" blocks account
 	// rotation entirely; a specific account ID routes there; otherwise the pool scan
@@ -1091,7 +1100,7 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 			fallbackTarget = fallbackID
 		}
 	}
-	blockRotation := modelConstrained && fallbackTarget == domain.FallbackAccountNone
+	blockRotation := isSoloMode || (modelConstrained && fallbackTarget == domain.FallbackAccountNone)
 	explicitTarget := domain.FallbackAccountAuto
 	if modelConstrained && !blockRotation && fallbackTarget != exhaustedAcc.ID {
 		explicitTarget = fallbackTarget
@@ -1102,7 +1111,7 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	// already rotated to for this category (anti-stampede), as long as it can serve
 	// the failed model. A "none" rule opts out of every implicit target.
 	var target *domain.Account
-	if explicitTarget != domain.FallbackAccountAuto {
+	if !isSoloMode && explicitTarget != domain.FallbackAccountAuto {
 		target = f.resolveExplicitFallbackLocked(ctx, explicitTarget, exhaustedAcc.ID, normModel, category)
 	}
 
@@ -1172,6 +1181,22 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	})
 
 	// 3. Find next available account for this category
+	if isSoloMode {
+		emit(&domain.ProxyEvent{
+			Type:      domain.EventTypeQuotaExhausted,
+			AccountID: exhaustedAcc.ID,
+			Message:   fmt.Sprintf("Category %s is in solo mode; account rotation blocked for %s", category.String(), exhaustedAcc.Email),
+			Details: map[string]any{
+				"last_account_id": exhaustedAcc.ID,
+				"last_email":      exhaustedAcc.Email,
+				"category":        category.String(),
+				"reason":          "category_locked_to_account",
+			},
+			Timestamp: time.Now().UTC(),
+		})
+		return nil, domain.ErrNoAvailableAccount
+	}
+
 	if blockRotation {
 		emit(&domain.ProxyEvent{
 			Type:      domain.EventTypeQuotaExhausted,

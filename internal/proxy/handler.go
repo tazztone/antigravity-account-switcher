@@ -936,6 +936,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				} else {
+					if currentCategory != CategoryUnknown {
+						mode, _ := h.accountRepo.GetCategoryRoutingMode(ctx, currentCategory)
+						if mode == domain.RoutingModeSolo {
+							forwardTerminal()
+							return
+						}
+					}
 					var nextAcc *domain.Account
 					var rotateErr error
 					if origModel != "" && currentCategory != CategoryUnknown {
