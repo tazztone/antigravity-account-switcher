@@ -1620,41 +1620,164 @@ body.privacy-mode .blurred-email {
 .category-pin-pill {
   flex: 1;
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.35rem;
+  align-items: stretch;
+  padding: 0;
   font-size: 0.68rem;
   font-weight: 500;
-  color: #9ca3af;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  overflow: hidden;
   transition: all 0.15s ease;
   user-select: none;
 }
 
-.category-pin-pill:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #e5e7eb;
+.pill-label-zone,
+.pill-action-zone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0.35rem;
+  font-size: 0.68rem;
+  color: inherit;
+  font-family: inherit;
+  transition: background 0.15s ease, opacity 0.15s ease;
 }
 
-.category-pin-pill.pinned {
-  background: rgba(16, 185, 129, 0.14);
-  border-color: rgba(16, 185, 129, 0.35);
-  color: #10b981;
+.pill-label-zone {
+  flex: 1;
+  text-align: left;
+}
+
+.pill-action-zone {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.25rem 0.4rem;
+  font-size: 0.62rem;
   font-weight: 600;
 }
 
-.category-pin-pill.pinned:hover {
-  background: rgba(16, 185, 129, 0.22);
-  border-color: rgba(16, 185, 129, 0.5);
+.pill-label-zone:hover,
+.pill-action-zone:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* State 1: Active Pool (Emerald green border + subtle glow) */
+.category-pin-pill.state-active-pool {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.15);
+}
+.category-pin-pill.state-active-pool .pill-action-zone {
+  border-left-color: rgba(16, 185, 129, 0.25);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+/* State 2: Active Solo (Amber/Gold border + lock glow) */
+.category-pin-pill.state-active-solo {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.15);
+}
+.category-pin-pill.state-active-solo .pill-action-zone {
+  border-left-color: rgba(245, 158, 11, 0.25);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+/* State 3: Standby Eligible (Muted outline) */
+.category-pin-pill.state-standby {
+  color: #9ca3af;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.category-pin-pill.state-standby .pill-action-zone {
+  color: #60a5fa;
+  border-left-color: rgba(255, 255, 255, 0.06);
+}
+
+/* State 4: Excluded (Dimmed + Strikethrough) */
+.category-pin-pill.state-excluded {
+  opacity: 0.55;
+  border-color: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.04);
+  color: #6b7280;
+}
+.category-pin-pill.state-excluded .pill-label-zone .pin-label {
+  text-decoration: line-through;
+}
+.category-pin-pill.state-excluded .pill-action-zone {
+  color: #ef4444;
+  border-left-color: rgba(239, 68, 68, 0.2);
 }
 
 .category-pin-pill .pin-icon {
   font-size: 0.72rem;
   line-height: 1;
+}
+
+/* Live Header Routing Strip */
+.header-routing-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.35rem 0;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+}
+
+.header-routing-strip:empty {
+  display: none;
+}
+
+.header-routing-strip .strip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.header-routing-strip .strip-cat {
+  font-weight: 700;
+  color: var(--color-text-primary);
+  letter-spacing: 0.03em;
+}
+
+.header-routing-strip .strip-acc {
+  color: var(--color-accent);
+  font-family: var(--font-mono, monospace);
+  font-weight: 500;
+}
+
+.header-routing-strip .strip-mode {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.strip-mode-solo {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.strip-mode-pool {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.header-routing-strip .strip-sep {
+  color: rgba(255, 255, 255, 0.2);
+  user-select: none;
 }
 
 .quota-group-standby {

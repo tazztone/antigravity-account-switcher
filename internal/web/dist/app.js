@@ -9,6 +9,7 @@
   let rawTimelineData = [];
   let rawAccountsData = [];
   let rawModelsData = [];
+  let rawCategoryModes = { claude_gpt: 'pool', gemini: 'pool', gemini_argon: 'pool' };
   let currentAppConfig = {
     model_primary: 'gemini-2.5-pro',
     model_secondary: 'gemini-2.5-flash',
@@ -331,6 +332,11 @@
         const standby = Math.max(0, (data.total_accounts || 0) - (data.active_account ? 1 : 0));
         accountsSubtext.textContent = standby > 0 ? `${standby} standby failover target${standby === 1 ? '' : 's'}` : 'Single account routing';
       }
+
+      if (data.category_modes) {
+        rawCategoryModes = Object.assign({}, rawCategoryModes, data.category_modes);
+      }
+      updateHeaderRoutingStrip();
     } catch (e) {
       console.warn('Failed to fetch status:', e);
     }
@@ -340,6 +346,54 @@
   // Accounts Pool & Live Quota Matrix
   // =========================================================================
 
+  function updateHeaderRoutingStrip() {
+    const stripEl = document.getElementById('header-routing-strip');
+    if (!stripEl) return;
+    if (!rawAccountsData || rawAccountsData.length === 0) {
+      stripEl.innerHTML = '';
+      stripEl.style.display = 'none';
+      return;
+    }
+
+    const CATS = [
+      { key: 'claude_gpt', label: 'CLAUDE' },
+      { key: 'gemini', label: 'GEMINI' },
+      { key: 'gemini_argon', label: 'ARGON' },
+    ];
+
+    const items = CATS.map(c => {
+      let activeAcc = rawAccountsData.find(a => (a.active_categories || []).includes(c.key));
+      if (!activeAcc) {
+        activeAcc = rawAccountsData.find(a => a.is_active);
+      }
+      let accLabel = 'none';
+      if (activeAcc) {
+        if (isPrivacyMode) {
+          accLabel = activeAcc.id.slice(0, 8);
+        } else {
+          accLabel = activeAcc.email ? activeAcc.email.split('@')[0] : activeAcc.id.slice(0, 8);
+        }
+      }
+
+      const mode = (rawCategoryModes && rawCategoryModes[c.key]) || 'pool';
+      const eligibleCount = rawAccountsData.filter(a =>
+        a.status !== 'error' && a.status !== 'disabled' && !(a.disabled_categories || []).includes(c.key)
+      ).length;
+
+      let modeBadge = '';
+      if (mode === 'solo') {
+        modeBadge = `<span class="strip-mode strip-mode-solo">🔒 Solo</span>`;
+      } else {
+        modeBadge = `<span class="strip-mode strip-mode-pool">🔄 Pool (${eligibleCount})</span>`;
+      }
+
+      return `<span class="strip-item"><span class="strip-cat">${escapeHtml(c.label)}:</span> <span class="strip-acc">${escapeHtml(accLabel)}</span> ${modeBadge}</span>`;
+    });
+
+    stripEl.innerHTML = items.join('<span class="strip-sep">•</span>');
+    stripEl.style.display = 'flex';
+  }
+
   async function fetchAccounts() {
     try {
       const res = await fetch('/api/accounts');
@@ -347,12 +401,17 @@
       const accounts = await res.json();
       rawAccountsData = Array.isArray(accounts) ? accounts : [];
 
+      if (rawAccountsData.length > 0 && rawAccountsData[0].category_modes) {
+        rawCategoryModes = Object.assign({}, rawCategoryModes, rawAccountsData[0].category_modes);
+      }
+
       const countBadge = document.getElementById('accounts-count-badge');
       if (countBadge) {
         countBadge.textContent = `${rawAccountsData.length} account${rawAccountsData.length === 1 ? '' : 's'}`;
       }
 
       renderAccountsGrid();
+      updateHeaderRoutingStrip();
     } catch (e) {
       console.warn('Failed to fetch accounts:', e);
     }
@@ -538,8 +597,9 @@
       `;
     }
 
-    // Per-category interactive pin bar
+    // Per-category interactive split-pills (Tri-State)
     const activeCats = acc.active_categories || [];
+    const disabledCats = acc.disabled_categories || [];
     const CATS = [
       { key: 'claude_gpt', label: 'CLAUDE/GPT' },
       { key: 'gemini', label: 'GEMINI' },
@@ -549,14 +609,66 @@
       <div class="category-pin-bar" role="group" aria-label="Category Routing Pins">
         ${CATS.map(c => {
           const isPinned = activeCats.includes(c.key);
+          const isDisabled = disabledCats.includes(c.key);
+          const catMode = (acc.category_modes && acc.category_modes[c.key]) || rawCategoryModes[c.key] || 'pool';
+
+          let pillClass = '';
+          let actionIcon = '';
+          let actionText = '';
+          let actionTitle = '';
+          let nextMode = '';
+          let nextEnabled = false;
+
+          if (isPinned) {
+            if (catMode === 'solo') {
+              pillClass = 'state-active-solo';
+              actionIcon = '🔒';
+              actionText = 'Solo';
+              actionTitle = 'Solo Mode active (rotation blocked). Click to switch to Pool';
+              nextMode = 'pool';
+            } else {
+              pillClass = 'state-active-pool';
+              actionIcon = '🔄';
+              actionText = 'Pool';
+              actionTitle = 'Pool Mode active (auto-rotates). Click to switch to Solo';
+              nextMode = 'solo';
+            }
+          } else {
+            if (isDisabled) {
+              pillClass = 'state-excluded';
+              actionIcon = '🚫';
+              actionText = 'Off';
+              actionTitle = 'Excluded from category failover. Click to re-enable';
+              nextEnabled = true;
+            } else {
+              pillClass = 'state-standby';
+              actionIcon = '✓';
+              actionText = 'Pool';
+              actionTitle = 'Standby failover target. Click to exclude from pool';
+              nextEnabled = false;
+            }
+          }
+
           return `
-            <button type="button" class="category-pin-pill ${isPinned ? 'pinned' : ''}"
-                    data-id="${escapeHtml(acc.id)}"
-                    data-category="${c.key}"
-                    title="${isPinned ? `${c.label} is active on this account (Click to re-confirm)` : `Click to pin ${c.label} to this account`}">
-              <span class="pin-icon">${isPinned ? '📌' : '○'}</span>
-              <span class="pin-label">${c.label}</span>
-            </button>
+            <div class="category-pin-pill ${pillClass}">
+              <button type="button" class="pill-label-zone"
+                      data-id="${escapeHtml(acc.id)}"
+                      data-category="${c.key}"
+                      title="${isPinned ? `${c.label} is currently serving traffic on this account` : `Click to pin ${c.label} to this account`}">
+                <span class="pin-icon">${isPinned ? '📌' : (isDisabled ? '🚫' : '○')}</span>
+                <span class="pin-label">${c.label}</span>
+              </button>
+              <button type="button" class="pill-action-zone"
+                      data-id="${escapeHtml(acc.id)}"
+                      data-category="${c.key}"
+                      data-is-pinned="${isPinned ? 'true' : 'false'}"
+                      data-next-mode="${nextMode}"
+                      data-next-enabled="${nextEnabled ? 'true' : 'false'}"
+                      title="${actionTitle}">
+                <span class="action-icon">${actionIcon}</span>
+                <span class="action-text">${actionText}</span>
+              </button>
+            </div>
           `;
         }).join('')}
       </div>`;
@@ -633,7 +745,7 @@
 
     const drawerHtml = `
       <details class="model-rules-drawer" data-account-id="${escapeHtml(acc.id)}" ${openRuleDrawers.has(acc.id) ? 'open' : ''}>
-        <summary>Model Eligibility &amp; Fallbacks (${rules.length})</summary>
+        <summary>▶ Advanced Model Rules (${rules.length} models)</summary>
         <div class="model-rules-container">
           ${rulesContentHtml}
         </div>
@@ -721,8 +833,25 @@
       switchBtn.addEventListener('click', () => handleSwitchAccount(acc.id));
     }
 
-    card.querySelectorAll('.category-pin-pill').forEach(btn => {
-      btn.addEventListener('click', () => handleSwitchAccount(btn.dataset.id, btn.dataset.category));
+    card.querySelectorAll('.pill-label-zone').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleSwitchAccount(btn.dataset.id, btn.dataset.category);
+      });
+    });
+
+    card.querySelectorAll('.pill-action-zone').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const cat = btn.dataset.category;
+        const isPinned = btn.dataset.isPinned === 'true';
+        if (isPinned) {
+          handleToggleCategoryMode(id, cat, btn.dataset.nextMode);
+        } else {
+          handleToggleCategoryExclusion(id, cat, btn.dataset.nextEnabled === 'true');
+        }
+      });
     });
 
     const drawer = card.querySelector('.model-rules-drawer');
@@ -1407,6 +1536,44 @@
       }
     } catch (e) {
       showToast(`Network error switching account: ${e.message}`, 'error');
+    }
+  }
+
+  async function handleToggleCategoryMode(accountID, category, newMode) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, mode: newMode })
+      });
+      if (res.ok) {
+        showToast(`${category} mode set to ${newMode.toUpperCase()}`, 'success');
+        await Promise.all([fetchStatus(), fetchAccounts()]);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error?.message || 'Failed to update category mode', 'error');
+      }
+    } catch (e) {
+      showToast(`Network error updating mode: ${e.message}`, 'error');
+    }
+  }
+
+  async function handleToggleCategoryExclusion(accountID, category, enabled) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/categories`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, enabled })
+      });
+      if (res.ok) {
+        showToast(`${category} ${enabled ? 'enabled' : 'excluded'} for ${accountID.slice(0, 8)}`, 'info');
+        await Promise.all([fetchStatus(), fetchAccounts()]);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error?.message || 'Failed to update category exclusion', 'error');
+      }
+    } catch (e) {
+      showToast(`Network error updating exclusion: ${e.message}`, 'error');
     }
   }
 
