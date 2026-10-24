@@ -121,6 +121,15 @@ CREATE TABLE IF NOT EXISTS account_model_rules (
 CREATE INDEX IF NOT EXISTS idx_account_model_rules_model ON account_model_rules(model_id, enabled);
 `,
 	},
+	{
+		Version:     4,
+		Description: "category_routing_mode_and_disabled_categories",
+		SQL: `
+-- 8. Add routing_mode to active_category_accounts and disabled_categories to accounts
+ALTER TABLE active_category_accounts ADD COLUMN routing_mode TEXT NOT NULL DEFAULT 'pool';
+ALTER TABLE accounts ADD COLUMN disabled_categories TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.

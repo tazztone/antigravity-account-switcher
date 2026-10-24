@@ -88,6 +88,22 @@ func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, acc
 	return false, nil
 }
 
+func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
+	return domain.RoutingModePool, nil
+}
+
+func (m *mockAccountRepo) SetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory, mode string) error {
+	return nil
+}
+
+func (m *mockAccountRepo) GetAllCategoryRoutingModes(ctx context.Context) (map[domain.ModelCategory]string, error) {
+	return map[domain.ModelCategory]string{}, nil
+}
+
+func (m *mockAccountRepo) SetAccountCategoryDisabled(ctx context.Context, accountID string, category domain.ModelCategory, disabled bool) error {
+	return nil
+}
+
 type mockMetricsRepo struct {
 	summaryRes        *domain.AggregatedMetrics
 	summariesRes      map[string]*domain.AggregatedMetrics

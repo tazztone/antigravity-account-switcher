@@ -38,17 +38,38 @@ func (c ModelCategory) String() string {
 	return string(c)
 }
 
+// Category routing mode constants.
+const (
+	RoutingModePool = "pool"
+	RoutingModeSolo = "solo"
+)
+
 // Account represents a Google user account managed by the switcher.
 type Account struct {
-	ID           string        `json:"id"`
-	Email        string        `json:"email"`
-	RefreshToken string        `json:"-"` // Omit credentials from JSON serialization for security
-	AccessToken  string        `json:"-"` // Omit credentials from JSON serialization for security
-	TokenExpiry  time.Time     `json:"token_expiry"`
-	IsActive     bool          `json:"is_active"`
-	Status       AccountStatus `json:"status"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ID                 string        `json:"id"`
+	Email              string        `json:"email"`
+	RefreshToken       string        `json:"-"` // Omit credentials from JSON serialization for security
+	AccessToken        string        `json:"-"` // Omit credentials from JSON serialization for security
+	TokenExpiry        time.Time     `json:"token_expiry"`
+	IsActive           bool          `json:"is_active"`
+	Status             AccountStatus `json:"status"`
+	DisabledCategories []string      `json:"disabled_categories"`
+	CreatedAt          time.Time     `json:"created_at"`
+	UpdatedAt          time.Time     `json:"updated_at"`
+}
+
+// IsCategoryDisabled reports whether the account has opted out of the specified category.
+func (a *Account) IsCategoryDisabled(cat ModelCategory) bool {
+	if a == nil || len(a.DisabledCategories) == 0 {
+		return false
+	}
+	target := cat.String()
+	for _, c := range a.DisabledCategories {
+		if c == target {
+			return true
+		}
+	}
+	return false
 }
 
 // IsTokenExpired checks if the access token has expired or is within the safety margin.
@@ -138,4 +159,16 @@ type AccountRepository interface {
 	// for a model category right now, using the same eligibility rules as
 	// GetNextAvailableForCategory (status plus per-category quota evidence).
 	IsAccountAvailableForCategory(ctx context.Context, accountID string, category ModelCategory) (bool, error)
+
+	// GetCategoryRoutingMode returns the routing mode ("pool" or "solo") for a model category.
+	GetCategoryRoutingMode(ctx context.Context, category ModelCategory) (string, error)
+
+	// SetCategoryRoutingMode sets the routing mode ("pool" or "solo") for a model category.
+	SetCategoryRoutingMode(ctx context.Context, category ModelCategory, mode string) error
+
+	// GetAllCategoryRoutingModes returns a map of all categories to their routing mode.
+	GetAllCategoryRoutingModes(ctx context.Context) (map[ModelCategory]string, error)
+
+	// SetAccountCategoryDisabled updates the exclusion state for a model category on an account.
+	SetAccountCategoryDisabled(ctx context.Context, accountID string, category ModelCategory, disabled bool) error
 }

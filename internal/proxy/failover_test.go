@@ -16,12 +16,14 @@ type mockAccountRepo struct {
 	mu             sync.Mutex
 	accounts       map[string]*domain.Account
 	categoryActive map[domain.ModelCategory]string
+	categoryModes  map[domain.ModelCategory]string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
 	return &mockAccountRepo{
 		accounts:       make(map[string]*domain.Account),
 		categoryActive: make(map[domain.ModelCategory]string),
+		categoryModes:  make(map[domain.ModelCategory]string),
 	}
 }
 
@@ -199,7 +201,24 @@ func (m *mockAccountRepo) SetActiveForCategory(ctx context.Context, category dom
 }
 
 func (m *mockAccountRepo) GetNextAvailableForCategory(ctx context.Context, category domain.ModelCategory, excludeID string) (*domain.Account, error) {
-	return m.GetNextAvailable(ctx, excludeID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best *domain.Account
+	for _, acc := range m.accounts {
+		if acc.ID == excludeID || acc.IsCategoryDisabled(category) {
+			continue
+		}
+		if acc.Status == domain.AccountStatusActive {
+			if best == nil || acc.UpdatedAt.Before(best.UpdatedAt) {
+				best = acc
+			}
+		}
+	}
+	if best == nil {
+		return nil, domain.ErrNoAvailableAccount
+	}
+	cp := *best
+	return &cp, nil
 }
 
 func (m *mockAccountRepo) GetActiveCategoriesByAccount(ctx context.Context) (map[string][]domain.ModelCategory, error) {
@@ -239,7 +258,65 @@ func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, acc
 	if !ok {
 		return false, domain.ErrAccountNotFound
 	}
+	if acc.IsCategoryDisabled(category) {
+		return false, nil
+	}
 	return acc.IsAvailable(), nil
+}
+
+func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.categoryModes != nil {
+		if mode, ok := m.categoryModes[category]; ok {
+			return mode, nil
+		}
+	}
+	return domain.RoutingModePool, nil
+}
+
+func (m *mockAccountRepo) SetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory, mode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.categoryModes == nil {
+		m.categoryModes = make(map[domain.ModelCategory]string)
+	}
+	m.categoryModes[category] = mode
+	return nil
+}
+
+func (m *mockAccountRepo) GetAllCategoryRoutingModes(ctx context.Context) (map[domain.ModelCategory]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	modes := map[domain.ModelCategory]string{
+		domain.CategoryClaudeGPT:   domain.RoutingModePool,
+		domain.CategoryGemini:      domain.RoutingModePool,
+		domain.CategoryGeminiArgon: domain.RoutingModePool,
+	}
+	for k, v := range m.categoryModes {
+		modes[k] = v
+	}
+	return modes, nil
+}
+
+func (m *mockAccountRepo) SetAccountCategoryDisabled(ctx context.Context, accountID string, category domain.ModelCategory, disabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acc, ok := m.accounts[accountID]
+	if !ok {
+		return domain.ErrAccountNotFound
+	}
+	var newCats []string
+	for _, c := range acc.DisabledCategories {
+		if c != category.String() {
+			newCats = append(newCats, c)
+		}
+	}
+	if disabled {
+		newCats = append(newCats, category.String())
+	}
+	acc.DisabledCategories = newCats
+	return nil
 }
 
 type mockEventRepo struct {

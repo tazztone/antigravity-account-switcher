@@ -74,9 +74,10 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 	query := `
 		INSERT INTO accounts (
 			id, email, refresh_token, access_token, token_expiry,
-			is_active, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			is_active, status, created_at, updated_at, disabled_categories
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+	disabledCats := strings.Join(acc.DisabledCategories, ",")
 	_, err = tx.ExecContext(ctx, query,
 		acc.ID,
 		acc.Email,
@@ -87,6 +88,7 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 		string(acc.Status),
 		acc.CreatedAt.Format(time.RFC3339),
 		acc.UpdatedAt.Format(time.RFC3339),
+		disabledCats,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "accounts.email") && strings.Contains(err.Error(), "UNIQUE") {
@@ -111,7 +113,7 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 // GetByID retrieves an account by ID.
 func (r *AccountRepository) GetByID(ctx context.Context, id string) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
 		FROM accounts
 		WHERE id = ?
 	`
@@ -122,7 +124,7 @@ func (r *AccountRepository) GetByID(ctx context.Context, id string) (*domain.Acc
 // GetByEmail retrieves an account by email.
 func (r *AccountRepository) GetByEmail(ctx context.Context, email string) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
 		FROM accounts
 		WHERE email = ?
 	`
@@ -133,7 +135,7 @@ func (r *AccountRepository) GetByEmail(ctx context.Context, email string) (*doma
 // GetActive retrieves the single currently active account.
 func (r *AccountRepository) GetActive(ctx context.Context) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
 		FROM accounts
 		WHERE is_active = 1
 		LIMIT 1
@@ -149,7 +151,7 @@ func (r *AccountRepository) GetActive(ctx context.Context) (*domain.Account, err
 // List returns all accounts in the pool ordered by creation date.
 func (r *AccountRepository) List(ctx context.Context) ([]*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
 		FROM accounts
 		ORDER BY created_at ASC
 	`
@@ -296,7 +298,7 @@ func (r *AccountRepository) Delete(ctx context.Context, id string) error {
 // excluding the given account ID (for failover rotation).
 func (r *AccountRepository) GetNextAvailable(ctx context.Context, excludeID string) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
 		FROM accounts
 		WHERE status = 'active'
 		  AND (? = '' OR id != ?)
@@ -323,7 +325,7 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	}
 
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
 		FROM accounts a
 		JOIN active_category_accounts aca ON a.id = aca.account_id
 		WHERE aca.category = ?
@@ -332,6 +334,14 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	row := r.db.QueryRowContext(ctx, query, catStr)
 	acc, err := r.scanAccount(row)
 	if err == nil {
+		if acc.IsCategoryDisabled(category) {
+			next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
+			if nErr == nil && next != nil {
+				_ = r.SetActiveForCategory(ctx, category, next.ID)
+				return next, nil
+			}
+			return acc, nil
+		}
 		dead, dErr := r.hasExhaustedBucketForCategory(ctx, acc.ID, catStr)
 		if dErr != nil || !dead {
 			return acc, nil
@@ -424,6 +434,7 @@ func (r *AccountRepository) SetActiveForCategory(ctx context.Context, category d
 // excluding the specified account ID and accounts whose quota for that category is exhausted.
 //
 // Eligibility rules:
+//   - Accounts with the category in disabled_categories are excluded.
 //   - 'active' accounts are eligible unless a recorded bucket for the category
 //     is exhausted and not yet past reset.
 //   - 'exhausted' accounts are eligible only when quota rows positively show a
@@ -439,9 +450,10 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
 		FROM accounts a
 		WHERE (? = '' OR a.id != ?)
+		  AND (',' || a.disabled_categories || ',') NOT LIKE '%,' || ? || ',%'
 		  AND (
 			a.status = 'active'
 			OR (
@@ -464,7 +476,7 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, catStr, nowStr, catStr, catStr, catStr)
+	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
 		return nil, domain.ErrNoAvailableAccount
@@ -478,7 +490,7 @@ type rowScanner interface {
 
 func (r *AccountRepository) scanAccount(scanner rowScanner) (*domain.Account, error) {
 	var acc domain.Account
-	var statusStr, expiryStr, createdStr, updatedStr string
+	var statusStr, expiryStr, createdStr, updatedStr, disabledCatsStr string
 	var isActiveInt int
 
 	err := scanner.Scan(
@@ -491,6 +503,7 @@ func (r *AccountRepository) scanAccount(scanner rowScanner) (*domain.Account, er
 		&statusStr,
 		&createdStr,
 		&updatedStr,
+		&disabledCatsStr,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -504,6 +517,15 @@ func (r *AccountRepository) scanAccount(scanner rowScanner) (*domain.Account, er
 	acc.TokenExpiry, _ = parseDBTime(expiryStr)
 	acc.CreatedAt, _ = parseDBTime(createdStr)
 	acc.UpdatedAt, _ = parseDBTime(updatedStr)
+	acc.DisabledCategories = []string{}
+	if strings.TrimSpace(disabledCatsStr) != "" {
+		for _, part := range strings.Split(disabledCatsStr, ",") {
+			p := strings.TrimSpace(part)
+			if p != "" {
+				acc.DisabledCategories = append(acc.DisabledCategories, p)
+			}
+		}
+	}
 
 	return &acc, nil
 }
@@ -710,9 +732,10 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 	catStr := category.String()
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
 		FROM accounts a
 		WHERE (? = '' OR a.id != ?)
+		  AND (',' || a.disabled_categories || ',') NOT LIKE '%,' || ? || ',%'
 		  AND (
 			a.status = 'active'
 			OR (
@@ -742,7 +765,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	args := []any{excludeID, excludeID, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, modelID}
+	args := []any{excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, modelID}
 	row := r.db.QueryRowContext(ctx, query, args...)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
@@ -755,7 +778,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 // traffic for a model category right now. It mirrors the eligibility rules of
 // GetNextAvailableForCategory: 'active' accounts need no unexpired exhausted
 // bucket for the category, 'exhausted' accounts need positive healthy bucket
-// evidence for it, and 'error'/'disabled' accounts are never available.
+// evidence for it, disabled_categories excludes the category, and 'error'/'disabled' accounts are never available.
 func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, accountID string, category domain.ModelCategory) (bool, error) {
 	if accountID == "" {
 		return false, domain.ErrAccountNotFound
@@ -770,6 +793,14 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 		return acc.IsAvailable(), nil
 	}
 
+	acc, err := r.GetByID(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	if acc.IsCategoryDisabled(category) {
+		return false, nil
+	}
+
 	dead, err := r.hasExhaustedBucketForCategory(ctx, accountID, catStr)
 	if err != nil {
 		return false, err
@@ -778,15 +809,7 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 		return false, nil
 	}
 
-	var statusStr string
-	if err := r.db.QueryRowContext(ctx, "SELECT status FROM accounts WHERE id = ?", accountID).Scan(&statusStr); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, domain.ErrAccountNotFound
-		}
-		return false, fmt.Errorf("failed to read status for account %s: %w", accountID, err)
-	}
-
-	switch domain.AccountStatus(statusStr) {
+	switch acc.Status {
 	case domain.AccountStatusActive:
 		return true, nil
 	case domain.AccountStatusExhausted:
@@ -806,4 +829,148 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 	default:
 		return false, nil
 	}
+}
+
+// GetCategoryRoutingMode returns the routing mode ("pool" or "solo") for a model category.
+func (r *AccountRepository) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
+	catStr := category.String()
+	if catStr == "" || catStr == domain.CategoryUnknown.String() {
+		return domain.RoutingModePool, nil
+	}
+
+	var mode string
+	err := r.db.QueryRowContext(ctx, "SELECT routing_mode FROM active_category_accounts WHERE category = ?", catStr).Scan(&mode)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.RoutingModePool, nil
+		}
+		return domain.RoutingModePool, fmt.Errorf("failed to get category routing mode: %w", err)
+	}
+	if mode == "" {
+		return domain.RoutingModePool, nil
+	}
+	return mode, nil
+}
+
+// SetCategoryRoutingMode sets the routing mode ("pool" or "solo") for a model category.
+func (r *AccountRepository) SetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory, mode string) error {
+	catStr := category.String()
+	if catStr == "" || catStr == domain.CategoryUnknown.String() {
+		return nil
+	}
+	if mode != domain.RoutingModeSolo {
+		mode = domain.RoutingModePool
+	}
+
+	res, err := r.db.ExecContext(ctx, "UPDATE active_category_accounts SET routing_mode = ? WHERE category = ?", mode, catStr)
+	if err != nil {
+		return fmt.Errorf("failed to update category routing mode for %s: %w", catStr, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		var accountID string
+		err := r.db.QueryRowContext(ctx, "SELECT id FROM accounts ORDER BY is_active DESC, updated_at DESC LIMIT 1").Scan(&accountID)
+		if err == nil && accountID != "" {
+			_, err = r.db.ExecContext(ctx, `
+				INSERT INTO active_category_accounts (category, account_id, routing_mode)
+				VALUES (?, ?, ?)
+				ON CONFLICT(category) DO UPDATE SET routing_mode = excluded.routing_mode
+			`, catStr, accountID, mode)
+			if err != nil {
+				return fmt.Errorf("failed to insert category routing mode for %s: %w", catStr, err)
+			}
+		}
+	}
+	return nil
+}
+
+// GetAllCategoryRoutingModes returns a map of all categories to their routing mode.
+func (r *AccountRepository) GetAllCategoryRoutingModes(ctx context.Context) (map[domain.ModelCategory]string, error) {
+	modes := map[domain.ModelCategory]string{
+		domain.CategoryClaudeGPT:   domain.RoutingModePool,
+		domain.CategoryGemini:      domain.RoutingModePool,
+		domain.CategoryGeminiArgon: domain.RoutingModePool,
+	}
+
+	rows, err := r.db.QueryContext(ctx, "SELECT category, routing_mode FROM active_category_accounts")
+	if err != nil {
+		return modes, fmt.Errorf("failed to list category routing modes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cat, mode string
+		if err := rows.Scan(&cat, &mode); err != nil {
+			return modes, fmt.Errorf("failed to scan category routing mode: %w", err)
+		}
+		if mode == "" {
+			mode = domain.RoutingModePool
+		}
+		modes[domain.ModelCategory(cat)] = mode
+	}
+	return modes, rows.Err()
+}
+
+// SetAccountCategoryDisabled updates the exclusion state for a model category on an account.
+func (r *AccountRepository) SetAccountCategoryDisabled(ctx context.Context, accountID string, category domain.ModelCategory, disabled bool) error {
+	if accountID == "" {
+		return domain.ErrAccountNotFound
+	}
+	catStr := category.String()
+	if catStr == "" || catStr == domain.CategoryUnknown.String() {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var currentStr string
+	err = tx.QueryRowContext(ctx, "SELECT disabled_categories FROM accounts WHERE id = ?", accountID).Scan(&currentStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrAccountNotFound
+		}
+		return fmt.Errorf("failed to query account %s: %w", accountID, err)
+	}
+
+	catMap := make(map[string]bool)
+	for _, part := range strings.Split(currentStr, ",") {
+		p := strings.TrimSpace(part)
+		if p != "" {
+			catMap[p] = true
+		}
+	}
+
+	if disabled {
+		catMap[catStr] = true
+	} else {
+		delete(catMap, catStr)
+	}
+
+	var newCats []string
+	for c := range catMap {
+		newCats = append(newCats, c)
+	}
+	newStr := strings.Join(newCats, ",")
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+
+	res, err := tx.ExecContext(ctx, "UPDATE accounts SET disabled_categories = ?, updated_at = ? WHERE id = ?", newStr, nowStr, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update disabled_categories for account %s: %w", accountID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.ErrAccountNotFound
+	}
+
+	return tx.Commit()
 }
