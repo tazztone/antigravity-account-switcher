@@ -10,6 +10,47 @@ type ModelInfo struct {
 	Recommended bool   `json:"recommended"`
 }
 
+// IsInternalOrPreview returns true if the model represents an internal, tab, or experimental endpoint.
+func (m *ModelInfo) IsInternalOrPreview() bool {
+	if m == nil {
+		return false
+	}
+	return IsInternalOrPreviewModel(m.ID)
+}
+
+// IsInternalOrPreviewModel checks if a model ID is an internal, tab, or preview endpoint.
+func IsInternalOrPreviewModel(modelID string) bool {
+	lower := modelID
+	for i := 0; i < len(modelID); i++ {
+		c := modelID[i]
+		if c >= 'A' && c <= 'Z' {
+			lower = ""
+			break
+		}
+	}
+	if lower == "" {
+		lower = ""
+		for i := 0; i < len(modelID); i++ {
+			c := modelID[i]
+			if c >= 'A' && c <= 'Z' {
+				lower += string(c + ('a' - 'A'))
+			} else {
+				lower += string(c)
+			}
+		}
+	}
+	return len(lower) >= 5 && (lower[:5] == "chat_" || lower[:4] == "tab_" || containsSubstr(lower, "preview"))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 // FallbackAccountID sentinel values for AccountModelRule.
 const (
 	// FallbackAccountAuto lets the proxy pick the next eligible account in the pool.

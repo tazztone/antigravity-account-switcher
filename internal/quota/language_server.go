@@ -299,6 +299,14 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 		return nil, fmt.Errorf("empty models map")
 	}
 
+	nameCounts := make(map[string]int, len(p.Models))
+	for _, meta := range p.Models {
+		if meta.DisplayName != "" {
+			nameCounts[strings.ToLower(strings.TrimSpace(meta.DisplayName))]++
+		}
+	}
+	usedNames := make(map[string]bool, len(p.Models))
+
 	seen := make(map[string]bool)
 	var result []*domain.ModelInfo
 
@@ -319,6 +327,7 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 				if dName == "" {
 					dName = mid
 				}
+				dName = disambiguateModelName(mid, dName, nameCounts, usedNames)
 				result = append(result, &domain.ModelInfo{
 					ID:          mid,
 					DisplayName: dName,
@@ -343,6 +352,7 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 		if dName == "" {
 			dName = mid
 		}
+		dName = disambiguateModelName(mid, dName, nameCounts, usedNames)
 		result = append(result, &domain.ModelInfo{
 			ID:          mid,
 			DisplayName: dName,
@@ -352,6 +362,59 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	}
 
 	return result, nil
+}
+
+func extractModelVariant(mid string) string {
+	lower := strings.ToLower(mid)
+	var parts []string
+	if strings.Contains(lower, "high") {
+		parts = append(parts, "High")
+	} else if strings.Contains(lower, "medium") {
+		parts = append(parts, "Medium")
+	} else if strings.Contains(lower, "low") {
+		parts = append(parts, "Low")
+	}
+	if strings.Contains(lower, "preview") {
+		parts = append(parts, "Preview")
+	}
+	if strings.Contains(lower, "tiered") {
+		parts = append(parts, "Tiered")
+	}
+	if strings.Contains(lower, "thinking") {
+		parts = append(parts, "Thinking")
+	}
+	if strings.Contains(lower, "image") {
+		parts = append(parts, "Image")
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " ")
+	}
+	return ""
+}
+
+func disambiguateModelName(mid, dName string, nameCounts map[string]int, usedNames map[string]bool) string {
+	cleanName := strings.TrimSpace(dName)
+	if cleanName == "" {
+		return mid
+	}
+	if nameCounts[strings.ToLower(cleanName)] <= 1 && !usedNames[strings.ToLower(cleanName)] {
+		usedNames[strings.ToLower(cleanName)] = true
+		return cleanName
+	}
+
+	variant := extractModelVariant(mid)
+	candidate := cleanName
+	if variant != "" && !strings.Contains(strings.ToLower(cleanName), strings.ToLower(variant)) {
+		candidate = fmt.Sprintf("%s (%s)", cleanName, variant)
+	} else if !strings.Contains(strings.ToLower(cleanName), strings.ToLower(mid)) {
+		candidate = fmt.Sprintf("%s (%s)", cleanName, mid)
+	}
+
+	if usedNames[strings.ToLower(candidate)] {
+		candidate = fmt.Sprintf("%s (%s)", cleanName, mid)
+	}
+	usedNames[strings.ToLower(candidate)] = true
+	return candidate
 }
 
 // FetchAvailableModelsFromCloudCode queries Cloud Code PA at /v1internal:fetchAvailableModels using a Bearer token.

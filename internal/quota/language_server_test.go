@@ -103,3 +103,54 @@ func TestDoLSRequest_MockServer(t *testing.T) {
 		t.Errorf("expected status ok, got %v", res["status"])
 	}
 }
+
+func TestExtractModels_Disambiguation(t *testing.T) {
+	payload := &modelsPayload{
+		Models: map[string]struct {
+			DisplayName      string `json:"displayName"`
+			Recommended      bool   `json:"recommended"`
+			SupportsThinking bool   `json:"supportsThinking"`
+		}{
+			"gemini-3.5-flash-lite": {
+				DisplayName: "Gemini 3.5 Flash Lite",
+			},
+			"gemini-3.5-flash-lite-high": {
+				DisplayName: "Gemini 3.5 Flash Lite",
+			},
+			"gemini-3.5-flash-lite-preview": {
+				DisplayName: "Gemini 3.5 Flash Lite",
+			},
+			"claude-opus-5.5-high": {
+				DisplayName: "Claude Opus 5.5 (High)",
+			},
+		},
+	}
+
+	models, err := extractModels(payload)
+	if err != nil {
+		t.Fatalf("extractModels failed: %v", err)
+	}
+
+	if len(models) != 4 {
+		t.Fatalf("expected 4 models, got %d", len(models))
+	}
+
+	names := make(map[string]bool)
+	for _, m := range models {
+		if names[m.DisplayName] {
+			t.Errorf("duplicate display name found after disambiguation: %s", m.DisplayName)
+		}
+		names[m.DisplayName] = true
+	}
+
+	// Verify specific variants were recognized
+	if !names["Claude Opus 5.5 (High)"] {
+		t.Error("expected Claude Opus 5.5 (High) to remain unchanged")
+	}
+	if !names["Gemini 3.5 Flash Lite (High)"] {
+		t.Errorf("expected Gemini 3.5 Flash Lite (High), found: %+v", names)
+	}
+	if !names["Gemini 3.5 Flash Lite (Preview)"] {
+		t.Errorf("expected Gemini 3.5 Flash Lite (Preview), found: %+v", names)
+	}
+}
