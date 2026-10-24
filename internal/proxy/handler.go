@@ -921,6 +921,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								SynchronizeRequest(r, currentBody, currentPath, currentQuery)
 							}
 						}
+
+						// Post-rotation model eligibility guard
+						if isCloudCode && !isPassThrough && currentAcc != nil && currentModel != "" && currentCategory != CategoryUnknown {
+							if target := h.resolveEligibleAccount(ctx, currentAcc, currentCategory, currentModel); target != nil {
+								currentAcc = target
+							}
+						}
 						continue
 
 					default:
@@ -931,8 +938,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				} else {
 					var nextAcc *domain.Account
 					var rotateErr error
-					if currentCategory != CategoryUnknown {
-						nextAcc, rotateErr = h.accountRepo.GetNextAvailableForCategory(ctx, currentCategory, currentAcc.ID)
+					if origModel != "" && currentCategory != CategoryUnknown {
+						nextAcc, rotateErr = h.accountRepo.GetNextAvailableForModel(ctx, currentCategory, NormalizeModelName(origModel), currentAcc.ID)
+					}
+					if rotateErr != nil || nextAcc == nil {
+						if currentCategory != CategoryUnknown {
+							nextAcc, rotateErr = h.accountRepo.GetNextAvailableForCategory(ctx, currentCategory, currentAcc.ID)
+						}
 					}
 					if rotateErr != nil || nextAcc == nil {
 						nextAcc, rotateErr = h.accountRepo.GetNextAvailable(ctx, currentAcc.ID)
