@@ -348,50 +348,10 @@
 
   function updateHeaderRoutingStrip() {
     const stripEl = document.getElementById('header-routing-strip');
-    if (!stripEl) return;
-    if (!rawAccountsData || rawAccountsData.length === 0) {
+    if (stripEl) {
       stripEl.innerHTML = '';
       stripEl.style.display = 'none';
-      return;
     }
-
-    const CATS = [
-      { key: 'claude_gpt', label: 'CLAUDE' },
-      { key: 'gemini', label: 'GEMINI' },
-      { key: 'gemini_argon', label: 'ARGON' },
-    ];
-
-    const items = CATS.map(c => {
-      let activeAcc = rawAccountsData.find(a => (a.active_categories || []).includes(c.key));
-      if (!activeAcc) {
-        activeAcc = rawAccountsData.find(a => a.is_active);
-      }
-      let accLabel = 'none';
-      if (activeAcc) {
-        if (isPrivacyMode) {
-          accLabel = activeAcc.id.slice(0, 8);
-        } else {
-          accLabel = activeAcc.email ? activeAcc.email.split('@')[0] : activeAcc.id.slice(0, 8);
-        }
-      }
-
-      const mode = (rawCategoryModes && rawCategoryModes[c.key]) || 'pool';
-      const eligibleCount = rawAccountsData.filter(a =>
-        a.status !== 'error' && a.status !== 'disabled' && !(a.disabled_categories || []).includes(c.key)
-      ).length;
-
-      let modeBadge = '';
-      if (mode === 'solo') {
-        modeBadge = `<span class="strip-mode strip-mode-solo">🔒 Solo</span>`;
-      } else {
-        modeBadge = `<span class="strip-mode strip-mode-pool">🔄 Pool (${eligibleCount})</span>`;
-      }
-
-      return `<span class="strip-item"><span class="strip-cat">${escapeHtml(c.label)}:</span> <span class="strip-acc">${escapeHtml(accLabel)}</span> ${modeBadge}</span>`;
-    });
-
-    stripEl.innerHTML = items.join('<span class="strip-sep">•</span>');
-    stripEl.style.display = 'flex';
   }
 
   async function fetchAccounts() {
@@ -533,147 +493,135 @@
       `;
     }
 
-    // Build Model Groups
-    let quotaBodyHtml = '';
-    if (buckets.length === 0) {
-      quotaBodyHtml = `
-        <div class="quota-group" style="text-align: center; padding: 0.75rem 0.5rem;">
-          <div class="text-xs text-muted">Awaiting quota poll from Google Cloud Code PA...</div>
-          <div class="text-xs text-secondary mt-1">Automatic sync occurs every 60s</div>
-        </div>
-      `;
-    } else {
-      let extraHtml = '';
-      if (extraBuckets.length > 0) {
-        extraHtml = `
-          <div class="quota-group">
-            <div class="quota-group-header">
-              <span class="quota-group-name">Additional Quota Limits</span>
-              <span class="quota-group-models">${extraBuckets.length} bucket${extraBuckets.length === 1 ? '' : 's'}</span>
-            </div>
-            ${extraBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('')}
-          </div>
-        `;
+    // Per-category interactive routing state (Bucket Borders & In-Header Controls)
+    const activeCats = acc.active_categories || [];
+    const disabledCats = acc.disabled_categories || [];
+
+    function getCategoryRouting(catKey, catLabel) {
+      const isPinned = activeCats.includes(catKey);
+      const isDisabled = disabledCats.includes(catKey);
+      const catMode = (acc.category_modes && acc.category_modes[catKey]) || rawCategoryModes[catKey] || 'pool';
+
+      let pillClass = '';
+      let groupClass = '';
+      let actionIcon = '';
+      let actionText = '';
+      let actionTitle = '';
+      let nextMode = '';
+      let nextEnabled = false;
+
+      if (isPinned) {
+        if (catMode === 'solo') {
+          pillClass = 'state-active-solo';
+          groupClass = 'bucket-active-solo';
+          actionIcon = '🔒';
+          actionText = 'Solo';
+          actionTitle = 'Solo Mode active (rotation blocked). Click to switch to Pool';
+          nextMode = 'pool';
+        } else {
+          pillClass = 'state-active-pool';
+          groupClass = 'bucket-active-pool';
+          actionIcon = '🔄';
+          actionText = 'Pool';
+          actionTitle = 'Pool Mode active (auto-rotates). Click to switch to Solo';
+          nextMode = 'solo';
+        }
+      } else {
+        if (isDisabled) {
+          pillClass = 'state-excluded';
+          groupClass = 'bucket-excluded';
+          actionIcon = '🚫';
+          actionText = 'Off';
+          actionTitle = 'Excluded from category failover. Click to re-enable';
+          nextEnabled = true;
+        } else {
+          pillClass = 'state-standby';
+          groupClass = 'bucket-standby-pool';
+          actionIcon = '✓';
+          actionText = 'Pool';
+          actionTitle = 'Standby failover target. Click to exclude from pool';
+          nextEnabled = false;
+        }
       }
 
-      quotaBodyHtml = `
-        <!-- Group 1: Claude & GPT Models (3P) -->
-        <div class="quota-group">
-          <div class="quota-group-header">
-            <span class="quota-group-name">Claude & GPT Models</span>
-            <span class="quota-group-models">Opus, Sonnet, GPT-OSS</span>
-          </div>
-          ${renderQuotaRow('5-Hour Sliding Limit', claude5h)}
-          ${renderQuotaRow('Weekly Sliding Limit', claudeWeekly)}
+      const pillHtml = `
+        <div class="category-pin-pill ${pillClass}">
+          <button type="button" class="pill-label-zone"
+                  data-id="${escapeHtml(acc.id)}"
+                  data-category="${catKey}"
+                  title="${isPinned ? `${catLabel} is currently serving traffic on this account` : `Click to pin ${catLabel} to this account`}"
+                  aria-label="${isPinned ? `${catLabel} active on ${escapeHtml(acc.id.slice(0, 8))}` : `Pin ${catLabel} to ${escapeHtml(acc.id.slice(0, 8))}`}">
+            <span class="pin-icon">${isPinned ? '📌' : (isDisabled ? '🚫' : '○')}</span>
+            <span class="pin-label">${isPinned ? 'Active' : 'Pin'}</span>
+          </button>
+          <button type="button" class="pill-action-zone"
+                  data-id="${escapeHtml(acc.id)}"
+                  data-category="${catKey}"
+                  data-is-pinned="${isPinned ? 'true' : 'false'}"
+                  data-next-mode="${nextMode}"
+                  data-next-enabled="${nextEnabled ? 'true' : 'false'}"
+                  title="${actionTitle}"
+                  aria-label="${actionTitle}">
+            <span class="action-icon">${actionIcon}</span>
+            <span class="action-text">${actionText}</span>
+          </button>
         </div>
+      `;
 
-        <!-- Group 2: Gemini Models -->
+      return { groupClass, pillHtml };
+    }
+
+    const claudeRouting = getCategoryRouting('claude_gpt', 'Claude/GPT');
+    const geminiRouting = getCategoryRouting('gemini', 'Gemini');
+    const argonRouting = getCategoryRouting('gemini_argon', 'Argon');
+
+    // Build Model Groups with Bucket-Level Borders
+    let extraHtml = '';
+    if (extraBuckets.length > 0) {
+      extraHtml = `
         <div class="quota-group">
           <div class="quota-group-header">
-            <span class="quota-group-name">Gemini Models</span>
-            <span class="quota-group-models">Flash, Pro</span>
+            <span class="quota-group-name">Additional Quota Limits</span>
           </div>
-          ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
-          ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
+          ${extraBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('')}
         </div>
-
-        ${argonWeekly ? `
-        <div class="quota-group">
-          <div class="quota-group-header">
-            <span class="quota-group-name">Gemini 4 Argon</span>
-            <span class="quota-group-models">Argon High, Medium, Low</span>
-          </div>
-          ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
-        </div>` : `
-        <div class="quota-group quota-group-standby">
-          <div class="quota-group-header">
-            <span class="quota-group-name">Gemini 4 Argon</span>
-            <span class="quota-group-models text-muted">Standard Quota Pool</span>
-          </div>
-          <div class="quota-row-standby">Active via Google Cloud Code PA • Dynamic upstream bucket</div>
-        </div>`}
-
-        ${extraHtml}
       `;
     }
 
-    // Per-category interactive split-pills (Tri-State)
-    const activeCats = acc.active_categories || [];
-    const disabledCats = acc.disabled_categories || [];
-    const CATS = [
-      { key: 'claude_gpt', label: 'CLAUDE/GPT' },
-      { key: 'gemini', label: 'GEMINI' },
-      { key: 'gemini_argon', label: 'ARGON' },
-    ];
-    const catPillsHtml = `
-      <div class="category-pin-bar" role="group" aria-label="Category Routing Pins">
-        ${CATS.map(c => {
-          const isPinned = activeCats.includes(c.key);
-          const isDisabled = disabledCats.includes(c.key);
-          const catMode = (acc.category_modes && acc.category_modes[c.key]) || rawCategoryModes[c.key] || 'pool';
+    const quotaBodyHtml = `
+      <!-- Group 1: Claude & GPT Models (3P) -->
+      <div class="quota-group ${claudeRouting.groupClass}">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Claude & GPT Models</span>
+          ${claudeRouting.pillHtml}
+        </div>
+        ${renderQuotaRow('5-Hour Sliding Limit', claude5h)}
+        ${renderQuotaRow('Weekly Sliding Limit', claudeWeekly)}
+      </div>
 
-          let pillClass = '';
-          let actionIcon = '';
-          let actionText = '';
-          let actionTitle = '';
-          let nextMode = '';
-          let nextEnabled = false;
+      <!-- Group 2: Gemini Models -->
+      <div class="quota-group ${geminiRouting.groupClass}">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Gemini Models</span>
+          ${geminiRouting.pillHtml}
+        </div>
+        ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
+        ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
+      </div>
 
-          if (isPinned) {
-            if (catMode === 'solo') {
-              pillClass = 'state-active-solo';
-              actionIcon = '🔒';
-              actionText = 'Solo';
-              actionTitle = 'Solo Mode active (rotation blocked). Click to switch to Pool';
-              nextMode = 'pool';
-            } else {
-              pillClass = 'state-active-pool';
-              actionIcon = '🔄';
-              actionText = 'Pool';
-              actionTitle = 'Pool Mode active (auto-rotates). Click to switch to Solo';
-              nextMode = 'solo';
-            }
-          } else {
-            if (isDisabled) {
-              pillClass = 'state-excluded';
-              actionIcon = '🚫';
-              actionText = 'Off';
-              actionTitle = 'Excluded from category failover. Click to re-enable';
-              nextEnabled = true;
-            } else {
-              pillClass = 'state-standby';
-              actionIcon = '✓';
-              actionText = 'Pool';
-              actionTitle = 'Standby failover target. Click to exclude from pool';
-              nextEnabled = false;
-            }
-          }
+      <!-- Group 3: Gemini 4 Argon -->
+      <div class="quota-group ${argonRouting.groupClass}">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Gemini 4 Argon</span>
+          ${argonRouting.pillHtml}
+        </div>
+        ${argonWeekly ? renderQuotaRow('Weekly Sliding Limit', argonWeekly) : `
+        <div class="quota-row-standby">Active via Google Cloud Code PA • Dynamic upstream bucket</div>
+        `}
+      </div>
 
-          return `
-            <div class="category-pin-pill ${pillClass}">
-              <button type="button" class="pill-label-zone"
-                      data-id="${escapeHtml(acc.id)}"
-                      data-category="${c.key}"
-                      title="${isPinned ? `${c.label} is currently serving traffic on this account` : `Click to pin ${c.label} to this account`}"
-                      aria-label="${isPinned ? `${c.label} active on ${escapeHtml(acc.id.slice(0, 8))}` : `Pin ${c.label} to ${escapeHtml(acc.id.slice(0, 8))}`}">
-                <span class="pin-icon">${isPinned ? '📌' : (isDisabled ? '🚫' : '○')}</span>
-                <span class="pin-label">${c.label}</span>
-              </button>
-              <button type="button" class="pill-action-zone"
-                      data-id="${escapeHtml(acc.id)}"
-                      data-category="${c.key}"
-                      data-is-pinned="${isPinned ? 'true' : 'false'}"
-                      data-next-mode="${nextMode}"
-                      data-next-enabled="${nextEnabled ? 'true' : 'false'}"
-                      title="${actionTitle}"
-                      aria-label="${actionTitle}">
-                <span class="action-icon">${actionIcon}</span>
-                <span class="action-text">${actionText}</span>
-              </button>
-            </div>
-          `;
-        }).join('')}
-      </div>`;
+      ${extraHtml}
+    `;
 
     // Model eligibility & fallbacks drawer
     const rules = acc.model_rules || [];
@@ -792,8 +740,6 @@
           ${escapeHtml(statusText)}
         </div>
       </div>
-
-      ${catPillsHtml}
 
       <div class="quota-matrix">
         ${quotaBodyHtml}

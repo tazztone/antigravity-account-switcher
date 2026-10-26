@@ -609,8 +609,7 @@ body {
 }
 
 .account-card.is-active {
-  border-color: var(--accent-light);
-  background: #0d1527;
+  border-color: var(--border-default);
 }
 
 .account-header {
@@ -679,12 +678,40 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.quota-group.bucket-active-pool {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: rgba(16, 185, 129, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.12);
+}
+
+.quota-group.bucket-active-solo {
+  border-color: rgba(245, 158, 11, 0.65);
+  background: rgba(245, 158, 11, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.12);
+}
+
+.quota-group.bucket-standby-pool {
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.quota-group.bucket-excluded {
+  border-style: dashed;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.02);
+  opacity: 0.5;
 }
 
 .quota-group-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .quota-group-name {
@@ -693,6 +720,12 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--accent-light);
+  white-space: nowrap;
+}
+
+.quota-group-header .category-pin-pill {
+  flex: 0 0 auto;
+  margin: 0;
 }
 
 .quota-group-models {
@@ -1607,26 +1640,18 @@ body.privacy-mode .blurred-email {
 
 /* Per-category routing & model rules */
 .category-pin-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin: 0.5rem 0;
-  padding: 0.2rem;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 6px;
+  display: none;
 }
 
 .category-pin-pill {
-  flex: 1;
   display: inline-flex;
   align-items: stretch;
   padding: 0;
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   font-weight: 500;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 5px;
+  border-radius: 4px;
   overflow: hidden;
   transition: all 0.15s ease;
   user-select: none;
@@ -1719,19 +1744,9 @@ body.privacy-mode .blurred-email {
   line-height: 1;
 }
 
-/* Live Header Routing Strip */
+/* Live Header Routing Strip (Replaced by bucket-level borders) */
 .header-routing-strip {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0.35rem 0;
-  padding: 0.25rem 0.6rem;
-  font-size: 0.72rem;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 6px;
-  color: var(--color-text-secondary);
+  display: none !important;
 }
 
 .header-routing-strip:empty {
