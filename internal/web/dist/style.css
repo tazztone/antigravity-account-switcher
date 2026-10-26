@@ -1924,6 +1924,7 @@ body.privacy-mode .blurred-email {
   font-size: 0.72rem;
   cursor: pointer;
   flex: 1;
+  min-width: 0;
 }
 
 .model-rule-name input[type="checkbox"] {
@@ -1936,12 +1937,51 @@ body.privacy-mode .blurred-email {
   white-space: nowrap;
 }
 
+.model-tier-badges {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin: 0 0.35rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.model-tier-badge {
+  font-size: 0.6rem;
+  font-family: inherit;
+  font-weight: 600;
+  padding: 0.08rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  line-height: 1.2;
+  transition: all 0.15s ease;
+}
+
+.model-tier-badge:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--color-text);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.model-tier-badge.is-active {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.model-tier-badge.is-active:hover {
+  background: rgba(59, 130, 246, 0.35);
+}
+
 .model-rule-fallback {
-  max-width: 48%;
+  max-width: 44%;
   font-size: 0.68rem;
   background: #111827;
   color: #d1d5db;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 3px;
   padding: 0.15rem 0.3rem;
+  flex-shrink: 0;
 }

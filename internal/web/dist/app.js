@@ -645,6 +645,34 @@
       return 'gemini';
     }
 
+    function parseModelTierInfo(r) {
+      const dName = (r.display_name || r.model_id || '').trim();
+      let baseName = dName;
+      let tier = '';
+
+      const tierMatch = baseName.match(/\s*\((High|Medium|Low|Thinking|Preview|Tiered)\)/i);
+      if (tierMatch) {
+        tier = tierMatch[1];
+        tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
+        baseName = baseName.replace(/\s*\((High|Medium|Low|Thinking|Preview|Tiered)\)/i, '').trim();
+      } else {
+        const mid = (r.model_id || '').toLowerCase();
+        if (mid.endsWith('-high')) tier = 'High';
+        else if (mid.endsWith('-medium')) tier = 'Medium';
+        else if (mid.endsWith('-low')) tier = 'Low';
+        else if (mid.endsWith('-thinking')) tier = 'Thinking';
+        else if (mid.endsWith('-preview')) tier = 'Preview';
+      }
+      return { baseName, tier };
+    }
+
+    function formatTierLabel(tier) {
+      const t = tier.toLowerCase();
+      if (t === 'medium') return 'Med';
+      if (t === 'thinking') return 'Think';
+      return tier;
+    }
+
     const GROUPS = [
       { key: 'claude', title: 'Claude & GPT Models' },
       { key: 'gemini', title: 'Gemini Models' },
@@ -658,26 +686,78 @@
       groupedRules[g].push(r);
     });
 
+    let totalUniqueModels = 0;
+    GROUPS.forEach(g => {
+      const seen = new Set();
+      groupedRules[g.key].forEach(r => {
+        const { baseName } = parseModelTierInfo(r);
+        seen.add(baseName);
+      });
+      totalUniqueModels += seen.size;
+    });
+
     let rulesContentHtml = '';
     if (rules.length === 0) {
       rulesContentHtml = '<div class="text-xs text-muted" style="padding: 0.5rem;">No models discovered yet. Click Fetch Models.</div>';
     } else {
+      const tierWeights = { 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'thinking': 4, 'preview': 5, 'tiered': 6 };
       rulesContentHtml = GROUPS.filter(g => groupedRules[g.key].length > 0).map(g => {
         const grpList = groupedRules[g.key];
-        const rowsHtml = grpList.map(r => `
-          <div class="model-rule-row ${r.enabled ? '' : 'model-rule-disabled'}" data-model-id="${escapeHtml(r.model_id)}" data-group="${g.key}">
-            <label class="model-rule-name" title="${escapeHtml(r.model_id)}">
-              <input type="checkbox" class="model-rule-enabled" ${r.enabled ? 'checked' : ''}>
-              <span class="model-label-text">${escapeHtml(r.display_name || r.model_id)}</span>
-            </label>
-            <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when 429 occurs">${fallbackOptions(r.fallback_account_id || '')}</select>
-          </div>
-        `).join('');
+        const baseModelMap = new Map();
+        grpList.forEach(r => {
+          const { baseName, tier } = parseModelTierInfo(r);
+          if (!baseModelMap.has(baseName)) {
+            baseModelMap.set(baseName, { baseName, rules: [], tiers: [] });
+          }
+          const item = baseModelMap.get(baseName);
+          item.rules.push(r);
+          if (tier) {
+            item.tiers.push({ tier, rule: r });
+          }
+        });
+
+        baseModelMap.forEach(item => {
+          item.tiers.sort((a, b) => (tierWeights[a.tier.toLowerCase()] || 99) - (tierWeights[b.tier.toLowerCase()] || 99));
+        });
+
+        const rowsHtml = Array.from(baseModelMap.values()).map(item => {
+          const anyEnabled = item.rules.some(r => r.enabled);
+          const allEnabled = item.rules.every(r => r.enabled);
+          const modelIds = item.rules.map(r => r.model_id).join(',');
+          const selectedFallback = item.rules[0]?.fallback_account_id || '';
+
+          let badgesHtml = '';
+          if (item.tiers.length > 0) {
+            badgesHtml = `
+              <div class="model-tier-badges">
+                ${item.tiers.map(({ tier, rule }) => `
+                  <button type="button" class="model-tier-badge ${rule.enabled ? 'is-active' : ''}"
+                          data-model-id="${escapeHtml(rule.model_id)}"
+                          data-tier="${escapeHtml(tier)}"
+                          title="${escapeHtml(rule.display_name || rule.model_id)} (${rule.enabled ? 'Enabled' : 'Disabled'})">
+                    ${escapeHtml(formatTierLabel(tier))}
+                  </button>
+                `).join('')}
+              </div>
+            `;
+          }
+
+          return `
+            <div class="model-rule-row ${anyEnabled ? '' : 'model-rule-disabled'}" data-model-ids="${escapeHtml(modelIds)}" data-group="${g.key}">
+              <label class="model-rule-name" title="${escapeHtml(modelIds)}">
+                <input type="checkbox" class="model-rule-enabled" ${allEnabled ? 'checked' : ''} ${anyEnabled && !allEnabled ? 'data-indeterminate="true"' : ''}>
+                <span class="model-label-text">${escapeHtml(item.baseName)}</span>
+              </label>
+              ${badgesHtml}
+              <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when 429 occurs">${fallbackOptions(selectedFallback)}</select>
+            </div>
+          `;
+        }).join('');
 
         return `
           <div class="model-group-section" data-group="${g.key}">
             <div class="model-group-header">
-              <span class="model-group-title">${escapeHtml(g.title)} (${grpList.length})</span>
+              <span class="model-group-title">${escapeHtml(g.title)} (${baseModelMap.size})</span>
               <div class="model-group-actions">
                 <button type="button" class="btn-group-toggle" data-action="all" data-group="${g.key}">All</button>
                 <button type="button" class="btn-group-toggle" data-action="none" data-group="${g.key}">None</button>
@@ -693,7 +773,7 @@
 
     const drawerHtml = `
       <details class="model-rules-drawer" data-account-id="${escapeHtml(acc.id)}" ${openRuleDrawers.has(acc.id) ? 'open' : ''}>
-        <summary>▶ Advanced Model Rules (${rules.length} models)</summary>
+        <summary>▶ Advanced Model Rules (${totalUniqueModels} models, ${rules.length} variants)</summary>
         <div class="model-rules-container">
           ${rulesContentHtml}
         </div>
@@ -805,15 +885,46 @@
       drawer.addEventListener('toggle', () => {
         if (drawer.open) openRuleDrawers.add(acc.id); else openRuleDrawers.delete(acc.id);
       });
+
       drawer.querySelectorAll('.model-rule-row').forEach(row => {
-        const modelId = row.dataset.modelId;
         const cb = row.querySelector('.model-rule-enabled');
-        cb.addEventListener('change', e => {
+        if (cb && cb.dataset.indeterminate === 'true') {
+          cb.indeterminate = true;
+        }
+
+        const modelIds = (row.dataset.modelIds || '').split(',').filter(Boolean);
+
+        cb.addEventListener('change', async e => {
+          cb.indeterminate = false;
           row.classList.toggle('model-rule-disabled', !e.target.checked);
-          saveModelRule(acc.id, { model_id: modelId, enabled: e.target.checked });
+          row.querySelectorAll('.model-tier-badge').forEach(b => {
+            b.classList.toggle('is-active', e.target.checked);
+          });
+          const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, enabled: e.target.checked }, false));
+          await Promise.all(promises);
+          await fetchAccounts();
         });
-        row.querySelector('.model-rule-fallback').addEventListener('change', e =>
-          saveModelRule(acc.id, { model_id: modelId, fallback_account_id: e.target.value }));
+
+        const fallbackSel = row.querySelector('.model-rule-fallback');
+        if (fallbackSel) {
+          fallbackSel.addEventListener('change', async e => {
+            const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, fallback_account_id: e.target.value }, false));
+            await Promise.all(promises);
+            await fetchAccounts();
+          });
+        }
+
+        row.querySelectorAll('.model-tier-badge').forEach(badge => {
+          badge.addEventListener('click', async e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const mId = badge.dataset.modelId;
+            const isCurrentlyActive = badge.classList.contains('is-active');
+            badge.classList.toggle('is-active', !isCurrentlyActive);
+            await saveModelRule(acc.id, { model_id: mId, enabled: !isCurrentlyActive }, false);
+            await fetchAccounts();
+          });
+        });
       });
 
       drawer.querySelectorAll('.btn-group-toggle').forEach(btn => {
@@ -823,16 +934,17 @@
           const action = btn.dataset.action;
           const groupKey = btn.dataset.group;
           const enabled = action === 'all';
-          const targetRows = drawer.querySelectorAll(`.model-rule-row[data-group="${groupKey}"]`);
-          for (const row of targetRows) {
-            const cb = row.querySelector('.model-rule-enabled');
-            if (cb && cb.checked !== enabled) {
-              cb.checked = enabled;
-              row.classList.toggle('model-rule-disabled', !enabled);
-              await saveModelRule(acc.id, { model_id: row.dataset.modelId, enabled }, false);
+          const targetRules = groupedRules[groupKey] || [];
+          const promises = [];
+          for (const r of targetRules) {
+            if (r.enabled !== enabled) {
+              promises.push(saveModelRule(acc.id, { model_id: r.model_id, enabled }, false));
             }
           }
-          await fetchAccounts();
+          if (promises.length > 0) {
+            await Promise.all(promises);
+            await fetchAccounts();
+          }
         });
       });
     }
