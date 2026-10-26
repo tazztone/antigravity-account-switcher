@@ -336,6 +336,25 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 		buckets = b
 	}
 
+	// 2. Preserve any active cooldown / lower remaining fraction for argon-weekly
+	for _, b := range buckets {
+		if (strings.Contains(strings.ToLower(b.BucketID), "argon") || strings.Contains(strings.ToLower(b.DisplayName), "argon")) &&
+			strings.Contains(strings.ToLower(string(b.Window)), "weekly") {
+			existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+			for _, eb := range existing {
+				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+					strings.Contains(strings.ToLower(string(eb.Window)), "weekly") {
+					if !eb.ResetTime.IsZero() && eb.ResetTime.After(now) {
+						b.ResetTime = eb.ResetTime
+						b.RemainingFraction = eb.RemainingFraction
+					}
+					break
+				}
+			}
+			break
+		}
+	}
+
 	// 3. Upsert buckets to SQLite
 	if len(buckets) > 0 {
 		_ = p.quotaRepo.DeleteByAccountID(ctx, acc.ID)
@@ -532,7 +551,17 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		UpdatedAt:         now,
 	}
 
-	return []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly}
+	argonWeekly := &domain.QuotaBucket{
+		BucketID:          acc.ID + "-argon-weekly",
+		AccountID:         acc.ID,
+		DisplayName:       "Gemini 4 Argon (weekly)",
+		Window:            domain.QuotaWindow("weekly"),
+		RemainingFraction: 1.0,
+		ResetTime:         weeklyResetTime,
+		UpdatedAt:         now,
+	}
+
+	return []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly, argonWeekly}
 }
 
 func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*domain.QuotaBucket, error) {
@@ -574,8 +603,9 @@ type rawBucketDTO struct {
 }
 
 type rawGroupDTO struct {
-	DisplayName string         `json:"displayName"`
-	Buckets     []rawBucketDTO `json:"buckets"`
+	DisplayName    string         `json:"displayName"`
+	DisplayNameAlt string         `json:"display_name"`
+	Buckets        []rawBucketDTO `json:"buckets"`
 }
 
 type rawQuotaResponseDTO struct {
@@ -596,10 +626,14 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 	if len(payload.Groups) > 0 {
 		for _, g := range payload.Groups {
 			groupName := g.DisplayName
+			if groupName == "" {
+				groupName = g.DisplayNameAlt
+			}
+			isArgon := strings.Contains(strings.ToLower(groupName), "argon")
 			if strings.Contains(strings.ToLower(groupName), "claude") {
 				groupName = "Claude and GPT models"
-			} else if strings.Contains(strings.ToLower(groupName), "argon") {
-				groupName = "Gemini Argon Models"
+			} else if isArgon {
+				groupName = "Gemini 4 Argon"
 			} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 				groupName = "Gemini Models"
 			}
@@ -615,6 +649,10 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 				window := domain.QuotaWindow("5h")
 				if strings.Contains(winLower, "weekly") {
 					window = domain.QuotaWindow("weekly")
+				}
+
+				if isArgon && !strings.Contains(strings.ToLower(bucketID), "argon") {
+					bucketID = "argon-" + string(window)
 				}
 
 				displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
@@ -638,6 +676,30 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 				})
 			}
 		}
+
+		hasArgon := false
+		var weeklyReset time.Time
+		for _, b := range buckets {
+			if strings.Contains(strings.ToLower(b.BucketID), "argon") || strings.Contains(strings.ToLower(b.DisplayName), "argon") {
+				hasArgon = true
+				break
+			}
+			if strings.Contains(strings.ToLower(string(b.Window)), "weekly") && !b.ResetTime.IsZero() {
+				weeklyReset = b.ResetTime
+			}
+		}
+		if !hasArgon {
+			buckets = append(buckets, &domain.QuotaBucket{
+				AccountID:         accountID,
+				BucketID:          "argon-weekly",
+				DisplayName:       "Gemini 4 Argon (weekly)",
+				Window:            domain.QuotaWindow("weekly"),
+				RemainingFraction: 1.0,
+				ResetTime:         weeklyReset,
+				UpdatedAt:         now,
+			})
+		}
+
 		return buckets, nil
 	}
 

@@ -22,15 +22,20 @@ import (
 type lsQuotaResponse struct {
 	Response struct {
 		Groups []struct {
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			Buckets     []struct {
+			DisplayName    string `json:"displayName"`
+			DisplayNameAlt string `json:"display_name"`
+			Description    string `json:"description"`
+			Buckets        []struct {
 				BucketID          string  `json:"bucketId"`
+				BucketIDAlt       string  `json:"bucket_id"`
 				DisplayName       string  `json:"displayName"`
+				DisplayNameAlt    string  `json:"display_name"`
 				Description       string  `json:"description"`
 				Window            string  `json:"window"`
 				RemainingFraction float64 `json:"remainingFraction"`
+				RemainingFracAlt  float64 `json:"remaining_fraction"`
 				ResetTime         string  `json:"resetTime"`
+				ResetTimeAlt      string  `json:"reset_time"`
 			} `json:"buckets"`
 		} `json:"groups"`
 		Description string `json:"description"`
@@ -228,18 +233,34 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 
 	for _, g := range parsed.Response.Groups {
 		groupName := g.DisplayName
+		if groupName == "" {
+			groupName = g.DisplayNameAlt
+		}
+		isArgon := strings.Contains(strings.ToLower(groupName), "argon")
 		if strings.Contains(strings.ToLower(groupName), "claude") {
 			groupName = "Claude & GPT"
-		} else if strings.Contains(strings.ToLower(groupName), "argon") {
-			groupName = "Gemini Argon"
+		} else if isArgon {
+			groupName = "Gemini 4 Argon"
 		} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 			groupName = "Gemini"
 		}
 
 		for _, b := range g.Buckets {
+			rawBucketID := b.BucketID
+			if rawBucketID == "" {
+				rawBucketID = b.BucketIDAlt
+			}
+			remFraction := b.RemainingFraction
+			if remFraction == 0 && b.RemainingFracAlt != 0 {
+				remFraction = b.RemainingFracAlt
+			}
+			resetStr := b.ResetTime
+			if resetStr == "" {
+				resetStr = b.ResetTimeAlt
+			}
 			var resetTime time.Time
-			if b.ResetTime != "" {
-				t, tErr := time.Parse(time.RFC3339, b.ResetTime)
+			if resetStr != "" {
+				t, tErr := time.Parse(time.RFC3339, resetStr)
 				if tErr == nil {
 					resetTime = t
 				}
@@ -252,13 +273,21 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 				windowName = "5H"
 			}
 
+			if isArgon && !strings.Contains(strings.ToLower(rawBucketID), "argon") {
+				if strings.Contains(strings.ToLower(rawBucketID), "weekly") || strings.EqualFold(windowName, "WEEKLY") {
+					rawBucketID = "argon-weekly"
+				} else {
+					rawBucketID = "argon-" + rawBucketID
+				}
+			}
+
 			displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
 			bucket := &domain.QuotaBucket{
 				AccountID:         accountID,
-				BucketID:          fmt.Sprintf("%s-%s", accountID, b.BucketID),
+				BucketID:          fmt.Sprintf("%s-%s", accountID, rawBucketID),
 				DisplayName:       displayName,
 				Window:            domain.QuotaWindow(windowName),
-				RemainingFraction: b.RemainingFraction,
+				RemainingFraction: remFraction,
 				ResetTime:         resetTime,
 				UpdatedAt:         now,
 			}

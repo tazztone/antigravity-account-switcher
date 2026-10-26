@@ -615,9 +615,7 @@
           <span class="quota-group-name">Gemini 4 Argon</span>
           ${argonRouting.pillHtml}
         </div>
-        ${argonWeekly ? renderQuotaRow('Weekly Sliding Limit', argonWeekly) : `
-        <div class="quota-row-standby">Active via Google Cloud Code PA • Dynamic upstream bucket</div>
-        `}
+        ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
       </div>
 
       ${extraHtml}
