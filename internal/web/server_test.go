@@ -76,6 +76,10 @@ func TestServer_StaticFiles(t *testing.T) {
 	if !strings.Contains(respJS.Header.Get("Content-Type"), "javascript") {
 		t.Errorf("expected javascript content-type, got %s", respJS.Header.Get("Content-Type"))
 	}
+	bodyJS, _ := io.ReadAll(respJS.Body)
+	if !strings.Contains(string(bodyJS), "bucket-active-pool") || !strings.Contains(string(bodyJS), "model-tier-badge") {
+		t.Errorf("expected app.js to contain bucket routing and tier badge logic")
+	}
 
 	// 3. /dist/style.css
 	respCSS, err := http.Get(ts.URL + "/dist/style.css")
@@ -85,6 +89,10 @@ func TestServer_StaticFiles(t *testing.T) {
 	defer respCSS.Body.Close()
 	if respCSS.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK for /dist/style.css, got %d", respCSS.StatusCode)
+	}
+	bodyCSS, _ := io.ReadAll(respCSS.Body)
+	if !strings.Contains(string(bodyCSS), ".bucket-active-pool") || !strings.Contains(string(bodyCSS), ".model-tier-badge") {
+		t.Errorf("expected style.css to contain bucket routing and tier badge styling")
 	}
 
 	// 4. SPA fallback
