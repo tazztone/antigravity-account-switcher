@@ -894,6 +894,7 @@
     const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude, []);
     const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini, groupedRules.preview);
     const argonModelsHtml = renderBucketModels('argon', groupedRules.argon, []);
+    const hasArgonAccess = Boolean(argonWeekly) || (groupedRules.argon && groupedRules.argon.length > 0);
 
     // Build Model Groups with Bucket-Level Borders
     let extraHtml = '';
@@ -932,6 +933,7 @@
       </div>
 
       <!-- Group 3: Gemini 4 Argon -->
+      ${hasArgonAccess ? `
       <div class="quota-group ${argonRouting.groupClass}" data-category-group="gemini_argon" data-in-pool="${argonRouting.isInPool ? 'true' : 'false'}">
         <div class="quota-group-header">
           <span class="quota-group-name">Gemini 4 Argon</span>
@@ -940,6 +942,15 @@
         ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
         ${argonModelsHtml}
       </div>
+      ` : `
+      <div class="quota-group bucket-unentitled" data-category-group="gemini_argon" data-in-pool="false">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Gemini 4 Argon</span>
+          <span class="badge-unentitled" title="This account does not have a paid Pro plan with Argon access">No Plan Access</span>
+        </div>
+        <div class="quota-row-unentitled">Not available on this account tier</div>
+      </div>
+      `}
 
       ${extraHtml}
     `;
