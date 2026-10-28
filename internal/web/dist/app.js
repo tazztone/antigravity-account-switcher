@@ -629,6 +629,13 @@
           actionTitle = 'Excluded from category failover. Click to re-enable';
           nextEnabled = true;
           isInPool = false;
+        } else if (catMode === 'solo') {
+          pillClass = 'state-standby-solo';
+          groupClass = 'bucket-standby-solo';
+          actionIcon = '🔒';
+          actionTitle = 'Solo Mode active on serving account (rotation blocked). Click to switch to Pool';
+          nextMode = 'pool';
+          isInPool = false;
         } else {
           pillClass = 'state-standby';
           groupClass = 'bucket-standby-pool';
@@ -965,9 +972,11 @@
         e.stopPropagation();
         const id = btn.dataset.id;
         const cat = btn.dataset.category;
-        const isPinned = btn.dataset.isPinned === 'true';
-        if (isPinned) {
-          handleToggleCategoryMode(id, cat, btn.dataset.nextMode);
+        const nextMode = btn.dataset.nextMode;
+        if (nextMode) {
+          const activeAccount = rawAccountsData.find(a => (a.active_categories || []).includes(cat));
+          const targetId = activeAccount ? activeAccount.id : id;
+          handleToggleCategoryMode(targetId, cat, nextMode);
         } else {
           handleToggleCategoryExclusion(id, cat, btn.dataset.nextEnabled === 'true');
         }

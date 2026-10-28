@@ -750,6 +750,11 @@ body {
   background: rgba(16, 185, 129, 0.025);
 }
 
+.quota-group.bucket-standby-solo {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
 .quota-group.pool-circuit-active {
   border-color: rgba(16, 185, 129, 0.85) !important;
   box-shadow: 0 0 12px rgba(16, 185, 129, 0.35), inset 0 0 0 1px rgba(16, 185, 129, 0.25) !important;
@@ -1781,6 +1786,16 @@ body.privacy-mode .blurred-email {
 .category-pin-pill.state-standby .pill-action-zone {
   color: #34d399;
   border-left-color: rgba(16, 185, 129, 0.15);
+}
+
+/* State 3b: Standby in Solo Mode (Muted outline + amber lock link) */
+.category-pin-pill.state-standby-solo {
+  color: #9ca3af;
+  border-color: rgba(245, 158, 11, 0.2);
+}
+.category-pin-pill.state-standby-solo .pill-action-zone {
+  color: #f59e0b;
+  border-left-color: rgba(245, 158, 11, 0.15);
 }
 
 /* State 4: Excluded (Dimmed + Strikethrough) */
