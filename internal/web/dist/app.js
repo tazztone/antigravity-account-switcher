@@ -19,6 +19,7 @@
   let currentLogFilter = 'all';
   let isUserScrolledUp = false;
   let selectedColumnIndex = -1;
+  const openInternalDrawers = new Set();
 
   // Privacy Mode State (Persistent in localStorage)
   const PRIVACY_STORAGE_KEY = 'antigravity_privacy_mode';
@@ -447,18 +448,23 @@
         const r1 = fromEl.getBoundingClientRect();
         const r2 = toEl.getBoundingClientRect();
 
+        const h1 = fromEl.querySelector('.quota-group-header');
+        const h2 = toEl.querySelector('.quota-group-header');
+        const r1H = h1 ? h1.getBoundingClientRect() : r1;
+        const r2H = h2 ? h2.getBoundingClientRect() : r2;
+
         let x1, y1, x2, y2;
 
         if (r1.left < r2.left) {
           x1 = r1.right - gridRect.left;
-          y1 = (r1.top + r1.bottom) / 2 - gridRect.top;
+          y1 = (r1H.top + r1H.bottom) / 2 - gridRect.top;
           x2 = r2.left - gridRect.left;
-          y2 = (r2.top + r2.bottom) / 2 - gridRect.top;
+          y2 = (r2H.top + r2H.bottom) / 2 - gridRect.top;
         } else if (r1.left > r2.left) {
           x1 = r1.left - gridRect.left;
-          y1 = (r1.top + r1.bottom) / 2 - gridRect.top;
+          y1 = (r1H.top + r1H.bottom) / 2 - gridRect.top;
           x2 = r2.right - gridRect.left;
-          y2 = (r2.top + r2.bottom) / 2 - gridRect.top;
+          y2 = (r2H.top + r2H.bottom) / 2 - gridRect.top;
         } else {
           x1 = (r1.left + r1.right) / 2 - gridRect.left;
           y1 = r1.bottom - gridRect.top;
@@ -676,6 +682,219 @@
     const geminiRouting = getCategoryRouting('gemini', 'Gemini');
     const argonRouting = getCategoryRouting('gemini_argon', 'Argon');
 
+    // Model rules categorized by bucket
+    const rules = acc.model_rules || [];
+    const otherAccounts = rawAccountsData.filter(a => a.id !== acc.id);
+    function fallbackOptions(selected) {
+      const opt = (v, t) => `<option value="${escapeHtml(v)}" ${v === selected ? 'selected' : ''}>${escapeHtml(t)}</option>`;
+      let out = opt('', 'Auto ▾') + opt('none', 'Block ▾');
+      otherAccounts.forEach(a => {
+        let label = a.email;
+        if (isPrivacyMode) {
+          label = a.id.slice(0, 8);
+        } else if (label.includes('@')) {
+          label = label.split('@')[0];
+        }
+        out += opt(a.id, `→ ${escapeHtml(label)} ▾`);
+      });
+      return out;
+    }
+
+    function categorizeRule(r) {
+      const mid = (r.model_id || '').toLowerCase();
+      const cat = (r.category || '').toLowerCase();
+      if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
+        return 'claude';
+      }
+      if (cat === 'gemini_argon' || /argon/i.test(mid)) {
+        return 'argon';
+      }
+      if (/^chat_|^tab_|preview/i.test(mid)) {
+        return 'preview';
+      }
+      return 'gemini';
+    }
+
+    function parseModelTierInfo(r) {
+      const rawMid = (r.model_id || '').trim();
+      let dName = (r.display_name || rawMid).trim();
+      let baseName = dName;
+      let tier = '';
+
+      // 1. If dName is raw slug like "gemini-3.8-flash-tiered", humanize baseName & extract tier
+      if (/^[a-z0-9_.-]+$/.test(dName) && dName.includes('-')) {
+        const parts = dName.split('-');
+        const lastPart = parts[parts.length - 1].toLowerCase();
+        if (['high', 'medium', 'med', 'low', 'thinking', 'preview', 'tiered', 'image'].includes(lastPart)) {
+          tier = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+          parts.pop();
+        }
+        baseName = parts.map(p => {
+          const pl = p.toLowerCase();
+          if (pl === 'gemini') return 'Gemini';
+          if (pl === 'claude') return 'Claude';
+          if (pl === 'gpt') return 'GPT';
+          if (pl === 'pro') return 'Pro';
+          if (pl === 'flash') return 'Flash';
+          if (pl === 'lite') return 'Lite';
+          if (pl === 'argon') return 'Argon';
+          return p.charAt(0).toUpperCase() + p.slice(1);
+        }).join(' ');
+      }
+
+      // 2. Check for explicit standard tier in parentheses: (High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)
+      const tierMatch = baseName.match(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i);
+      if (tierMatch) {
+        tier = tierMatch[1];
+        tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
+        baseName = baseName.replace(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
+      } else {
+        // 3. Check for disambiguated model ID in parentheses like (gemini-2.5-flash-lite)
+        const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
+        if (disambigMatch) {
+          const innerSlug = disambigMatch[1].toLowerCase();
+          if (innerSlug.includes('2.5')) tier = '2.5';
+          else if (innerSlug.includes('3.5')) tier = '3.5';
+          else if (innerSlug.includes('3.8')) tier = '3.8';
+          else if (innerSlug.includes('thinking')) tier = 'Think';
+          else if (innerSlug.includes('preview')) tier = 'Preview';
+          else tier = 'Std';
+          baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
+        }
+      }
+
+      // 4. Fallback: inspect model_id suffix if tier is still empty
+      if (!tier) {
+        const mid = rawMid.toLowerCase();
+        if (mid.endsWith('-high')) tier = 'High';
+        else if (mid.endsWith('-medium') || mid.endsWith('-med')) tier = 'Med';
+        else if (mid.endsWith('-low')) tier = 'Low';
+        else if (mid.endsWith('-thinking')) tier = 'Thinking';
+        else if (mid.endsWith('-preview')) tier = 'Preview';
+        else if (mid.endsWith('-tiered')) tier = 'Tiered';
+      }
+
+      return { baseName, tier };
+    }
+
+    function formatTierLabel(tier) {
+      const t = tier.toLowerCase();
+      if (t === 'medium') return 'Med';
+      if (t === 'thinking') return 'Think';
+      return tier;
+    }
+
+    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
+    rules.forEach(r => {
+      const g = categorizeRule(r);
+      groupedRules[g].push(r);
+    });
+
+    function buildModelGroupRows(ruleList, groupKey) {
+      if (!ruleList || ruleList.length === 0) return { count: 0, html: '' };
+      const tierWeights = { 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'thinking': 4, 'think': 4, '2.5': 5, '3.5': 6, '3.8': 7, 'preview': 8, 'tiered': 9, 'image': 10 };
+      const baseModelMap = new Map();
+      ruleList.forEach(r => {
+        const { baseName, tier } = parseModelTierInfo(r);
+        if (!baseModelMap.has(baseName)) {
+          baseModelMap.set(baseName, { baseName, rules: [], tiers: [] });
+        }
+        const item = baseModelMap.get(baseName);
+        item.rules.push(r);
+        if (tier) {
+          if (!item.tiers.some(t => t.tier.toLowerCase() === tier.toLowerCase())) {
+            item.tiers.push({ tier, rule: r });
+          }
+        }
+      });
+
+      baseModelMap.forEach(item => {
+        item.tiers.sort((a, b) => (tierWeights[a.tier.toLowerCase()] || 99) - (tierWeights[b.tier.toLowerCase()] || 99));
+      });
+
+      const rowsHtml = Array.from(baseModelMap.values()).map(item => {
+        const anyEnabled = item.rules.some(r => r.enabled);
+        const allEnabled = item.rules.every(r => r.enabled);
+        const modelIds = item.rules.map(r => r.model_id).join(',');
+        const selectedFallback = item.rules[0]?.fallback_account_id || '';
+
+        let badgesHtml = '';
+        if (item.tiers.length > 0) {
+          badgesHtml = `
+            <div class="model-tier-badges">
+              ${item.tiers.map(({ tier, rule }) => `
+                <button type="button" class="model-tier-badge ${rule.enabled ? 'is-active' : ''}"
+                        data-model-id="${escapeHtml(rule.model_id)}"
+                        data-tier="${escapeHtml(tier)}"
+                        title="${escapeHtml(rule.display_name || rule.model_id)} (${rule.enabled ? 'Enabled' : 'Disabled'})">
+                  ${escapeHtml(formatTierLabel(tier))}
+                </button>
+              `).join('')}
+            </div>
+          `;
+        }
+
+        return `
+          <div class="model-rule-row ${anyEnabled ? '' : 'model-rule-disabled'}" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
+            <label class="model-rule-name" title="${escapeHtml(modelIds)}">
+              <input type="checkbox" class="model-rule-enabled" ${allEnabled ? 'checked' : ''} ${anyEnabled && !allEnabled ? 'data-indeterminate="true"' : ''}>
+              <span class="model-label-text">${escapeHtml(item.baseName)}</span>
+            </label>
+            ${badgesHtml}
+            <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when 429 occurs">${fallbackOptions(selectedFallback)}</select>
+          </div>
+        `;
+      }).join('');
+
+      return { count: baseModelMap.size, html: rowsHtml };
+    }
+
+    function renderBucketModels(groupKey, rulesForGroup, previewRulesForGroup) {
+      const std = buildModelGroupRows(rulesForGroup, groupKey);
+      let previewHtml = '';
+      let previewCount = 0;
+      if (previewRulesForGroup && previewRulesForGroup.length > 0) {
+        const prev = buildModelGroupRows(previewRulesForGroup, 'preview');
+        previewCount = prev.count;
+        if (previewCount > 0) {
+          const drawerKey = `${acc.id}:${groupKey}`;
+          const isOpen = openInternalDrawers.has(drawerKey);
+          previewHtml = `
+            <details class="internal-models-drawer" data-drawer-key="${escapeHtml(drawerKey)}" ${isOpen ? 'open' : ''}>
+              <summary class="internal-models-summary">▸ +${previewCount} internal & tab models</summary>
+              <div class="internal-models-rows">
+                ${prev.html}
+              </div>
+            </details>
+          `;
+        }
+      }
+
+      if (std.count === 0 && previewCount === 0) {
+        return '';
+      }
+
+      return `
+        <div class="bucket-models-section" data-group="${groupKey}">
+          <div class="bucket-models-header">
+            <span class="bucket-models-title">Models (${std.count})</span>
+            <div class="bucket-models-actions">
+              <button type="button" class="btn-group-toggle" data-action="all" data-group="${groupKey}">All</button>
+              <button type="button" class="btn-group-toggle" data-action="none" data-group="${groupKey}">None</button>
+            </div>
+          </div>
+          <div class="bucket-models-rows">
+            ${std.html}
+          </div>
+          ${previewHtml}
+        </div>
+      `;
+    }
+
+    const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude, []);
+    const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini, groupedRules.preview);
+    const argonModelsHtml = renderBucketModels('argon', groupedRules.argon, []);
+
     // Build Model Groups with Bucket-Level Borders
     let extraHtml = '';
     if (extraBuckets.length > 0) {
@@ -698,6 +917,7 @@
         </div>
         ${renderQuotaRow('5-Hour Sliding Limit', claude5h)}
         ${renderQuotaRow('Weekly Sliding Limit', claudeWeekly)}
+        ${claudeModelsHtml}
       </div>
 
       <!-- Group 2: Gemini Models -->
@@ -708,6 +928,7 @@
         </div>
         ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
         ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
+        ${geminiModelsHtml}
       </div>
 
       <!-- Group 3: Gemini 4 Argon -->
@@ -717,168 +938,11 @@
           ${argonRouting.pillHtml}
         </div>
         ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
+        ${argonModelsHtml}
       </div>
 
       ${extraHtml}
     `;
-
-    // Model eligibility & fallbacks drawer
-    const rules = acc.model_rules || [];
-    const otherAccounts = rawAccountsData.filter(a => a.id !== acc.id);
-    function fallbackOptions(selected) {
-      const opt = (v, t) => `<option value="${escapeHtml(v)}" ${v === selected ? 'selected' : ''}>${escapeHtml(t)}</option>`;
-      return opt('', 'Auto (Next Eligible)') + opt('none', 'Block Fallback (None)') +
-        otherAccounts.map(a => opt(a.id, isPrivacyMode ? a.id.slice(0, 8) : a.email)).join('');
-    }
-
-    function categorizeRule(r) {
-      const mid = (r.model_id || '').toLowerCase();
-      const cat = (r.category || '').toLowerCase();
-      if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
-        return 'claude';
-      }
-      if (cat === 'gemini_argon' || /argon/i.test(mid)) {
-        return 'argon';
-      }
-      if (/^chat_|^tab_|preview/i.test(mid)) {
-        return 'preview';
-      }
-      return 'gemini';
-    }
-
-    function parseModelTierInfo(r) {
-      const dName = (r.display_name || r.model_id || '').trim();
-      let baseName = dName;
-      let tier = '';
-
-      const tierMatch = baseName.match(/\s*\((High|Medium|Low|Thinking|Preview|Tiered)\)/i);
-      if (tierMatch) {
-        tier = tierMatch[1];
-        tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
-        baseName = baseName.replace(/\s*\((High|Medium|Low|Thinking|Preview|Tiered)\)/i, '').trim();
-      } else {
-        const mid = (r.model_id || '').toLowerCase();
-        if (mid.endsWith('-high')) tier = 'High';
-        else if (mid.endsWith('-medium')) tier = 'Medium';
-        else if (mid.endsWith('-low')) tier = 'Low';
-        else if (mid.endsWith('-thinking')) tier = 'Thinking';
-        else if (mid.endsWith('-preview')) tier = 'Preview';
-      }
-      return { baseName, tier };
-    }
-
-    function formatTierLabel(tier) {
-      const t = tier.toLowerCase();
-      if (t === 'medium') return 'Med';
-      if (t === 'thinking') return 'Think';
-      return tier;
-    }
-
-    const GROUPS = [
-      { key: 'claude', title: 'Claude & GPT Models' },
-      { key: 'gemini', title: 'Gemini Models' },
-      { key: 'argon', title: 'Gemini 4 Argon Models' },
-      { key: 'preview', title: 'Internal & Preview Models' },
-    ];
-
-    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
-    rules.forEach(r => {
-      const g = categorizeRule(r);
-      groupedRules[g].push(r);
-    });
-
-    let totalUniqueModels = 0;
-    GROUPS.forEach(g => {
-      const seen = new Set();
-      groupedRules[g.key].forEach(r => {
-        const { baseName } = parseModelTierInfo(r);
-        seen.add(baseName);
-      });
-      totalUniqueModels += seen.size;
-    });
-
-    let rulesContentHtml = '';
-    if (rules.length === 0) {
-      rulesContentHtml = '<div class="text-xs text-muted" style="padding: 0.5rem;">No models discovered yet. Click Fetch Models.</div>';
-    } else {
-      const tierWeights = { 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'thinking': 4, 'preview': 5, 'tiered': 6 };
-      rulesContentHtml = GROUPS.filter(g => groupedRules[g.key].length > 0).map(g => {
-        const grpList = groupedRules[g.key];
-        const baseModelMap = new Map();
-        grpList.forEach(r => {
-          const { baseName, tier } = parseModelTierInfo(r);
-          if (!baseModelMap.has(baseName)) {
-            baseModelMap.set(baseName, { baseName, rules: [], tiers: [] });
-          }
-          const item = baseModelMap.get(baseName);
-          item.rules.push(r);
-          if (tier) {
-            item.tiers.push({ tier, rule: r });
-          }
-        });
-
-        baseModelMap.forEach(item => {
-          item.tiers.sort((a, b) => (tierWeights[a.tier.toLowerCase()] || 99) - (tierWeights[b.tier.toLowerCase()] || 99));
-        });
-
-        const rowsHtml = Array.from(baseModelMap.values()).map(item => {
-          const anyEnabled = item.rules.some(r => r.enabled);
-          const allEnabled = item.rules.every(r => r.enabled);
-          const modelIds = item.rules.map(r => r.model_id).join(',');
-          const selectedFallback = item.rules[0]?.fallback_account_id || '';
-
-          let badgesHtml = '';
-          if (item.tiers.length > 0) {
-            badgesHtml = `
-              <div class="model-tier-badges">
-                ${item.tiers.map(({ tier, rule }) => `
-                  <button type="button" class="model-tier-badge ${rule.enabled ? 'is-active' : ''}"
-                          data-model-id="${escapeHtml(rule.model_id)}"
-                          data-tier="${escapeHtml(tier)}"
-                          title="${escapeHtml(rule.display_name || rule.model_id)} (${rule.enabled ? 'Enabled' : 'Disabled'})">
-                    ${escapeHtml(formatTierLabel(tier))}
-                  </button>
-                `).join('')}
-              </div>
-            `;
-          }
-
-          return `
-            <div class="model-rule-row ${anyEnabled ? '' : 'model-rule-disabled'}" data-model-ids="${escapeHtml(modelIds)}" data-group="${g.key}">
-              <label class="model-rule-name" title="${escapeHtml(modelIds)}">
-                <input type="checkbox" class="model-rule-enabled" ${allEnabled ? 'checked' : ''} ${anyEnabled && !allEnabled ? 'data-indeterminate="true"' : ''}>
-                <span class="model-label-text">${escapeHtml(item.baseName)}</span>
-              </label>
-              ${badgesHtml}
-              <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when 429 occurs">${fallbackOptions(selectedFallback)}</select>
-            </div>
-          `;
-        }).join('');
-
-        return `
-          <div class="model-group-section" data-group="${g.key}">
-            <div class="model-group-header">
-              <span class="model-group-title">${escapeHtml(g.title)} (${baseModelMap.size})</span>
-              <div class="model-group-actions">
-                <button type="button" class="btn-group-toggle" data-action="all" data-group="${g.key}">All</button>
-                <button type="button" class="btn-group-toggle" data-action="none" data-group="${g.key}">None</button>
-              </div>
-            </div>
-            <div class="model-group-rows">
-              ${rowsHtml}
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    const drawerHtml = `
-      <details class="model-rules-drawer" data-account-id="${escapeHtml(acc.id)}" ${openRuleDrawers.has(acc.id) ? 'open' : ''}>
-        <summary>▶ Advanced Model Rules (${totalUniqueModels} models, ${rules.length} variants)</summary>
-        <div class="model-rules-container">
-          ${rulesContentHtml}
-        </div>
-      </details>`;
 
     // Status badge formatting
     let statusBadgeClass = 'badge-neutral';
@@ -923,8 +987,6 @@
       <div class="quota-matrix">
         ${quotaBodyHtml}
       </div>
-
-      ${drawerHtml}
 
       <div class="account-actions">
         ${activeCats.length === 3 ? `
@@ -983,75 +1045,78 @@
       });
     });
 
-    const drawer = card.querySelector('.model-rules-drawer');
-    if (drawer) {
-      drawer.addEventListener('toggle', () => {
-        if (drawer.open) openRuleDrawers.add(acc.id); else openRuleDrawers.delete(acc.id);
-        requestAnimationFrame(() => drawPoolCircuits());
+    // Bind model rules toggles and fallbacks across the card
+    card.querySelectorAll('.model-rule-row').forEach(row => {
+      const cb = row.querySelector('.model-rule-enabled');
+      if (cb && cb.dataset.indeterminate === 'true') {
+        cb.indeterminate = true;
+      }
+
+      const modelIds = (row.dataset.modelIds || '').split(',').filter(Boolean);
+
+      cb.addEventListener('change', async e => {
+        cb.indeterminate = false;
+        row.classList.toggle('model-rule-disabled', !e.target.checked);
+        row.querySelectorAll('.model-tier-badge').forEach(b => {
+          b.classList.toggle('is-active', e.target.checked);
+        });
+        const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, enabled: e.target.checked }, false));
+        await Promise.all(promises);
+        await fetchAccounts();
       });
 
-      drawer.querySelectorAll('.model-rule-row').forEach(row => {
-        const cb = row.querySelector('.model-rule-enabled');
-        if (cb && cb.dataset.indeterminate === 'true') {
-          cb.indeterminate = true;
-        }
-
-        const modelIds = (row.dataset.modelIds || '').split(',').filter(Boolean);
-
-        cb.addEventListener('change', async e => {
-          cb.indeterminate = false;
-          row.classList.toggle('model-rule-disabled', !e.target.checked);
-          row.querySelectorAll('.model-tier-badge').forEach(b => {
-            b.classList.toggle('is-active', e.target.checked);
-          });
-          const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, enabled: e.target.checked }, false));
+      const fallbackSel = row.querySelector('.model-rule-fallback');
+      if (fallbackSel) {
+        fallbackSel.addEventListener('change', async e => {
+          const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, fallback_account_id: e.target.value }, false));
           await Promise.all(promises);
           await fetchAccounts();
         });
+      }
 
-        const fallbackSel = row.querySelector('.model-rule-fallback');
-        if (fallbackSel) {
-          fallbackSel.addEventListener('change', async e => {
-            const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, fallback_account_id: e.target.value }, false));
-            await Promise.all(promises);
-            await fetchAccounts();
-          });
-        }
-
-        row.querySelectorAll('.model-tier-badge').forEach(badge => {
-          badge.addEventListener('click', async e => {
-            e.preventDefault();
-            e.stopPropagation();
-            const mId = badge.dataset.modelId;
-            const isCurrentlyActive = badge.classList.contains('is-active');
-            badge.classList.toggle('is-active', !isCurrentlyActive);
-            await saveModelRule(acc.id, { model_id: mId, enabled: !isCurrentlyActive }, false);
-            await fetchAccounts();
-          });
-        });
-      });
-
-      drawer.querySelectorAll('.btn-group-toggle').forEach(btn => {
-        btn.addEventListener('click', async e => {
+      row.querySelectorAll('.model-tier-badge').forEach(badge => {
+        badge.addEventListener('click', async e => {
           e.preventDefault();
           e.stopPropagation();
-          const action = btn.dataset.action;
-          const groupKey = btn.dataset.group;
-          const enabled = action === 'all';
-          const targetRules = groupedRules[groupKey] || [];
-          const promises = [];
-          for (const r of targetRules) {
-            if (r.enabled !== enabled) {
-              promises.push(saveModelRule(acc.id, { model_id: r.model_id, enabled }, false));
-            }
-          }
-          if (promises.length > 0) {
-            await Promise.all(promises);
-            await fetchAccounts();
-          }
+          const mId = badge.dataset.modelId;
+          const isCurrentlyActive = badge.classList.contains('is-active');
+          badge.classList.toggle('is-active', !isCurrentlyActive);
+          await saveModelRule(acc.id, { model_id: mId, enabled: !isCurrentlyActive }, false);
+          await fetchAccounts();
         });
       });
-    }
+    });
+
+    card.querySelectorAll('.btn-group-toggle').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        const groupKey = btn.dataset.group;
+        const enabled = action === 'all';
+        const targetRules = groupedRules[groupKey] || [];
+        const promises = [];
+        for (const r of targetRules) {
+          if (r.enabled !== enabled) {
+            promises.push(saveModelRule(acc.id, { model_id: r.model_id, enabled }, false));
+          }
+        }
+        if (promises.length > 0) {
+          await Promise.all(promises);
+          await fetchAccounts();
+        }
+      });
+    });
+
+    card.querySelectorAll('.internal-models-drawer').forEach(d => {
+      d.addEventListener('toggle', () => {
+        const key = d.dataset.drawerKey;
+        if (key) {
+          if (d.open) openInternalDrawers.add(key); else openInternalDrawers.delete(key);
+        }
+        requestAnimationFrame(() => drawPoolCircuits());
+      });
+    });
 
     // Bind safe two-step delete button (inline confirmation without window.confirm)
     const deleteBtn = card.querySelector('.btn-delete-account');
@@ -1655,7 +1720,6 @@
   // Account Actions: Switch & Delete
   // =========================================================================
 
-  const openRuleDrawers = new Set();
 
   async function saveModelRule(accountID, rule, shouldRefetch = true) {
     try {
