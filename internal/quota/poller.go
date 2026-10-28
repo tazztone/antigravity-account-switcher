@@ -389,7 +389,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 
 func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]*domain.QuotaBucket, error) {
 	url := fmt.Sprintf("%s/v1internal:retrieveUserQuotaSummary", p.cfg.BaseURL)
-	reqBody := []byte(`{}`)
+	reqBody := []byte(`{"project":"aicode-consumers"}`)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
@@ -398,7 +398,8 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 
 	req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/2.12.0 (linux; x86_64)")
+	req.Header.Set("User-Agent", "antigravity/cli/1.1.26 (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)")
+	req.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -419,7 +420,8 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 				retryReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 				retryReq.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 				retryReq.Header.Set("Content-Type", "application/json")
-				retryReq.Header.Set("User-Agent", "antigravity/2.12.0 (linux; x86_64)")
+				retryReq.Header.Set("User-Agent", "antigravity/cli/1.1.26 (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)")
+				retryReq.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 				resp2, err2 := p.client.Do(retryReq)
 				if err2 == nil {
 					defer resp2.Body.Close()
