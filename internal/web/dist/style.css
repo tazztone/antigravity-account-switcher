@@ -747,7 +747,6 @@ body {
 
 .quota-group.bucket-standby-pool {
   border: 1px dashed rgba(16, 185, 129, 0.32);
-  border-left: 3.5px dashed rgba(16, 185, 129, 0.7);
   background: rgba(16, 185, 129, 0.025);
 }
 

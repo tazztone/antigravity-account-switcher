@@ -644,10 +644,10 @@
           <button type="button" class="pill-label-zone"
                   data-id="${escapeHtml(acc.id)}"
                   data-category="${catKey}"
-                  title="${isPinned ? `${catLabel} is currently serving traffic on this account` : `Click to pin ${catLabel} to this account`}"
-                  aria-label="${isPinned ? `${catLabel} active on ${escapeHtml(acc.id.slice(0, 8))}` : `Pin ${catLabel} to ${escapeHtml(acc.id.slice(0, 8))}`}">
-            <span class="pin-icon">${isPinned ? '📌' : (isDisabled ? '🚫' : '○')}</span>
-            <span class="pin-label">${isPinned ? 'Active' : 'Pin'}</span>
+                  title="${isPinned ? `${catLabel} is currently serving traffic on this account` : `Click to activate ${catLabel} on this account`}"
+                  aria-label="${isPinned ? `${catLabel} active on ${escapeHtml(acc.id.slice(0, 8))}` : `Activate ${catLabel} on ${escapeHtml(acc.id.slice(0, 8))}`}">
+            <span class="pin-icon">${isPinned ? '●' : (isDisabled ? '🚫' : '○')}</span>
+            <span class="pin-label">${isPinned ? 'Active' : 'Activate'}</span>
           </button>
           <button type="button" class="pill-action-zone"
                   data-id="${escapeHtml(acc.id)}"
@@ -925,8 +925,8 @@
             All Categories Active
           </div>
         ` : `
-          <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Pin all model categories to this account">
-            Pin All Categories
+          <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Activate all model categories on this account">
+            Activate All Categories
           </button>
         `}
         <button class="btn btn-danger-subtle btn-delete-account" data-id="${escapeHtml(acc.id)}" title="Remove Account" aria-label="Remove Account">
