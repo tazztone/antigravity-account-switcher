@@ -11,7 +11,7 @@ import (
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
-func TestArgonQuota_ConsumerBuckets_IncludesArgonWeekly(t *testing.T) {
+func TestArgonQuota_ConsumerBuckets_ExcludesArgonWhenNoCooldown(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	p, err := NewPoller(accRepo, quotaRepo)
 	if err != nil {
@@ -25,30 +25,18 @@ func TestArgonQuota_ConsumerBuckets_IncludesArgonWeekly(t *testing.T) {
 	}
 
 	buckets := p.generateConsumerQuotaBuckets(context.Background(), acc)
-	if len(buckets) != 5 {
-		t.Fatalf("expected 5 buckets for consumer account, got %d", len(buckets))
+	if len(buckets) != 4 {
+		t.Fatalf("expected 4 standard buckets for consumer account without cooldown, got %d", len(buckets))
 	}
 
-	var argonBucket *domain.QuotaBucket
 	for _, b := range buckets {
-		if strings.Contains(b.BucketID, "argon-weekly") {
-			argonBucket = b
-			break
+		if strings.Contains(strings.ToLower(b.DisplayName), "argon") || strings.HasSuffix(strings.ToLower(b.BucketID), "argon-weekly") {
+			t.Fatalf("unexpected argon bucket for consumer account without active cooldown: %+v", b)
 		}
-	}
-
-	if argonBucket == nil {
-		t.Fatalf("expected argon-weekly bucket to be present")
-	}
-	if argonBucket.RemainingFraction != 1.0 {
-		t.Errorf("expected remaining fraction 1.0, got %f", argonBucket.RemainingFraction)
-	}
-	if argonBucket.Window != domain.QuotaWindowWeekly && argonBucket.Window != domain.QuotaWindow("weekly") {
-		t.Errorf("expected weekly window, got %s", argonBucket.Window)
 	}
 }
 
-func TestArgonQuota_ParseResponse_SynthesizesArgonWhenMissing(t *testing.T) {
+func TestArgonQuota_ParseResponse_OmitsArgonWhenMissing(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	p, err := NewPoller(accRepo, quotaRepo)
 	if err != nil {
@@ -80,26 +68,56 @@ func TestArgonQuota_ParseResponse_SynthesizesArgonWhenMissing(t *testing.T) {
 		t.Fatalf("parseQuotaResponse failed: %v", parseErr)
 	}
 
-	var argonBucket *domain.QuotaBucket
 	for _, b := range buckets {
-		if strings.Contains(strings.ToLower(b.BucketID), "argon") {
-			argonBucket = b
-			break
+		if strings.Contains(strings.ToLower(b.BucketID), "argon") || strings.Contains(strings.ToLower(b.DisplayName), "argon") {
+			t.Fatalf("expected no argon bucket when upstream omits argon, but found: %+v", b)
 		}
 	}
+}
 
-	if argonBucket == nil {
-		t.Fatalf("expected synthesized argon-weekly bucket")
+func TestArgonQuota_ParseResponse_RealUpstreamArgonPayload(t *testing.T) {
+	_, accRepo, quotaRepo := setupTestStore(t)
+	p, err := NewPoller(accRepo, quotaRepo)
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
 	}
-	if argonBucket.BucketID != "argon-weekly" {
-		t.Errorf("expected bucket ID argon-weekly, got %s", argonBucket.BucketID)
+
+	// Real Google Cloud Code PA payload as returned to Pro accounts
+	rawJSON := `{
+		"groups": [
+			{
+				"displayName": "GEMINI 4 ARGON",
+				"description": "For paid Pro plans, Argon quota is separate.",
+				"buckets": [
+					{
+						"displayName": "Gemini 4 Argon Weekly Limit",
+						"window": "WEEKLY",
+						"remainingFraction": 0.5526,
+						"resetTime": "2026-10-30T14:01:00Z"
+					}
+				]
+			}
+		]
+	}`
+
+	buckets, parseErr := p.parseQuotaResponse("acc-pro", strings.NewReader(rawJSON))
+	if parseErr != nil {
+		t.Fatalf("parseQuotaResponse failed: %v", parseErr)
 	}
-	if argonBucket.RemainingFraction != 1.0 {
-		t.Errorf("expected remaining fraction 1.0, got %f", argonBucket.RemainingFraction)
+
+	if len(buckets) != 1 {
+		t.Fatalf("expected 1 bucket for argon group, got %d", len(buckets))
 	}
-	expectedReset, _ := time.Parse(time.RFC3339, "2026-11-01T00:00:00Z")
-	if !argonBucket.ResetTime.Equal(expectedReset) {
-		t.Errorf("expected reset time %v, got %v", expectedReset, argonBucket.ResetTime)
+	b := buckets[0]
+	if b.BucketID != "argon-weekly" {
+		t.Errorf("expected bucket ID argon-weekly, got %s", b.BucketID)
+	}
+	if b.RemainingFraction != 0.5526 {
+		t.Errorf("expected remaining fraction 0.5526, got %f", b.RemainingFraction)
+	}
+	expectedReset, _ := time.Parse(time.RFC3339, "2026-10-30T14:01:00Z")
+	if !b.ResetTime.Equal(expectedReset) {
+		t.Errorf("expected reset time %v, got %v", expectedReset, b.ResetTime)
 	}
 }
 

@@ -337,9 +337,11 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 	}
 
 	// 2. Preserve any active cooldown / lower remaining fraction for argon-weekly
+	hasArgonInFetched := false
 	for _, b := range buckets {
 		if (strings.Contains(strings.ToLower(b.BucketID), "argon") || strings.Contains(strings.ToLower(b.DisplayName), "argon")) &&
 			strings.Contains(strings.ToLower(string(b.Window)), "weekly") {
+			hasArgonInFetched = true
 			existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
 			for _, eb := range existing {
 				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
@@ -352,6 +354,16 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 				}
 			}
 			break
+		}
+	}
+	if !hasArgonInFetched {
+		existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+		for _, eb := range existing {
+			if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+				!eb.ResetTime.IsZero() && eb.ResetTime.After(now) && eb.RemainingFraction <= 0.0 {
+				buckets = append(buckets, eb)
+				break
+			}
 		}
 	}
 
@@ -553,17 +565,16 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		UpdatedAt:         now,
 	}
 
-	argonWeekly := &domain.QuotaBucket{
-		BucketID:          acc.ID + "-argon-weekly",
-		AccountID:         acc.ID,
-		DisplayName:       "Gemini 4 Argon (weekly)",
-		Window:            domain.QuotaWindow("weekly"),
-		RemainingFraction: 1.0,
-		ResetTime:         weeklyResetTime,
-		UpdatedAt:         now,
+	consumerBuckets := []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly}
+	existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+	for _, eb := range existing {
+		if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+			!eb.ResetTime.IsZero() && eb.ResetTime.After(now) {
+			consumerBuckets = append(consumerBuckets, eb)
+			break
+		}
 	}
-
-	return []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly, argonWeekly}
+	return consumerBuckets
 }
 
 func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*domain.QuotaBucket, error) {
@@ -657,7 +668,13 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 					bucketID = "argon-" + string(window)
 				}
 
-				displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
+				displayName := b.DisplayName
+				if displayName == "" {
+					displayName = b.DisplayNameAlt
+				}
+				if displayName == "" {
+					displayName = fmt.Sprintf("%s (%s)", groupName, b.Window)
+				}
 
 				fraction := b.RemainingFraction
 				if fraction == 0 && b.RemainingFracAlt > 0 {
@@ -677,29 +694,6 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 					UpdatedAt:         now,
 				})
 			}
-		}
-
-		hasArgon := false
-		var weeklyReset time.Time
-		for _, b := range buckets {
-			if strings.Contains(strings.ToLower(b.BucketID), "argon") || strings.Contains(strings.ToLower(b.DisplayName), "argon") {
-				hasArgon = true
-				break
-			}
-			if strings.Contains(strings.ToLower(string(b.Window)), "weekly") && !b.ResetTime.IsZero() {
-				weeklyReset = b.ResetTime
-			}
-		}
-		if !hasArgon {
-			buckets = append(buckets, &domain.QuotaBucket{
-				AccountID:         accountID,
-				BucketID:          "argon-weekly",
-				DisplayName:       "Gemini 4 Argon (weekly)",
-				Window:            domain.QuotaWindow("weekly"),
-				RemainingFraction: 1.0,
-				ResetTime:         weeklyReset,
-				UpdatedAt:         now,
-			})
 		}
 
 		return buckets, nil
