@@ -1,0 +1,1 @@
+scripts/reinstall-and-serve.sh
