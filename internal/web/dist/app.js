@@ -1364,8 +1364,6 @@
   }
 
   async function handleSaveConfig() {
-    if (!btnSaveConfig) return;
-
     const primaryVal = selectModelPrimary ? selectModelPrimary.value : currentAppConfig.model_primary;
     const secondaryVal = selectModelSecondary ? selectModelSecondary.value : currentAppConfig.model_secondary;
     const isFallbackEnabled = fallbackToggle ? fallbackToggle.checked : false;
@@ -1376,9 +1374,10 @@
       return;
     }
 
-    const origText = btnSaveConfig.textContent;
-    btnSaveConfig.disabled = true;
-    btnSaveConfig.textContent = 'Saving...';
+    if (btnSaveConfig) {
+      btnSaveConfig.disabled = true;
+      btnSaveConfig.textContent = 'Saving...';
+    }
 
     const payload = {
       model_primary: primaryVal,
@@ -1400,7 +1399,8 @@
 
       const updated = await res.json();
       currentAppConfig = updated;
-      showToast('Model fallback configuration saved successfully', 'success', 3000);
+      updateToggleStatusText(Boolean(updated.fallback_secondary_enabled));
+      showToast('Model fallback configuration saved', 'success', 2500);
       if (configStatusMsg) {
         configStatusMsg.textContent = `Saved at ${new Date().toLocaleTimeString()}`;
         setTimeout(() => {
@@ -1410,8 +1410,10 @@
     } catch (err) {
       showToast(`Failed to save settings: ${err.message}`, 'error', 5000);
     } finally {
-      btnSaveConfig.disabled = false;
-      btnSaveConfig.textContent = origText;
+      if (btnSaveConfig) {
+        btnSaveConfig.disabled = false;
+        btnSaveConfig.textContent = 'Save Settings';
+      }
     }
   }
 
@@ -2050,27 +2052,38 @@
       requestAnimationFrame(() => drawPoolCircuits());
     });
 
-    // Model fallback toggle
+    // Model fallback toggle with instant auto-save
     if (fallbackToggle) {
       fallbackToggle.addEventListener('change', () => {
         updateToggleStatusText(fallbackToggle.checked);
+        handleSaveConfig();
       });
     }
 
-    // Dynamic secondary model options on primary model change
+    // Dynamic secondary model options on primary model change with instant auto-save
     if (selectModelPrimary) {
-      selectModelPrimary.addEventListener('change', updateSecondaryOptions);
+      selectModelPrimary.addEventListener('change', () => {
+        updateSecondaryOptions();
+        handleSaveConfig();
+      });
     }
 
-    // Save model fallback settings
+    if (selectModelSecondary) {
+      selectModelSecondary.addEventListener('change', () => {
+        handleSaveConfig();
+      });
+    }
+
+    // Save model fallback settings (if explicit button exists)
     if (btnSaveConfig) {
       btnSaveConfig.addEventListener('click', handleSaveConfig);
     }
 
-    // Refresh models button
+    // Refresh models button with account refetch
     if (btnRefreshModels) {
       btnRefreshModels.addEventListener('click', async () => {
         await fetchModels();
+        await fetchAccounts();
         showToast('AI models refreshed from Antigravity', 'info', 2000);
       });
     }
@@ -2097,7 +2110,7 @@
           }
         }, 500);
       }
-      await Promise.all([fetchStatus(), fetchAccounts(), fetchMetrics()]);
+      await Promise.all([fetchStatus(), fetchAccounts(), fetchMetrics(), fetchModels()]);
     };
 
     if (btnRefresh) {
