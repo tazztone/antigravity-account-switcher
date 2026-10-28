@@ -505,42 +505,42 @@
       let pillClass = '';
       let groupClass = '';
       let actionIcon = '';
-      let actionText = '';
       let actionTitle = '';
       let nextMode = '';
       let nextEnabled = false;
+      let isInPool = false;
 
       if (isPinned) {
         if (catMode === 'solo') {
           pillClass = 'state-active-solo';
           groupClass = 'bucket-active-solo';
           actionIcon = '🔒';
-          actionText = 'Solo';
           actionTitle = 'Solo Mode active (rotation blocked). Click to switch to Pool';
           nextMode = 'pool';
+          isInPool = false;
         } else {
           pillClass = 'state-active-pool';
           groupClass = 'bucket-active-pool';
           actionIcon = '🔄';
-          actionText = 'Pool';
           actionTitle = 'Pool Mode active (auto-rotates). Click to switch to Solo';
           nextMode = 'solo';
+          isInPool = true;
         }
       } else {
         if (isDisabled) {
           pillClass = 'state-excluded';
           groupClass = 'bucket-excluded';
           actionIcon = '🚫';
-          actionText = 'Off';
           actionTitle = 'Excluded from category failover. Click to re-enable';
           nextEnabled = true;
+          isInPool = false;
         } else {
           pillClass = 'state-standby';
           groupClass = 'bucket-standby-pool';
           actionIcon = '✓';
-          actionText = 'Pool';
           actionTitle = 'Standby failover target. Click to exclude from pool';
           nextEnabled = false;
+          isInPool = true;
         }
       }
 
@@ -563,12 +563,11 @@
                   title="${actionTitle}"
                   aria-label="${actionTitle}">
             <span class="action-icon">${actionIcon}</span>
-            <span class="action-text">${actionText}</span>
           </button>
         </div>
       `;
 
-      return { groupClass, pillHtml };
+      return { groupClass, pillHtml, isInPool };
     }
 
     const claudeRouting = getCategoryRouting('claude_gpt', 'Claude/GPT');
@@ -590,7 +589,7 @@
 
     const quotaBodyHtml = `
       <!-- Group 1: Claude & GPT Models (3P) -->
-      <div class="quota-group ${claudeRouting.groupClass}">
+      <div class="quota-group ${claudeRouting.groupClass}" data-category-group="claude_gpt" data-in-pool="${claudeRouting.isInPool ? 'true' : 'false'}">
         <div class="quota-group-header">
           <span class="quota-group-name">Claude & GPT Models</span>
           ${claudeRouting.pillHtml}
@@ -600,7 +599,7 @@
       </div>
 
       <!-- Group 2: Gemini Models -->
-      <div class="quota-group ${geminiRouting.groupClass}">
+      <div class="quota-group ${geminiRouting.groupClass}" data-category-group="gemini" data-in-pool="${geminiRouting.isInPool ? 'true' : 'false'}">
         <div class="quota-group-header">
           <span class="quota-group-name">Gemini Models</span>
           ${geminiRouting.pillHtml}
@@ -610,7 +609,7 @@
       </div>
 
       <!-- Group 3: Gemini 4 Argon -->
-      <div class="quota-group ${argonRouting.groupClass}">
+      <div class="quota-group ${argonRouting.groupClass}" data-category-group="gemini_argon" data-in-pool="${argonRouting.isInPool ? 'true' : 'false'}">
         <div class="quota-group-header">
           <span class="quota-group-name">Gemini 4 Argon</span>
           ${argonRouting.pillHtml}
@@ -1842,6 +1841,30 @@
   // =========================================================================
 
   function initListeners() {
+    // Cross-card Pool Circuit Hover Sync
+    if (accountsGrid) {
+      accountsGrid.addEventListener('mouseover', (e) => {
+        const bucket = e.target.closest('.quota-group[data-in-pool="true"]');
+        if (!bucket) return;
+        const catKey = bucket.dataset.categoryGroup;
+        if (!catKey) return;
+        accountsGrid.querySelectorAll(`.quota-group[data-category-group="${catKey}"][data-in-pool="true"]`).forEach(el => {
+          el.classList.add('pool-circuit-active');
+        });
+      });
+
+      accountsGrid.addEventListener('mouseout', (e) => {
+        const bucket = e.target.closest('.quota-group[data-in-pool="true"]');
+        if (!bucket) return;
+        if (e.relatedTarget && bucket.contains(e.relatedTarget)) return;
+        const catKey = bucket.dataset.categoryGroup;
+        if (!catKey) return;
+        accountsGrid.querySelectorAll(`.quota-group[data-category-group="${catKey}"][data-in-pool="true"]`).forEach(el => {
+          el.classList.remove('pool-circuit-active');
+        });
+      });
+    }
+
     // Model fallback toggle
     if (fallbackToggle) {
       fallbackToggle.addEventListener('change', () => {

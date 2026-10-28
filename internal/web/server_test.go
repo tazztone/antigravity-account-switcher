@@ -77,8 +77,8 @@ func TestServer_StaticFiles(t *testing.T) {
 		t.Errorf("expected javascript content-type, got %s", respJS.Header.Get("Content-Type"))
 	}
 	bodyJS, _ := io.ReadAll(respJS.Body)
-	if !strings.Contains(string(bodyJS), "bucket-active-pool") || !strings.Contains(string(bodyJS), "model-tier-badge") {
-		t.Errorf("expected app.js to contain bucket routing and tier badge logic")
+	if !strings.Contains(string(bodyJS), "bucket-active-pool") || !strings.Contains(string(bodyJS), "bucket-standby-pool") || !strings.Contains(string(bodyJS), "pool-circuit-active") {
+		t.Errorf("expected app.js to contain bucket routing, standby pool, and pool circuit logic")
 	}
 
 	// 3. /dist/style.css
@@ -91,8 +91,8 @@ func TestServer_StaticFiles(t *testing.T) {
 		t.Fatalf("expected 200 OK for /dist/style.css, got %d", respCSS.StatusCode)
 	}
 	bodyCSS, _ := io.ReadAll(respCSS.Body)
-	if !strings.Contains(string(bodyCSS), ".bucket-active-pool") || !strings.Contains(string(bodyCSS), ".model-tier-badge") {
-		t.Errorf("expected style.css to contain bucket routing and tier badge styling")
+	if !strings.Contains(string(bodyCSS), ".bucket-active-pool") || !strings.Contains(string(bodyCSS), ".bucket-standby-pool") || !strings.Contains(string(bodyCSS), ".pool-circuit-active") {
+		t.Errorf("expected style.css to contain bucket routing, standby pool, and pool circuit styling")
 	}
 
 	// 4. SPA fallback
