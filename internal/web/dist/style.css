@@ -1445,52 +1445,144 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Model Fallback Configuration Panel
+   Consolidated Intra-Account Fallback Toolbar
    -------------------------------------------------------------------------- */
-.fallback-config-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: 1.25rem;
+.account-pool-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.config-toggle-row {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 1rem;
-  padding-bottom: 1.25rem;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 0.55rem 0.85rem;
+  margin-bottom: 0.85rem;
+  background: rgba(14, 22, 38, 0.7);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: 0.8rem;
+  flex-wrap: wrap;
 }
 
-.config-label-group {
+.toolbar-fallback-group {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
-.config-label {
+.toolbar-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.toolbar-label {
   font-weight: 600;
-  font-size: 0.95rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.toolbar-select-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.toolbar-select-wrapper::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 4px solid var(--text-muted);
+  pointer-events: none;
+}
+
+.form-select-mini {
+  padding: 0.25rem 1.4rem 0.25rem 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  max-width: 170px;
+  transition: border-color 0.15s ease;
+}
+
+.form-select-mini:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.form-select-mini option {
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+}
+
+.toolbar-arrow {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  user-select: none;
+}
+
+.switch-control-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: 0.35rem;
   cursor: pointer;
 }
 
-.config-subtext {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  max-width: 620px;
-  line-height: 1.4;
+.switch-control-mini .toggle-track {
+  width: 32px;
+  height: 18px;
 }
 
-.switch-control {
+.switch-control-mini .toggle-track::before {
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+}
+
+.switch-control-mini .toggle-checkbox:checked + .toggle-track::before {
+  transform: translateX(14px);
+}
+
+.switch-control-mini .toggle-label-text {
+  font-size: 0.75rem;
+  min-width: 45px;
+}
+
+.toolbar-meta-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-icon-subtle {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  padding: 0.2rem 0.35rem;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
-  flex-shrink: 0;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.btn-icon-subtle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .toggle-checkbox {
@@ -1547,103 +1639,6 @@ body {
 
 .toggle-label-text.is-enabled {
   color: var(--color-success);
-}
-
-.config-selectors-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 1.25rem;
-}
-
-.config-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.field-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 600;
-  font-size: 0.85rem;
-  color: var(--text-primary);
-}
-
-.field-badge {
-  font-size: 0.68rem;
-  padding: 0.15rem 0.45rem;
-  border-radius: var(--radius-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-weight: 600;
-}
-
-.badge-primary {
-  background: var(--accent-subtle);
-  color: var(--accent-light);
-  border: 1px solid var(--accent-border);
-}
-
-.select-wrapper {
-  position: relative;
-  width: 100%;
-}
-
-.select-wrapper::after {
-  content: "";
-  position: absolute;
-  right: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 5px solid var(--text-muted);
-  pointer-events: none;
-}
-
-.form-select {
-  width: 100%;
-  padding: 0.65rem 2.2rem 0.65rem 0.85rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 0.88rem;
-  appearance: none;
-  -webkit-appearance: none;
-  cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.form-select:focus {
-  outline: none;
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
-}
-
-.form-select option {
-  background: var(--bg-surface-elevated);
-  color: var(--text-primary);
-  padding: 0.5rem;
-}
-
-.field-hint {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  line-height: 1.35;
-}
-
-.config-actions-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border-subtle);
 }
 
 .config-status-msg {
@@ -1881,75 +1876,32 @@ body.privacy-mode .blurred-email {
   margin-top: 0.2rem;
 }
 
-/* Grouped Model Eligibility & Fallbacks Drawer */
-.model-rules-drawer {
-  margin: 0.6rem 0;
-  font-size: 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.15);
-  overflow: hidden;
+/* --------------------------------------------------------------------------
+   Bucket-Embedded Model Rules
+   -------------------------------------------------------------------------- */
+.bucket-models-section {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
 }
 
-.model-rules-drawer summary {
-  cursor: pointer;
-  padding: 0.45rem 0.6rem;
-  font-weight: 500;
-  color: #9ca3af;
-  user-select: none;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid transparent;
-  transition: color 0.15s ease;
-}
-
-.model-rules-drawer summary:hover {
-  color: #e5e7eb;
-}
-
-.model-rules-drawer[open] summary {
-  border-bottom-color: rgba(255, 255, 255, 0.06);
-  color: #e5e7eb;
-}
-
-.model-rules-container {
-  max-height: 250px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 0.4rem;
-}
-
-.model-rules-container::-webkit-scrollbar {
-  width: 5px;
-}
-.model-rules-container::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
-}
-.model-rules-container::-webkit-scrollbar-thumb {
-  background: #374151;
-  border-radius: 3px;
-}
-
-.model-group-section {
-  margin-bottom: 0.6rem;
-}
-.model-group-section:last-child {
-  margin-bottom: 0;
-}
-
-.model-group-header {
+.bucket-models-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.25rem 0.4rem;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: #9ca3af;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.35rem;
+  padding: 0 0.15rem;
 }
 
-.model-group-actions {
+.bucket-models-title {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bucket-models-actions {
   display: flex;
   gap: 0.25rem;
 }
@@ -1970,18 +1922,24 @@ body.privacy-mode .blurred-email {
   color: #fff;
 }
 
+.bucket-models-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
 .model-rule-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.2rem 0.4rem;
+  gap: 0.4rem;
+  padding: 0.2rem 0.3rem;
   border-radius: 3px;
   transition: opacity 0.15s ease, background 0.15s ease;
 }
 
 .model-rule-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .model-rule-row.model-rule-disabled {
@@ -1999,6 +1957,7 @@ body.privacy-mode .blurred-email {
   cursor: pointer;
   flex: 1;
   min-width: 0;
+  color: var(--text-primary);
 }
 
 .model-rule-name input[type="checkbox"] {
@@ -2014,7 +1973,7 @@ body.privacy-mode .blurred-email {
 .model-tier-badges {
   display: inline-flex;
   gap: 0.2rem;
-  margin: 0 0.35rem;
+  margin: 0 0.2rem;
   align-items: center;
   flex-shrink: 0;
 }
@@ -2023,7 +1982,7 @@ body.privacy-mode .blurred-email {
   font-size: 0.6rem;
   font-family: inherit;
   font-weight: 600;
-  padding: 0.08rem 0.3rem;
+  padding: 0.06rem 0.28rem;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.05);
   color: var(--color-text-muted);
@@ -2050,12 +2009,55 @@ body.privacy-mode .blurred-email {
 }
 
 .model-rule-fallback {
-  max-width: 44%;
-  font-size: 0.68rem;
-  background: #111827;
-  color: #d1d5db;
+  max-width: 90px;
+  font-size: 0.65rem;
+  background: #0f172a;
+  color: #94a3b8;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 3px;
-  padding: 0.15rem 0.3rem;
+  padding: 0.12rem 0.3rem;
   flex-shrink: 0;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.model-rule-fallback:hover,
+.model-rule-fallback:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #e2e8f0;
+}
+
+.model-rule-fallback option {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+/* Collapsible Internal / Tab-completion endpoints */
+.internal-models-drawer {
+  margin-top: 0.35rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.05);
+  padding-top: 0.25rem;
+}
+
+.internal-models-summary {
+  font-size: 0.67rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  transition: color 0.15s ease;
+}
+
+.internal-models-summary:hover {
+  color: var(--text-secondary);
+}
+
+.internal-models-rows {
+  margin-top: 0.2rem;
+  padding-left: 0.4rem;
+  border-left: 2px solid rgba(255, 255, 255, 0.05);
 }
