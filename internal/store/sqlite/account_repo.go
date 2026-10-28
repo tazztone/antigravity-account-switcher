@@ -40,6 +40,26 @@ const bucketCategoryPredicate = `
 	)
 `
 
+// argonEntitlementPredicate requires accounts matching category "gemini_argon"
+// to have Argon entitlement, evidenced by either an Argon quota bucket or an
+// enabled Argon model rule. For any other category, the condition is a no-op.
+const argonEntitlementPredicate = `
+	AND (
+		? != 'gemini_argon'
+		OR EXISTS (
+			SELECT 1 FROM quota_buckets qb
+			WHERE qb.account_id = a.id
+			  AND (LOWER(qb.bucket_id) LIKE '%argon%' OR LOWER(qb.display_name) LIKE '%argon%')
+		)
+		OR EXISTS (
+			SELECT 1 FROM account_model_rules mr
+			WHERE mr.account_id = a.id
+			  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%')
+			  AND mr.enabled = 1
+		)
+	)
+`
+
 // NewAccountRepository creates a new SQLite AccountRepository.
 func NewAccountRepository(db *DB) *AccountRepository {
 	return &AccountRepository{db: db}
@@ -316,9 +336,9 @@ func (r *AccountRepository) GetNextAvailable(ctx context.Context, excludeID stri
 
 // GetActiveForCategory retrieves the active account designated for a specific model category.
 // If the pinned account's bucket for that category is exhausted (and not yet past
-// its reset time), the pin is advanced to the next eligible account so traffic
-// does not keep hitting a known-dead account; when no candidate exists the dead
-// pin is returned unchanged, preserving pre-fix behavior.
+// its reset time), or if the account is ineligible/unentitled for that category,
+// the pin is advanced to the next eligible account so traffic does not keep hitting
+// an unusable account; when no candidate exists the current pin is returned unchanged.
 func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category domain.ModelCategory) (*domain.Account, error) {
 	catStr := category.String()
 	if catStr == "unknown" || catStr == "" {
@@ -348,6 +368,17 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 			}
 			return acc, nil
 		}
+		if category == domain.CategoryGeminiArgon {
+			entitled, eErr := r.hasArgonEntitlement(ctx, acc.ID)
+			if eErr == nil && !entitled {
+				next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
+				if nErr == nil && next != nil {
+					_ = r.SetActiveForCategory(ctx, category, next.ID)
+					return next, nil
+				}
+				return nil, domain.ErrNoActiveAccount
+			}
+		}
 		dead, dErr := r.hasExhaustedBucketForCategory(ctx, acc.ID, catStr)
 		if dErr != nil || !dead {
 			return acc, nil
@@ -363,13 +394,23 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	}
 
 	if errors.Is(err, domain.ErrAccountNotFound) {
-		globalActive, gErr := r.GetActive(ctx)
-		if gErr == nil && globalActive != nil {
+		cand, cErr := r.GetNextAvailableForCategory(ctx, category, "")
+		if cErr == nil && cand != nil {
 			_, _ = r.db.ExecContext(ctx, `
 				INSERT OR IGNORE INTO active_category_accounts (category, account_id)
 				VALUES (?, ?)
-			`, catStr, globalActive.ID)
-			return globalActive, nil
+			`, catStr, cand.ID)
+			return cand, nil
+		}
+		if category != domain.CategoryGeminiArgon {
+			globalActive, gErr := r.GetActive(ctx)
+			if gErr == nil && globalActive != nil {
+				_, _ = r.db.ExecContext(ctx, `
+					INSERT OR IGNORE INTO active_category_accounts (category, account_id)
+					VALUES (?, ?)
+				`, catStr, globalActive.ID)
+				return globalActive, nil
+			}
 		}
 		return nil, domain.ErrNoActiveAccount
 	}
@@ -479,10 +520,11 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 			    AND qb.reset_time > ?
 	` + bucketCategoryPredicate + `
 		  )
+	` + argonEntitlementPredicate + `
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr)
+	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
 		return nil, domain.ErrNoAvailableAccount
@@ -761,6 +803,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 			    AND qb.reset_time > ?
 	` + bucketCategoryPredicate + `
 		  )
+	` + argonEntitlementPredicate + `
 		  AND (
 			NOT EXISTS (SELECT 1 FROM account_model_rules mr WHERE mr.account_id = a.id)
 			OR EXISTS (
@@ -771,13 +814,38 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	args := []any{excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, modelID}
+	args := []any{excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr, modelID}
 	row := r.db.QueryRowContext(ctx, query, args...)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
 		return nil, domain.ErrNoAvailableAccount
 	}
 	return acc, err
+}
+
+// hasArgonEntitlement reports whether the account has Argon entitlement, evidenced
+// by either an Argon quota bucket or an enabled Argon model rule.
+func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+	query := `
+		SELECT 1 FROM quota_buckets qb
+		WHERE qb.account_id = ?
+		  AND (LOWER(qb.bucket_id) LIKE '%argon%' OR LOWER(qb.display_name) LIKE '%argon%')
+		UNION
+		SELECT 1 FROM account_model_rules mr
+		WHERE mr.account_id = ?
+		  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%')
+		  AND mr.enabled = 1
+		LIMIT 1
+	`
+	var exists int
+	err := r.db.QueryRowContext(ctx, query, accountID, accountID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // IsAccountAvailableForCategory reports whether one specific account may serve
@@ -805,6 +873,16 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 	}
 	if acc.IsCategoryDisabled(category) {
 		return false, nil
+	}
+
+	if category == domain.CategoryGeminiArgon {
+		entitled, err := r.hasArgonEntitlement(ctx, accountID)
+		if err != nil {
+			return false, err
+		}
+		if !entitled {
+			return false, nil
+		}
 	}
 
 	dead, err := r.hasExhaustedBucketForCategory(ctx, accountID, catStr)

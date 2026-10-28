@@ -296,6 +296,11 @@ func TestGeminiArgonExhaustion_DoesNotLockOutRegularGemini(t *testing.T) {
 func TestExhaustionOnArgon_MarksOnlyArgonExhausted(t *testing.T) {
 	f := newTwoAccountPool(t, nil)
 
+	// Seed Argon on trial so it has entitlement to receive the rotated argon category pin.
+	f.seedModels(t, "acc-trial",
+		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon"},
+	)
+
 	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
 		t.Fatalf("pin argon to paid: %v", err)
 	}
@@ -472,5 +477,22 @@ func TestFailover_ArgonExhaustionIsolatesRegularGemini(t *testing.T) {
 	}
 	if available {
 		t.Error("acc-paid must be unavailable for argon after argon exhaustion")
+	}
+}
+
+func TestArgonPreFlight_BlocksUnentitledAccount(t *testing.T) {
+	// Account pool with only an unentitled trial account that has no Argon model and no Argon bucket.
+	f := newEligibilityFixture(t, []*domain.Account{
+		{ID: "acc-trial", Email: "trial@example.com", AccessToken: "trial-token", IsActive: true},
+	}, nil)
+	f.seedModels(t, "acc-trial",
+		&domain.ModelInfo{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini"},
+	)
+
+	// An incoming Argon request with no Bearer header from client should receive 503 rather
+	// than being sent upstream with trial-token.
+	rec := f.requestModel(t, "gemini-4-argon-medium")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 Service Unavailable when no account has Argon entitlement, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

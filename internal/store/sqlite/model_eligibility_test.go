@@ -434,3 +434,71 @@ func TestIsAccountAvailableForCategory(t *testing.T) {
 	assertAvailable(domain.CategoryGemini, false)
 	assertAvailable(domain.CategoryUnknown, false)
 }
+
+func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
+	ctx, db, repo := newEligibilityTestRepo(t)
+
+	// acc-unentitled has active status but no quota buckets and no model rules.
+	createEligibilityAccount(t, repo, ctx, "acc-unentitled", "free@example.com", true)
+
+	// Available for standard categories, but NOT for gemini_argon.
+	available, err := repo.IsAccountAvailableForCategory(ctx, "acc-unentitled", domain.CategoryGemini)
+	if err != nil || !available {
+		t.Fatalf("expected available for regular gemini, got %v err=%v", available, err)
+	}
+	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-unentitled", domain.CategoryClaudeGPT)
+	if err != nil || !available {
+		t.Fatalf("expected available for claude_gpt, got %v err=%v", available, err)
+	}
+	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-unentitled", domain.CategoryGeminiArgon)
+	if err != nil || available {
+		t.Fatalf("expected unavailable for gemini_argon without entitlement, got %v err=%v", available, err)
+	}
+
+	// GetNextAvailableForCategory / Model must exclude acc-unentitled.
+	next, err := repo.GetNextAvailableForCategory(ctx, domain.CategoryGeminiArgon, "")
+	if !errors.Is(err, domain.ErrNoAvailableAccount) {
+		t.Fatalf("expected ErrNoAvailableAccount for unentitled pool, got %+v err=%v", next, err)
+	}
+	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGeminiArgon, "gemini-4-argon-high", "")
+	if !errors.Is(err, domain.ErrNoAvailableAccount) {
+		t.Fatalf("expected ErrNoAvailableAccount for model on unentitled pool, got %+v err=%v", next, err)
+	}
+
+	// Add acc-entitled with an Argon quota bucket.
+	createEligibilityAccount(t, repo, ctx, "acc-entitled", "pro@example.com", false)
+	reset := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
+		VALUES ('acc-entitled', 'argon-weekly', 'Gemini 4 Argon Weekly Limit', 'weekly', 0.8, ?, ?)
+	`, reset, reset); err != nil {
+		t.Fatalf("seed argon bucket: %v", err)
+	}
+
+	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-entitled", domain.CategoryGeminiArgon)
+	if err != nil || !available {
+		t.Fatalf("expected acc-entitled available for gemini_argon, got %v err=%v", available, err)
+	}
+
+	next, err = repo.GetNextAvailableForCategory(ctx, domain.CategoryGeminiArgon, "")
+	if err != nil || next == nil || next.ID != "acc-entitled" {
+		t.Fatalf("expected acc-entitled selected for gemini_argon, got %+v err=%v", next, err)
+	}
+	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGeminiArgon, "gemini-4-argon-high", "")
+	if err != nil || next == nil || next.ID != "acc-entitled" {
+		t.Fatalf("expected acc-entitled selected for argon model, got %+v err=%v", next, err)
+	}
+
+	// Add acc-rules with an enabled Argon model rule (no bucket yet).
+	createEligibilityAccount(t, repo, ctx, "acc-rules", "rules@example.com", false)
+	if err := repo.UpsertAccountModels(ctx, "acc-rules", []*domain.ModelInfo{
+		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini_argon"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels: %v", err)
+	}
+
+	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-rules", domain.CategoryGeminiArgon)
+	if err != nil || !available {
+		t.Fatalf("expected acc-rules available for gemini_argon via model rule, got %v err=%v", available, err)
+	}
+}

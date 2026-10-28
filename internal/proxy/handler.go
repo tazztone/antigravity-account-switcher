@@ -585,7 +585,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			acc, accErr = h.accountRepo.GetActiveForCategory(ctx, origCategory)
 		}
 		if accErr != nil || acc == nil {
-			acc, accErr = h.accountRepo.GetActive(ctx)
+			if origCategory != CategoryGeminiArgon {
+				acc, accErr = h.accountRepo.GetActive(ctx)
+			}
 		}
 		if accErr != nil || acc == nil {
 			var nextAcc *domain.Account
@@ -593,7 +595,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if origCategory != CategoryUnknown {
 				nextAcc, nextErr = h.accountRepo.GetNextAvailableForCategory(ctx, origCategory, "")
 			}
-			if nextErr != nil || nextAcc == nil {
+			if (nextErr != nil || nextAcc == nil) && origCategory != CategoryGeminiArgon {
 				nextAcc, nextErr = h.accountRepo.GetNextAvailable(ctx, "")
 			}
 			if nextErr == nil && nextAcc != nil {
