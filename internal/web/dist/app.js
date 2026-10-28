@@ -405,6 +405,101 @@
       const card = createAccountCard(acc);
       accountsGrid.appendChild(card);
     });
+
+    requestAnimationFrame(() => drawPoolCircuits());
+  }
+
+  function drawPoolCircuits() {
+    if (!accountsGrid || rawAccountsData.length < 2) {
+      const existing = document.getElementById('pool-circuit-canvas');
+      if (existing) existing.remove();
+      return;
+    }
+
+    let svg = document.getElementById('pool-circuit-canvas');
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = 'pool-circuit-canvas';
+      svg.setAttribute('class', 'pool-circuit-canvas');
+      accountsGrid.appendChild(svg);
+    }
+    svg.innerHTML = '';
+
+    const gridRect = accountsGrid.getBoundingClientRect();
+    if (gridRect.width === 0 || gridRect.height === 0) return;
+
+    svg.setAttribute('viewBox', `0 0 ${gridRect.width} ${gridRect.height}`);
+
+    const categories = ['claude_gpt', 'gemini', 'gemini_argon'];
+
+    categories.forEach(catKey => {
+      const activeEl = accountsGrid.querySelector(`.quota-group.bucket-active-pool[data-category-group="${catKey}"]`);
+      const standbyEls = Array.from(accountsGrid.querySelectorAll(`.quota-group.bucket-standby-pool[data-category-group="${catKey}"]`));
+
+      if (!activeEl || standbyEls.length === 0) return;
+
+      const sequence = [activeEl, ...standbyEls];
+
+      for (let i = 0; i < sequence.length - 1; i++) {
+        const fromEl = sequence[i];
+        const toEl = sequence[i + 1];
+
+        const r1 = fromEl.getBoundingClientRect();
+        const r2 = toEl.getBoundingClientRect();
+
+        let x1, y1, x2, y2;
+
+        if (r1.left < r2.left) {
+          x1 = r1.right - gridRect.left;
+          y1 = (r1.top + r1.bottom) / 2 - gridRect.top;
+          x2 = r2.left - gridRect.left;
+          y2 = (r2.top + r2.bottom) / 2 - gridRect.top;
+        } else if (r1.left > r2.left) {
+          x1 = r1.left - gridRect.left;
+          y1 = (r1.top + r1.bottom) / 2 - gridRect.top;
+          x2 = r2.right - gridRect.left;
+          y2 = (r2.top + r2.bottom) / 2 - gridRect.top;
+        } else {
+          x1 = (r1.left + r1.right) / 2 - gridRect.left;
+          y1 = r1.bottom - gridRect.top;
+          x2 = (r2.left + r2.right) / 2 - gridRect.left;
+          y2 = r2.top - gridRect.top;
+        }
+
+        const dx = Math.abs(x2 - x1) * 0.5;
+        let d = '';
+
+        if (Math.abs(r1.left - r2.left) < 10) {
+          d = `M ${x1} ${y1} C ${x1} ${y1 + 15}, ${x2} ${y2 - 15}, ${x2} ${y2}`;
+        } else {
+          const cx1 = x1 + (x2 > x1 ? dx : -dx);
+          const cx2 = x2 - (x2 > x1 ? dx : -dx);
+          d = `M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`;
+        }
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('class', 'circuit-path');
+        path.setAttribute('data-category', catKey);
+        path.setAttribute('d', d);
+        svg.appendChild(path);
+
+        const dot1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot1.setAttribute('class', 'circuit-dot origin-dot');
+        dot1.setAttribute('data-category', catKey);
+        dot1.setAttribute('cx', x1);
+        dot1.setAttribute('cy', y1);
+        dot1.setAttribute('r', '2.5');
+        svg.appendChild(dot1);
+
+        const dot2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot2.setAttribute('class', 'circuit-dot target-dot');
+        dot2.setAttribute('data-category', catKey);
+        dot2.setAttribute('cx', x2);
+        dot2.setAttribute('cy', y2);
+        dot2.setAttribute('r', '2.5');
+        svg.appendChild(dot2);
+      }
+    });
   }
 
   function createAccountCard(acc) {
@@ -883,6 +978,7 @@
     if (drawer) {
       drawer.addEventListener('toggle', () => {
         if (drawer.open) openRuleDrawers.add(acc.id); else openRuleDrawers.delete(acc.id);
+        requestAnimationFrame(() => drawPoolCircuits());
       });
 
       drawer.querySelectorAll('.model-rule-row').forEach(row => {
@@ -1851,6 +1947,12 @@
         accountsGrid.querySelectorAll(`.quota-group[data-category-group="${catKey}"][data-in-pool="true"]`).forEach(el => {
           el.classList.add('pool-circuit-active');
         });
+        const svg = document.getElementById('pool-circuit-canvas');
+        if (svg) {
+          svg.querySelectorAll(`.circuit-path[data-category="${catKey}"], .circuit-dot[data-category="${catKey}"]`).forEach(el => {
+            el.classList.add('active');
+          });
+        }
       });
 
       accountsGrid.addEventListener('mouseout', (e) => {
@@ -1862,8 +1964,18 @@
         accountsGrid.querySelectorAll(`.quota-group[data-category-group="${catKey}"][data-in-pool="true"]`).forEach(el => {
           el.classList.remove('pool-circuit-active');
         });
+        const svg = document.getElementById('pool-circuit-canvas');
+        if (svg) {
+          svg.querySelectorAll(`.circuit-path[data-category="${catKey}"], .circuit-dot[data-category="${catKey}"]`).forEach(el => {
+            el.classList.remove('active');
+          });
+        }
       });
     }
+
+    window.addEventListener('resize', () => {
+      requestAnimationFrame(() => drawPoolCircuits());
+    });
 
     // Model fallback toggle
     if (fallbackToggle) {
