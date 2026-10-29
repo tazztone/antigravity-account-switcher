@@ -655,7 +655,7 @@ func (r *AccountRepository) UpsertAccountModels(ctx context.Context, accountID s
 // ListAccountModelRules returns per-model eligibility rules for an account.
 func (r *AccountRepository) ListAccountModelRules(ctx context.Context, accountID string) ([]*domain.AccountModelRule, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at
+		SELECT account_id, model_id, display_name, category, enabled, updated_at
 		FROM account_model_rules
 		WHERE account_id = ?
 		ORDER BY model_id ASC
@@ -670,7 +670,7 @@ func (r *AccountRepository) ListAccountModelRules(ctx context.Context, accountID
 		var rule domain.AccountModelRule
 		var enabledInt int
 		var updatedStr string
-		if err := rows.Scan(&rule.AccountID, &rule.ModelID, &rule.DisplayName, &rule.Category, &enabledInt, &rule.FallbackAccountID, &updatedStr); err != nil {
+		if err := rows.Scan(&rule.AccountID, &rule.ModelID, &rule.DisplayName, &rule.Category, &enabledInt, &updatedStr); err != nil {
 			return nil, fmt.Errorf("failed to scan account model rule: %w", err)
 		}
 		rule.Enabled = enabledInt == 1
@@ -683,7 +683,7 @@ func (r *AccountRepository) ListAccountModelRules(ctx context.Context, accountID
 	return result, nil
 }
 
-// UpdateAccountModelRule upserts the enabled flag and fallback target for one
+// UpdateAccountModelRule upserts the enabled flag for one
 // model on an account. Missing rows are inserted with the provided values.
 func (r *AccountRepository) UpdateAccountModelRule(ctx context.Context, rule *domain.AccountModelRule) error {
 	if rule == nil || rule.AccountID == "" || rule.ModelID == "" {
@@ -711,13 +711,12 @@ func (r *AccountRepository) UpdateAccountModelRule(ctx context.Context, rule *do
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account_id, model_id) DO UPDATE SET
 			enabled = excluded.enabled,
-			fallback_account_id = excluded.fallback_account_id,
 			updated_at = excluded.updated_at
-	`, rule.AccountID, rule.ModelID, rule.DisplayName, rule.Category, enabledInt, rule.FallbackAccountID, nowStr)
+	`, rule.AccountID, rule.ModelID, rule.DisplayName, rule.Category, enabledInt, nowStr)
 	if err != nil {
 		return fmt.Errorf("failed to update model rule %s: %w", rule.ModelID, err)
 	}
@@ -725,40 +724,37 @@ func (r *AccountRepository) UpdateAccountModelRule(ctx context.Context, rule *do
 	return tx.Commit()
 }
 
-// IsAccountEligibleForModel reports whether an account may serve a model, plus
-// its configured fallback target. Fail-open: an account with no model rules at
-// all is eligible for everything; once rules exist, the model must be present
-// with enabled = 1. The lookup runs as a single statement because it sits on the
-// per-request proxy dispatch path.
-func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, string, error) {
+// IsAccountEligibleForModel reports whether an account may serve a model.
+// Fail-open: an account with no model rules at all is eligible for everything;
+// once rules exist, the model must be present with enabled = 1.
+// The lookup runs as a single statement because it sits on the per-request proxy dispatch path.
+func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, error) {
 	if accountID == "" {
-		return false, domain.FallbackAccountAuto, domain.ErrAccountNotFound
+		return false, domain.ErrAccountNotFound
 	}
 	if modelID == "" || domain.IsInternalOrPreviewModel(modelID) {
-		return true, domain.FallbackAccountAuto, nil
+		return true, nil
 	}
 
 	query := `
 		SELECT
 			(SELECT COUNT(*) FROM account_model_rules WHERE account_id = ?),
-			COALESCE((SELECT enabled FROM account_model_rules WHERE account_id = ? AND model_id = ?), -1),
-			COALESCE((SELECT fallback_account_id FROM account_model_rules WHERE account_id = ? AND model_id = ?), '')
+			COALESCE((SELECT enabled FROM account_model_rules WHERE account_id = ? AND model_id = ?), -1)
 	`
 	var ruleCount, enabledInt int
-	var fallbackID string
-	if err := r.db.QueryRowContext(ctx, query, accountID, accountID, modelID, accountID, modelID).
-		Scan(&ruleCount, &enabledInt, &fallbackID); err != nil {
-		return false, domain.FallbackAccountAuto, fmt.Errorf("failed to query model rule: %w", err)
+	if err := r.db.QueryRowContext(ctx, query, accountID, accountID, modelID).
+		Scan(&ruleCount, &enabledInt); err != nil {
+		return false, fmt.Errorf("failed to query model rule: %w", err)
 	}
 
 	if ruleCount == 0 {
-		return true, domain.FallbackAccountAuto, nil
+		return true, nil
 	}
 	if enabledInt < 0 {
 		// Catalog populated but this model was never discovered on this account.
-		return false, domain.FallbackAccountAuto, nil
+		return false, nil
 	}
-	return enabledInt == 1, fallbackID, nil
+	return enabledInt == 1, nil
 }
 
 // GetNextAvailableForModel selects the next account eligible for a specific model:
@@ -776,7 +772,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		return next, err
 	}
 
-	eligible, _, err := r.IsAccountEligibleForModel(ctx, next.ID, modelID)
+	eligible, err := r.IsAccountEligibleForModel(ctx, next.ID, modelID)
 	if err != nil {
 		return nil, err
 	}

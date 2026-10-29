@@ -147,9 +147,9 @@ type AccountRepository interface {
 	// UpdateAccountModelRule upserts the enabled flag and fallback target for one model on an account.
 	UpdateAccountModelRule(ctx context.Context, rule *AccountModelRule) error
 
-	// IsAccountEligibleForModel reports whether an account may serve a model, and its
-	// configured fallback target. Accounts without any model rules are eligible for all models.
-	IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (eligible bool, fallbackAccountID string, err error)
+	// IsAccountEligibleForModel reports whether an account may serve a model.
+	// Accounts without any model rules are eligible for all models.
+	IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (eligible bool, err error)
 
 	// GetNextAvailableForModel selects the next account eligible for a specific model,
 	// excluding excludeID and accounts where the model is disabled or category quota is exhausted.

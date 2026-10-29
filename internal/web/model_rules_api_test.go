@@ -53,11 +53,8 @@ func TestServer_API_ModelRulesAndCategorySelect(t *testing.T) {
 	}
 
 	// Rule update.
-	if r := do(http.MethodPut, "/api/accounts/acc-1/models", `{"model_id":"gemini-4-argon-high","enabled":false,"fallback_account_id":"none"}`); r.StatusCode != 200 {
+	if r := do(http.MethodPut, "/api/accounts/acc-1/models", `{"model_id":"gemini-4-argon-high","enabled":false}`); r.StatusCode != 200 {
 		t.Fatalf("put rule: %d", r.StatusCode)
-	}
-	if r := do(http.MethodPut, "/api/accounts/acc-1/models", `{"model_id":"m","fallback_account_id":"nope"}`); r.StatusCode != 400 {
-		t.Fatalf("expected 400 for unknown fallback, got %d", r.StatusCode)
 	}
 	if r := do(http.MethodPut, "/api/accounts/ghost/models", `{"model_id":"m"}`); r.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", r.StatusCode)
@@ -70,7 +67,7 @@ func TestServer_API_ModelRulesAndCategorySelect(t *testing.T) {
 	for _, a := range list {
 		switch a.ID {
 		case "acc-1":
-			if len(a.ModelRules) != 1 || a.ModelRules[0].Enabled || a.ModelRules[0].FallbackAccountID != "none" || a.ModelRules[0].Category != "gemini_argon" {
+			if len(a.ModelRules) != 1 || a.ModelRules[0].Enabled || a.ModelRules[0].Category != "gemini_argon" {
 				t.Fatalf("unexpected rules: %+v", a.ModelRules)
 			}
 		case "acc-2":

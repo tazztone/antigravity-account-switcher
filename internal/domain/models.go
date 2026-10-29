@@ -36,21 +36,12 @@ func IsInternalOrPreviewModel(modelID string) bool {
 	return false
 }
 
-// FallbackAccountID sentinel values for AccountModelRule.
-const (
-	// FallbackAccountAuto lets the proxy pick the next eligible account in the pool.
-	FallbackAccountAuto = ""
-	// FallbackAccountNone blocks account rotation for an unsupported model and surfaces the upstream error.
-	FallbackAccountNone = "none"
-)
-
-// AccountModelRule captures per-account model eligibility and fallback routing.
+// AccountModelRule captures per-account model eligibility.
 type AccountModelRule struct {
-	AccountID         string    `json:"account_id"`
-	ModelID           string    `json:"model_id"`
-	DisplayName       string    `json:"display_name"`
-	Category          string    `json:"category"`
-	Enabled           bool      `json:"enabled"`
-	FallbackAccountID string    `json:"fallback_account_id"` // "" = auto eligible pool, "none" = block rotation, "<acc_id>" = specific account
-	UpdatedAt         time.Time `json:"updated_at"`
+	AccountID   string    `json:"account_id"`
+	ModelID     string    `json:"model_id"`
+	DisplayName string    `json:"display_name"`
+	Category    string    `json:"category"`
+	Enabled     bool      `json:"enabled"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

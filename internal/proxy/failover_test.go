@@ -243,8 +243,8 @@ func (m *mockAccountRepo) UpdateAccountModelRule(ctx context.Context, rule *doma
 	return nil
 }
 
-func (m *mockAccountRepo) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, string, error) {
-	return true, domain.FallbackAccountAuto, nil
+func (m *mockAccountRepo) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, error) {
+	return true, nil
 }
 
 func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {

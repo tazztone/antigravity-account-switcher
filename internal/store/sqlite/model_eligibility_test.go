@@ -82,12 +82,11 @@ func TestUpsertAccountModels_PreservesUserOverrides(t *testing.T) {
 
 	// User disables opus and pins a fallback target
 	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
-		AccountID:         "acc-paid",
-		ModelID:           "claude-opus-5-5",
-		DisplayName:       "Claude Opus 5.5",
-		Category:          "claude_gpt",
-		Enabled:           false,
-		FallbackAccountID: domain.FallbackAccountNone,
+		AccountID:   "acc-paid",
+		ModelID:     "claude-opus-5-5",
+		DisplayName: "Claude Opus 5.5",
+		Category:    "claude_gpt",
+		Enabled:     false,
 	}); err != nil {
 		t.Fatalf("UpdateAccountModelRule: %v", err)
 	}
@@ -114,7 +113,7 @@ func TestUpsertAccountModels_PreservesUserOverrides(t *testing.T) {
 		byModel[r.ModelID] = r
 	}
 	opus := byModel["claude-opus-5-5"]
-	if opus == nil || opus.Enabled || opus.FallbackAccountID != domain.FallbackAccountNone {
+	if opus == nil || opus.Enabled {
 		t.Errorf("opus override lost: %+v", opus)
 	}
 	if opus != nil && opus.DisplayName != "Claude Opus 5.5 (renamed)" {
@@ -130,12 +129,12 @@ func TestIsAccountEligibleForModel_FailOpenWithoutRules(t *testing.T) {
 	ctx, _, repo := newEligibilityTestRepo(t)
 	createEligibilityAccount(t, repo, ctx, "acc-1", "one@example.com", true)
 
-	eligible, fallback, err := repo.IsAccountEligibleForModel(ctx, "acc-1", "claude-opus-5-5")
+	eligible, err := repo.IsAccountEligibleForModel(ctx, "acc-1", "claude-opus-5-5")
 	if err != nil {
 		t.Fatalf("IsAccountEligibleForModel: %v", err)
 	}
-	if !eligible || fallback != domain.FallbackAccountAuto {
-		t.Errorf("expected fail-open eligibility, got eligible=%v fallback=%q", eligible, fallback)
+	if !eligible {
+		t.Errorf("expected fail-open eligibility, got eligible=%v", eligible)
 	}
 }
 
@@ -150,7 +149,7 @@ func TestIsAccountEligibleForModel_DiscoveredModelMissing(t *testing.T) {
 		t.Fatalf("UpsertAccountModels: %v", err)
 	}
 
-	eligible, _, err := repo.IsAccountEligibleForModel(ctx, "acc-1", "claude-opus-5-5")
+	eligible, err := repo.IsAccountEligibleForModel(ctx, "acc-1", "claude-opus-5-5")
 	if err != nil {
 		t.Fatalf("IsAccountEligibleForModel: %v", err)
 	}
@@ -158,7 +157,7 @@ func TestIsAccountEligibleForModel_DiscoveredModelMissing(t *testing.T) {
 		t.Error("expected ineligible for model absent from populated catalog")
 	}
 
-	eligible, _, err = repo.IsAccountEligibleForModel(ctx, "acc-1", "gemini-2.5-pro")
+	eligible, err = repo.IsAccountEligibleForModel(ctx, "acc-1", "gemini-2.5-pro")
 	if err != nil {
 		t.Fatalf("IsAccountEligibleForModel: %v", err)
 	}
@@ -517,14 +516,13 @@ func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
 
 	// Internal/tab/preview models are always eligible, even when disabled in DB rules
 	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
-		AccountID:         "acc-pro",
-		ModelID:           "tab_flash_lite_preview",
-		Enabled:           false,
-		FallbackAccountID: domain.FallbackAccountAuto,
+		AccountID: "acc-pro",
+		ModelID:   "tab_flash_lite_preview",
+		Enabled:   false,
 	}); err != nil {
 		t.Fatalf("UpdateAccountModelRule: %v", err)
 	}
-	isEligible, _, err := repo.IsAccountEligibleForModel(ctx, "acc-pro", "tab_flash_lite_preview")
+	isEligible, err := repo.IsAccountEligibleForModel(ctx, "acc-pro", "tab_flash_lite_preview")
 	if err != nil || !isEligible {
 		t.Fatalf("expected internal model tab_flash_lite_preview to always be eligible, got eligible=%v, err=%v", isEligible, err)
 	}

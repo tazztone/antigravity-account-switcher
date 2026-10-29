@@ -83,13 +83,6 @@ func (f *eligibilityFixture) seedModels(t *testing.T, accountID string, models .
 	}
 }
 
-func (f *eligibilityFixture) setUpdatedAt(t *testing.T, accountID, rfc3339 string) {
-	t.Helper()
-	if _, err := f.db.ExecContext(f.ctx, "UPDATE accounts SET updated_at = ? WHERE id = ?", rfc3339, accountID); err != nil {
-		t.Fatalf("set updated_at for %s: %v", accountID, err)
-	}
-}
-
 // requestModel performs a Cloud Code generateContent call and returns the recorder.
 func (f *eligibilityFixture) requestModel(t *testing.T, model string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -181,79 +174,6 @@ func TestPreFlightEligibility_EligibleModelStaysOnActiveAccount(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(f.hits); got != 1 {
 		t.Errorf("expected exactly 1 upstream hit, got %d", got)
-	}
-}
-
-func TestPreFlightEligibility_NoneRuleKeepsPinnedAccount(t *testing.T) {
-	f := newTwoAccountPool(t, nil)
-
-	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-trial"); err != nil {
-		t.Fatalf("pin claude_gpt to trial: %v", err)
-	}
-	// Explicitly disable Opus 5.5 on Trial and opt out of re-routing.
-	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
-		AccountID:         "acc-trial",
-		ModelID:           "claude-opus-5-5",
-		Category:          "claude_gpt",
-		Enabled:           false,
-		FallbackAccountID: domain.FallbackAccountNone,
-	}); err != nil {
-		t.Fatalf("disable model on trial: %v", err)
-	}
-
-	rec := f.requestModel(t, "claude-opus-5-5")
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 from pinned trial account, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "trial-token") {
-		t.Errorf("fallback_account_id=none must not re-route, got: %s", rec.Body.String())
-	}
-}
-
-func TestFailover_NoneRuleForwardsUpstream429WithoutReplay(t *testing.T) {
-	f := newTwoAccountPool(t, func(token, body string) (int, string) {
-		if token == "paid-token" && strings.Contains(body, "claude-opus-5-5") {
-			return http.StatusTooManyRequests, `{"error":{"code":429,"message":"RESOURCE_EXHAUSTED"}}`
-		}
-		return http.StatusOK, `{"ok":true,"account":"` + token + `"}`
-	})
-
-	// Both accounts can serve Opus 5.5, so only the fallback rule can stop rotation.
-	f.seedModels(t, "acc-trial",
-		&domain.ModelInfo{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"},
-	)
-
-	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-paid"); err != nil {
-		t.Fatalf("pin claude_gpt to paid: %v", err)
-	}
-	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
-		AccountID:         "acc-paid",
-		ModelID:           "claude-opus-5-5",
-		Category:          "claude_gpt",
-		Enabled:           true,
-		FallbackAccountID: domain.FallbackAccountNone,
-	}); err != nil {
-		t.Fatalf("set none rule: %v", err)
-	}
-
-	rec := f.requestModel(t, "claude-opus-5-5")
-
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected upstream 429 to surface, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if got := atomic.LoadInt64(f.hits); got != 1 {
-		t.Errorf("account rotation must be blocked, upstream hits = %d", got)
-	}
-	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-paid" {
-		t.Errorf("claude_gpt pin must stay on acc-paid, got %q", got)
-	}
-	trial, err := f.repo.GetByID(f.ctx, "acc-trial")
-	if err != nil {
-		t.Fatalf("GetByID trial: %v", err)
-	}
-	if trial.IsActive {
-		t.Error("trial account must not be activated when rotation is blocked")
 	}
 }
 
@@ -373,49 +293,6 @@ func TestFailover_IgnoresIneligiblePinnedAccount(t *testing.T) {
 	}
 	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-trial" {
 		t.Errorf("claude_gpt pin must stay on acc-trial, got %q", got)
-	}
-}
-
-func TestFailover_UsesExplicitFallbackAccount(t *testing.T) {
-	f := newEligibilityFixture(t, []*domain.Account{
-		{ID: "acc-main", Email: "main@example.com", AccessToken: "main-token", IsActive: true},
-		{ID: "acc-pool", Email: "pool@example.com", AccessToken: "pool-token"},
-		{ID: "acc-dedicated", Email: "dedicated@example.com", AccessToken: "dedicated-token"},
-	}, nil)
-
-	for _, id := range []string{"acc-main", "acc-pool", "acc-dedicated"} {
-		f.seedModels(t, id, &domain.ModelInfo{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"})
-	}
-	// Pool order favours acc-pool; the explicit rule must override it.
-	f.setUpdatedAt(t, "acc-pool", "2026-01-01T00:00:00Z")
-	f.setUpdatedAt(t, "acc-dedicated", "2026-01-02T00:00:00Z")
-	f.setUpdatedAt(t, "acc-main", "2026-01-03T00:00:00Z")
-
-	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
-		AccountID:         "acc-main",
-		ModelID:           "claude-opus-5-5",
-		Category:          "claude_gpt",
-		Enabled:           true,
-		FallbackAccountID: "acc-dedicated",
-	}); err != nil {
-		t.Fatalf("set explicit fallback: %v", err)
-	}
-
-	main, err := f.repo.GetByID(f.ctx, "acc-main")
-	if err != nil {
-		t.Fatalf("GetByID main: %v", err)
-	}
-
-	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
-	_, _, next, rotErr := engine.HandleExhaustion(f.ctx, main, "claude-opus-5-5")
-	if rotErr != nil {
-		t.Fatalf("HandleExhaustion: %v", rotErr)
-	}
-	if next == nil || next.ID != "acc-dedicated" {
-		t.Fatalf("expected rotation to the explicit fallback acc-dedicated, got %+v", next)
-	}
-	if got := f.activeAccount(t, domain.CategoryClaudeGPT); got != "acc-dedicated" {
-		t.Errorf("claude_gpt pin should follow the explicit fallback, got %q", got)
 	}
 }
 

@@ -683,21 +683,6 @@
 
     // Model rules categorized by bucket
     const rules = acc.model_rules || [];
-    const otherAccounts = rawAccountsData.filter(a => a.id !== acc.id);
-    function fallbackOptions(selected) {
-      const opt = (v, t) => `<option value="${escapeHtml(v)}" ${v === selected ? 'selected' : ''}>${escapeHtml(t)}</option>`;
-      let out = opt('', 'Auto ▾') + opt('none', 'Block ▾');
-      otherAccounts.forEach(a => {
-        let label = a.email;
-        if (isPrivacyMode) {
-          label = a.id.slice(0, 8);
-        } else if (label.includes('@')) {
-          label = label.split('@')[0];
-        }
-        out += opt(a.id, `→ ${escapeHtml(label)} ▾`);
-      });
-      return out;
-    }
 
     function categorizeRule(r) {
       const mid = (r.model_id || '').toLowerCase();
@@ -820,7 +805,6 @@
         const anyEnabled = item.rules.some(r => r.enabled);
         const allEnabled = item.rules.every(r => r.enabled);
         const modelIds = item.rules.map(r => r.model_id).join(',');
-        const selectedFallback = item.rules[0]?.fallback_account_id || '';
 
         let badgesHtml = '';
         if (item.tiers.length > 0) {
@@ -845,7 +829,6 @@
               <span class="model-label-text">${escapeHtml(item.baseName)}</span>
             </label>
             ${badgesHtml}
-            <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when disabled on this account">${fallbackOptions(selectedFallback)}</select>
           </div>
         `;
       }).join('');
@@ -1063,15 +1046,6 @@
         await Promise.all(promises);
         await fetchAccounts();
       });
-
-      const fallbackSel = row.querySelector('.model-rule-fallback');
-      if (fallbackSel) {
-        fallbackSel.addEventListener('change', async e => {
-          const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, fallback_account_id: e.target.value }, false));
-          await Promise.all(promises);
-          await fetchAccounts();
-        });
-      }
 
       row.querySelectorAll('.model-tier-badge').forEach(badge => {
         badge.addEventListener('click', async e => {

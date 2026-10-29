@@ -434,20 +434,9 @@ func (h *ProxyHandler) resolveEligibleAccount(
 		return nil
 	}
 	normModel := NormalizeModelName(model)
-	eligible, fallbackAccountID, err := h.accountRepo.IsAccountEligibleForModel(ctx, currentAcc.ID, normModel)
-	if err != nil || eligible || fallbackAccountID == domain.FallbackAccountNone {
+	eligible, err := h.accountRepo.IsAccountEligibleForModel(ctx, currentAcc.ID, normModel)
+	if err != nil || eligible {
 		return nil
-	}
-
-	if fallbackAccountID != "" && fallbackAccountID != currentAcc.ID {
-		candidate, cErr := h.accountRepo.GetByID(ctx, fallbackAccountID)
-		if cErr == nil && candidate != nil && candidate.IsAvailable() {
-			if candEligible, _, eErr := h.accountRepo.IsAccountEligibleForModel(ctx, candidate.ID, normModel); eErr == nil && candEligible {
-				if available, aErr := h.accountRepo.IsAccountAvailableForCategory(ctx, candidate.ID, category); aErr == nil && available {
-					return candidate
-				}
-			}
-		}
 	}
 
 	next, nErr := h.accountRepo.GetNextAvailableForModel(ctx, category, normModel, currentAcc.ID)

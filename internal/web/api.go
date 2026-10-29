@@ -485,9 +485,8 @@ func (a *APIHandler) updateAccountModelRule(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		ModelID           string  `json:"model_id"`
-		Enabled           *bool   `json:"enabled"`
-		FallbackAccountID *string `json:"fallback_account_id"`
+		ModelID string `json:"model_id"`
+		Enabled *bool  `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ModelID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "model_id required", err)
@@ -501,19 +500,6 @@ func (a *APIHandler) updateAccountModelRule(w http.ResponseWriter, r *http.Reque
 		writeErrorJSON(w, http.StatusInternalServerError, "failed to lookup account", err)
 		return
 	}
-	if req.FallbackAccountID != nil {
-		fb := *req.FallbackAccountID
-		if fb != domain.FallbackAccountAuto && fb != domain.FallbackAccountNone {
-			if fb == id {
-				writeErrorJSON(w, http.StatusBadRequest, "fallback cannot be the same account", nil)
-				return
-			}
-			if _, err := a.accountRepo.GetByID(ctx, fb); err != nil {
-				writeErrorJSON(w, http.StatusBadRequest, "fallback account not found", err)
-				return
-			}
-		}
-	}
 
 	rule := &domain.AccountModelRule{AccountID: id, ModelID: req.ModelID, Enabled: true}
 	rules, _ := a.accountRepo.ListAccountModelRules(ctx, id)
@@ -525,9 +511,6 @@ func (a *APIHandler) updateAccountModelRule(w http.ResponseWriter, r *http.Reque
 	}
 	if req.Enabled != nil {
 		rule.Enabled = *req.Enabled
-	}
-	if req.FallbackAccountID != nil {
-		rule.FallbackAccountID = *req.FallbackAccountID
 	}
 	if rule.DisplayName == "" {
 		rule.DisplayName = req.ModelID
