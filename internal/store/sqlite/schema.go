@@ -179,6 +179,10 @@ func Migrate(db *DB) error {
 	}
 
 	// Seed active_category_accounts if empty and an active account exists
+	seedTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx for category seeding: %w", err)
+	}
 	seedSQL := `
 	INSERT OR IGNORE INTO active_category_accounts (category, account_id)
 	SELECT 'claude_gpt', id FROM accounts WHERE is_active = 1
@@ -186,8 +190,13 @@ func Migrate(db *DB) error {
 	SELECT 'gemini', id FROM accounts WHERE is_active = 1
 	UNION ALL
 	SELECT 'gemini_argon', id FROM accounts WHERE is_active = 1;`
-	if _, err := db.ExecContext(ctx, seedSQL); err != nil {
+	if _, err := seedTx.ExecContext(ctx, seedSQL); err != nil {
+		_ = seedTx.Rollback()
 		return fmt.Errorf("failed to seed active_category_accounts: %w", err)
+	}
+	if err := seedTx.Commit(); err != nil {
+		_ = seedTx.Rollback()
+		return fmt.Errorf("failed to commit active_category_accounts seeding: %w", err)
 	}
 
 	return nil
