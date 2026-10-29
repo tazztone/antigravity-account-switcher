@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/store/sqlite"
 )
@@ -64,6 +65,7 @@ func newFailoverStressTestEnv(
 		eventRepo,
 		WithQuotaRepository(quotaRepo),
 		WithModelFallback(primary, secondary, fallbackEnabled),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	handler, err := NewProxyHandler(

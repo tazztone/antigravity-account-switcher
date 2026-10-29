@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/proxy"
@@ -32,7 +34,7 @@ type eligibilityFixture struct {
 func newEligibilityFixture(t *testing.T, accounts []*domain.Account, respond upstreamResponder) *eligibilityFixture {
 	t.Helper()
 
-	db, err := sqlite.Open(t.TempDir() + "/proxy_eligibility.db")
+	db, err := sqlite.Open(filepath.Join(t.TempDir(), "proxy_eligibility.db"))
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
@@ -185,7 +187,7 @@ func TestGeminiArgonExhaustion_DoesNotLockOutRegularGemini(t *testing.T) {
 	}
 
 	// Argon weekly bucket exhausted on paid; regular gemini buckets stay healthy.
-	reset := "2026-12-31T00:00:00Z"
+	reset := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
 	if _, err := f.db.ExecContext(f.ctx, `
 		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
 		VALUES ('acc-paid', 'argon-weekly', 'Gemini Argon (weekly)', 'weekly', 0.0, ?, ?)
@@ -371,5 +373,44 @@ func TestArgonPreFlight_BlocksUnentitledAccount(t *testing.T) {
 	rec := f.requestModel(t, "gemini-4-argon-medium")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 Service Unavailable when no account has Argon entitlement, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestModelEligibility_SoloMode_BlocksCrossAccountDispatch(t *testing.T) {
+	var requestedToken string
+	responder := func(token, body string) (int, string) {
+		requestedToken = token
+		return http.StatusOK, `{"status":"ok"}`
+	}
+
+	f := newEligibilityFixture(t, []*domain.Account{
+		{ID: "acc-solo", Email: "solo@example.com", AccessToken: "solo-token", IsActive: true},
+		{ID: "acc-pool", Email: "pool@example.com", AccessToken: "pool-token", IsActive: false},
+	}, responder)
+
+	// Seed models: acc-solo has claude-3-5-haiku disabled, acc-pool has it enabled
+	f.seedModels(t, "acc-solo", &domain.ModelInfo{ID: "claude-3-5-haiku", Category: "claude_gpt"})
+	if err := f.repo.UpdateAccountModelRule(f.ctx, &domain.AccountModelRule{
+		AccountID: "acc-solo",
+		ModelID:   "claude-3-5-haiku",
+		Enabled:   false,
+	}); err != nil {
+		t.Fatalf("disable model on solo account: %v", err)
+	}
+
+	f.seedModels(t, "acc-pool", &domain.ModelInfo{ID: "claude-3-5-haiku", Category: "claude_gpt"})
+
+	// Pin to acc-solo in Solo mode
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryClaudeGPT, "acc-solo"); err != nil {
+		t.Fatalf("SetActiveForCategory: %v", err)
+	}
+	if err := f.repo.SetCategoryRoutingMode(f.ctx, domain.CategoryClaudeGPT, domain.RoutingModeSolo); err != nil {
+		t.Fatalf("SetCategoryRoutingMode: %v", err)
+	}
+
+	// Requesting claude-3-5-haiku must NOT dispatch to acc-pool (pool-token)
+	f.requestModel(t, "claude-3-5-haiku")
+	if requestedToken == "pool-token" {
+		t.Fatalf("Solo mode violation: request was rerouted to pool-token!")
 	}
 }

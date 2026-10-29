@@ -433,6 +433,12 @@ func (h *ProxyHandler) resolveEligibleAccount(
 	if h.accountRepo == nil || currentAcc == nil || model == "" {
 		return nil
 	}
+	if category != CategoryUnknown {
+		mode, _ := h.accountRepo.GetCategoryRoutingMode(ctx, category)
+		if mode == domain.RoutingModeSolo {
+			return nil
+		}
+	}
 	normModel := NormalizeModelName(model)
 	eligible, err := h.accountRepo.IsAccountEligibleForModel(ctx, currentAcc.ID, normModel)
 	if err != nil || eligible {
@@ -944,40 +950,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						forwardTerminal()
 						return
 					}
-				} else {
-					if currentCategory != CategoryUnknown {
-						mode, _ := h.accountRepo.GetCategoryRoutingMode(ctx, currentCategory)
-						if mode == domain.RoutingModeSolo {
-							forwardTerminal()
-							return
-						}
-					}
-					var nextAcc *domain.Account
-					var rotateErr error
-					if origModel != "" && currentCategory != CategoryUnknown {
-						nextAcc, rotateErr = h.accountRepo.GetNextAvailableForModel(ctx, currentCategory, NormalizeModelName(origModel), currentAcc.ID)
-					}
-					if rotateErr != nil || nextAcc == nil {
-						if currentCategory != CategoryUnknown {
-							nextAcc, rotateErr = h.accountRepo.GetNextAvailableForCategory(ctx, currentCategory, currentAcc.ID)
-						}
-					}
-					if (rotateErr != nil || nextAcc == nil) && currentCategory == CategoryUnknown {
-						nextAcc, rotateErr = h.accountRepo.GetNextAvailable(ctx, currentAcc.ID)
-					}
-					if rotateErr != nil || nextAcc == nil {
-						forwardTerminal()
-						return
-					}
-					discardAndClose()
-					if currentCategory != CategoryUnknown {
-						_ = h.accountRepo.SetActiveForCategory(ctx, currentCategory, nextAcc.ID)
-					} else {
-						_ = h.accountRepo.UpdateStatus(ctx, currentAcc.ID, domain.AccountStatusExhausted)
-						_ = h.accountRepo.SetActive(ctx, nextAcc.ID)
-					}
-					currentAcc = nextAcc
-					continue
 				}
 			}
 		}

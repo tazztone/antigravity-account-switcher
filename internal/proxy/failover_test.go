@@ -187,17 +187,10 @@ func (m *mockAccountRepo) GetActiveForCategory(ctx context.Context, category dom
 func (m *mockAccountRepo) SetActiveForCategory(ctx context.Context, category domain.ModelCategory, accountID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	target, ok := m.accounts[accountID]
-	if !ok {
+	if _, ok := m.accounts[accountID]; !ok {
 		return domain.ErrAccountNotFound
 	}
 	m.categoryActive[category] = accountID
-	for _, acc := range m.accounts {
-		acc.IsActive = false
-	}
-	target.IsActive = true
-	target.Status = domain.AccountStatusActive
-	target.UpdatedAt = time.Now().UTC()
 	return nil
 }
 
@@ -249,6 +242,9 @@ func (m *mockAccountRepo) IsAccountEligibleForModel(ctx context.Context, account
 }
 
 func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
+	if category != domain.CategoryUnknown {
+		return m.GetNextAvailableForCategory(ctx, category, excludeID)
+	}
 	return m.GetNextAvailable(ctx, excludeID)
 }
 
@@ -748,6 +744,7 @@ func TestFailoverEngine_HandleExhaustion_PrimaryToSecondary(t *testing.T) {
 		accRepo, broadcaster, nil,
 		WithQuotaRepository(quotaRepo),
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	action, targetModel, nextAcc, err := engine.HandleExhaustion(ctx, accA, "gemini-2.5-pro")
@@ -878,6 +875,7 @@ func TestFailoverEngine_HandleExhaustion_DoubleExhaustionToRotation(t *testing.T
 	engine := NewFailoverEngine(
 		accRepo, broadcaster, nil,
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	// Step 1: Primary fails -> fall back to secondary on Account A
@@ -910,10 +908,10 @@ func TestFailoverEngine_HandleExhaustion_DoubleExhaustionToRotation(t *testing.T
 		t.Fatalf("expected acc-A exhausted, got %s", updatedA.Status)
 	}
 
-	// Account B must be Active
-	activeAcc, _ := accRepo.GetActive(ctx)
-	if activeAcc.ID != "acc-B" {
-		t.Fatalf("expected active account acc-B, got %s", activeAcc.ID)
+	// Account B must be Active for Gemini category
+	activeAcc, _ := accRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
+	if activeAcc == nil || activeAcc.ID != "acc-B" {
+		t.Fatalf("expected active account acc-B, got %v", activeAcc)
 	}
 
 	// Verify events: Failover429 then AccountSwitched
@@ -1099,6 +1097,7 @@ func TestFailoverEngine_ResetAccountState(t *testing.T) {
 	engine := NewFailoverEngine(
 		accRepo, nil, nil,
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	// Fall back on primary failure
@@ -1201,6 +1200,7 @@ func TestFailoverEngine_AntiStampede_ConcurrentFailover(t *testing.T) {
 		engine := NewFailoverEngine(
 			accRepo, NewBroadcaster(100), nil,
 			WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+			WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 		)
 
 		const concurrency = 50
@@ -1281,6 +1281,7 @@ func TestFailoverEngine_AntiStampede_ConcurrentFailover(t *testing.T) {
 		engine := NewFailoverEngine(
 			accRepo, NewBroadcaster(100), nil,
 			WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+			WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 		)
 
 		// 50 goroutines hit 429 on secondary model simultaneously
@@ -1327,10 +1328,10 @@ func TestFailoverEngine_AntiStampede_ConcurrentFailover(t *testing.T) {
 			t.Fatalf("acc-A should be exhausted, got %s", curA.Status)
 		}
 
-		// Account B must be active and healthy
-		curB, _ := accRepo.GetByID(ctx, "acc-B")
-		if curB.Status != domain.AccountStatusActive || !curB.IsActive {
-			t.Fatalf("acc-B should be active, got status=%s active=%v", curB.Status, curB.IsActive)
+		// Account B must be active and healthy for Gemini category
+		activeGemini, err := accRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
+		if err != nil || activeGemini == nil || activeGemini.ID != "acc-B" {
+			t.Fatalf("acc-B should be active for gemini, got %v err=%v", activeGemini, err)
 		}
 
 		// CRITICAL INVARIANT: Account C must NOT have been touched!
@@ -1572,6 +1573,7 @@ func TestFailoverEngine_SameCategory_SecondaryQuotaPreservedAfterPrimaryExhausti
 	mockRepo.addAccount(acc)
 	engine := NewFailoverEngine(mockRepo, nil, nil,
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	// Seed cache with Pro exhausted (0%) and Flash available (85%)
@@ -1640,6 +1642,7 @@ func TestFailoverEngine_PredictiveCheck_MixedCase(t *testing.T) {
 	mockRepo.addAccount(acc)
 	engine := NewFailoverEngine(mockRepo, nil, nil,
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	engine.UpdateQuotaCache(acc.ID, []*domain.QuotaBucket{
@@ -1685,6 +1688,7 @@ func TestFailoverEngine_SecondaryExhaustion_MarksSecondaryBucket(t *testing.T) {
 
 	engine := NewFailoverEngine(mockRepo, nil, nil,
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	engine.UpdateQuotaCache(acc1.ID, []*domain.QuotaBucket{
@@ -1743,6 +1747,7 @@ func TestFailoverEngine_MarkModelExhausted(t *testing.T) {
 	mockRepo.addAccount(acc)
 	engine := NewFailoverEngine(mockRepo, nil, nil,
 		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	engine.UpdateQuotaCache(acc.ID, []*domain.QuotaBucket{

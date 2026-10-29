@@ -169,7 +169,7 @@ func NewFailoverEngine(
 		modelPrimary:             config.DefaultModelPrimary,
 		modelSecondary:           config.DefaultModelSecondary,
 		fallbackSecondaryEnabled: false,
-		fallbackStrategy:         config.FallbackStrategyAccountFirst,
+		fallbackStrategy:         config.DefaultFallbackStrategy,
 		accountStates:            make(map[string]*accountFallbackState),
 		quotaCache:               make(map[string][]cachedQuotaBucket),
 	}
@@ -181,12 +181,14 @@ func NewFailoverEngine(
 	return f
 }
 
-// SetFallbackStrategy updates the failover strategy dynamically.
+// SetFallbackStrategy updates the failover strategy dynamically, accepting only
+// pool_first or account_first. Invalid values are ignored.
 func (f *FailoverEngine) SetFallbackStrategy(strategy string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if strategy != "" {
-		f.fallbackStrategy = strategy
+	clean := strings.TrimSpace(strategy)
+	if clean == config.FallbackStrategyPoolFirst || clean == config.FallbackStrategyAccountFirst {
+		f.fallbackStrategy = clean
 	}
 }
 
@@ -962,8 +964,19 @@ func (f *FailoverEngine) HandleExhaustion(
 	} else {
 		currentActive, err = f.accountRepo.GetActive(ctx)
 	}
-	if err == nil && currentActive != nil && currentActive.ID != acc.ID && currentActive.IsAvailable() &&
-		f.eligibleForModel(ctx, currentActive.ID, failedModel) {
+	avail := false
+	if err == nil && currentActive != nil && currentActive.ID != acc.ID {
+		if failedCat != CategoryUnknown {
+			if ca, aErr := f.accountRepo.IsAccountAvailableForCategory(ctx, currentActive.ID, failedCat); aErr == nil {
+				avail = ca
+			} else {
+				avail = currentActive.IsAvailable()
+			}
+		} else {
+			avail = currentActive.IsAvailable()
+		}
+	}
+	if avail && f.eligibleForModel(ctx, currentActive.ID, failedModel) {
 		target := failedModel
 		if isPrimary || isSecondary {
 			target = primary
@@ -1164,33 +1177,31 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 		} else {
 			currentActive, err = f.accountRepo.GetActive(ctx)
 		}
-		if err == nil && currentActive != nil && currentActive.ID != exhaustedAcc.ID && currentActive.IsAvailable() &&
-			f.eligibleForModel(ctx, currentActive.ID, failedModel) {
+		avail := false
+		if err == nil && currentActive != nil && currentActive.ID != exhaustedAcc.ID {
+			if category != CategoryUnknown {
+				if ca, aErr := f.accountRepo.IsAccountAvailableForCategory(ctx, currentActive.ID, category); aErr == nil {
+					avail = ca
+				} else {
+					avail = currentActive.IsAvailable()
+				}
+			} else {
+				avail = currentActive.IsAvailable()
+			}
+		}
+		if avail && f.eligibleForModel(ctx, currentActive.ID, failedModel) {
 			delete(f.accountStates, currentActive.ID)
 			return currentActive, nil
 		}
 	}
 
-	// 2. Mark the exhausted account in the repository and quota persistence
+	// 2. Mark the exhausted account in memory and repository
 	resetDuration := 5 * time.Hour
 	resetTime := time.Now().UTC().Add(resetDuration)
 	if category != CategoryUnknown {
 		f.markCategoryExhaustedLocked(exhaustedAcc.ID, category, resetTime)
-		if f.quotaRepo != nil {
-			bucketID := exhaustedAcc.ID + "-" + category.String()
-			displayName := category.String() + " models"
-			_ = f.quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{
-				{
-					AccountID:         exhaustedAcc.ID,
-					BucketID:          bucketID,
-					DisplayName:       displayName,
-					Window:            domain.QuotaWindowDaily,
-					RemainingFraction: 0.0,
-					RemainingAmount:   0,
-					ResetTime:         resetTime,
-					UpdatedAt:         time.Now().UTC(),
-				},
-			})
+		if failedModel != "" {
+			f.markModelExhaustedLocked(exhaustedAcc.ID, failedModel, resetTime)
 		}
 	}
 
