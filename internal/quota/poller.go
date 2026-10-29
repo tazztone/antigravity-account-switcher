@@ -347,7 +347,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 			for _, eb := range existing {
 				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
 					strings.Contains(strings.ToLower(string(eb.Window)), "weekly") {
-					if !eb.ResetTime.IsZero() && eb.ResetTime.After(now) && eb.RemainingFraction <= 0.0 {
+					if !eb.ResetTime.IsZero() && eb.ResetTime.After(now) && eb.RemainingFraction <= 0.0 && b.RemainingFraction <= 0.0 {
 						b.ResetTime = eb.ResetTime
 						b.RemainingFraction = eb.RemainingFraction
 					}

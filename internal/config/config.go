@@ -416,6 +416,7 @@ func DetectAntigravityCLIVersion(overrideBin string) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, bin, "--version")
+		cmd.WaitDelay = 500 * time.Millisecond
 		if out, cmdErr := cmd.Output(); cmdErr == nil {
 			trimmed := strings.TrimSpace(string(out))
 			if m := versionRegex.FindString(trimmed); m != "" {

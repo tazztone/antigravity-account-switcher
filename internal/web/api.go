@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -351,7 +352,11 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		Mode     string `json:"mode"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body) // empty body = "all"
+		err := json.NewDecoder(r.Body).Decode(&body)
+		if err != nil && !errors.Is(err, io.EOF) {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid request body", err)
+			return
+		}
 	}
 	switch body.Category {
 	case "", "all":
@@ -1001,29 +1006,50 @@ func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, s
 
 	if a.accountRepo != nil {
 		accounts, _ := a.accountRepo.List(ctx)
+		type accModelsResult struct {
+			accountID string
+			models    []*domain.ModelInfo
+			src       string
+		}
+		resChan := make(chan accModelsResult, len(accounts))
+		sem := make(chan struct{}, 4)
+		var wg sync.WaitGroup
+
 		for _, acc := range accounts {
-			var ms []*domain.ModelInfo
-			src := ""
-			// The local language_server reflects only the primary IDE login.
-			if acc.IsActive {
-				if lm, err := quota.QueryAvailableModels(ctx); err == nil && len(lm) > 0 {
-					ms, src = lm, "language_server"
+			wg.Add(1)
+			go func(aAcc *domain.Account) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				var ms []*domain.ModelInfo
+				src := ""
+				// The local language_server reflects only the primary IDE login.
+				if aAcc.IsActive {
+					if lm, err := quota.QueryAvailableModels(ctx); err == nil && len(lm) > 0 {
+						ms, src = lm, "language_server"
+					}
 				}
-			}
-			if ms == nil && acc.AccessToken != "" {
-				if cm, err := quota.FetchAvailableModelsFromCloudCode(ctx, acc.AccessToken); err == nil && len(cm) > 0 {
-					ms, src = cm, "cloud_code_pa"
+				if ms == nil && aAcc.AccessToken != "" {
+					if cm, err := quota.FetchAvailableModelsFromCloudCode(ctx, aAcc.AccessToken); err == nil && len(cm) > 0 {
+						ms, src = cm, "cloud_code_pa"
+					}
 				}
+				if ms != nil {
+					resChan <- accModelsResult{accountID: aAcc.ID, models: ms, src: src}
+				}
+			}(acc)
+		}
+		wg.Wait()
+		close(resChan)
+
+		for res := range resChan {
+			if err := a.accountRepo.UpsertAccountModels(ctx, res.accountID, res.models); err != nil {
+				slog.Warn("failed to persist account models", "account", res.accountID, "error", err)
 			}
-			if ms == nil {
-				continue
-			}
-			if err := a.accountRepo.UpsertAccountModels(ctx, acc.ID, ms); err != nil {
-				slog.Warn("failed to persist account models", "account", acc.ID, "error", err)
-			}
-			add(ms)
-			if source == "" || src == "language_server" {
-				source = src
+			add(res.models)
+			if source == "" || res.src == "language_server" {
+				source = res.src
 			}
 		}
 	}

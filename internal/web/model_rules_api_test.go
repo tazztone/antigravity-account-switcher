@@ -51,6 +51,9 @@ func TestServer_API_ModelRulesAndCategorySelect(t *testing.T) {
 	if r := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":"bogus"}`); r.StatusCode != 400 {
 		t.Fatalf("expected 400, got %d", r.StatusCode)
 	}
+	if r := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":`); r.StatusCode != 400 {
+		t.Fatalf("expected 400 on malformed json, got %d", r.StatusCode)
+	}
 
 	// Rule update.
 	if r := do(http.MethodPut, "/api/accounts/acc-1/models", `{"model_id":"gemini-4-argon-high","enabled":false}`); r.StatusCode != 200 {
