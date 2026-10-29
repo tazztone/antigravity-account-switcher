@@ -501,4 +501,17 @@ func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
 	if err != nil || !available {
 		t.Fatalf("expected acc-rules available for gemini_argon via model rule, got %v err=%v", available, err)
 	}
+
+	// Add acc-pro with a Pro model rule (claude-opus-5-5-high)
+	createEligibilityAccount(t, repo, ctx, "acc-pro", "pro-user@example.com", false)
+	if err := repo.UpsertAccountModels(ctx, "acc-pro", []*domain.ModelInfo{
+		{ID: "claude-opus-5-5-high", DisplayName: "Claude Opus 5.5 (High)", Category: "claude_gpt"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels: %v", err)
+	}
+
+	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-pro", domain.CategoryGeminiArgon)
+	if err != nil || !available {
+		t.Fatalf("expected acc-pro available for gemini_argon via 5.5 model rule, got %v err=%v", available, err)
+	}
 }

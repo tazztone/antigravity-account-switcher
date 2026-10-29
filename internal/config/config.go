@@ -257,6 +257,7 @@ func CandidateAntigravityPaths() []string {
 		candidates = append(candidates,
 			// 1. Standard XDG user application directories (Recommended, no sudo)
 			filepath.Join(home, ".local", "bin", "antigravity"),
+			filepath.Join(home, ".local", "bin", "agy"),
 			filepath.Join(home, ".local", "share", "antigravity", "antigravity"),
 			filepath.Join(home, ".local", "share", "antigravity", "Antigravity-x64", "antigravity"),
 			filepath.Join(home, ".local", "share", "Antigravity", "antigravity"),

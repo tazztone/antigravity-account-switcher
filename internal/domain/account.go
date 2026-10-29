@@ -155,6 +155,9 @@ type AccountRepository interface {
 	// excluding excludeID and accounts where the model is disabled or category quota is exhausted.
 	GetNextAvailableForModel(ctx context.Context, category ModelCategory, modelID, excludeID string) (*Account, error)
 
+	// HasArgonEntitlement reports whether the account has Argon entitlement.
+	HasArgonEntitlement(ctx context.Context, accountID string) (bool, error)
+
 	// IsAccountAvailableForCategory reports whether one specific account may serve traffic
 	// for a model category right now, using the same eligibility rules as
 	// GetNextAvailableForCategory (status plus per-category quota evidence).

@@ -54,7 +54,7 @@ const argonEntitlementPredicate = `
 		OR EXISTS (
 			SELECT 1 FROM account_model_rules mr
 			WHERE mr.account_id = a.id
-			  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%')
+			  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%' OR LOWER(mr.model_id) LIKE '%5-5%')
 			  AND mr.enabled = 1
 		)
 	)
@@ -824,7 +824,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 }
 
 // hasArgonEntitlement reports whether the account has Argon entitlement, evidenced
-// by either an Argon quota bucket or an enabled Argon model rule.
+// by an Argon quota bucket, an enabled Argon model rule, or Pro-tier model rules (e.g. Claude 5.5).
 func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
 	query := `
 		SELECT 1 FROM quota_buckets qb
@@ -833,7 +833,7 @@ func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID s
 		UNION
 		SELECT 1 FROM account_model_rules mr
 		WHERE mr.account_id = ?
-		  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%')
+		  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%' OR LOWER(mr.model_id) LIKE '%5-5%')
 		  AND mr.enabled = 1
 		LIMIT 1
 	`
@@ -846,6 +846,11 @@ func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID s
 		return false, err
 	}
 	return true, nil
+}
+
+// HasArgonEntitlement reports whether the account has Argon entitlement.
+func (r *AccountRepository) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+	return r.hasArgonEntitlement(ctx, accountID)
 }
 
 // IsAccountAvailableForCategory reports whether one specific account may serve

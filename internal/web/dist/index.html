@@ -120,11 +120,12 @@
         </div>
       </div>
 
-      <!-- Consolidated Intra-Account Fallback Toolbar -->
-      <div class="account-pool-toolbar" aria-label="Intra-Account Fallback Toolbar">
+      <!-- Consolidated Model Fallback Toolbar (All Accounts) -->
+      <div class="account-pool-toolbar" aria-label="Global Model Fallback Toolbar">
         <div class="toolbar-fallback-group">
-          <span class="toolbar-icon" title="Intra-Account Fallback Routing">⚡</span>
-          <span class="toolbar-label">Intra-Account Fallback:</span>
+          <span class="toolbar-icon" title="Pool-wide model fallback before account rotation">⚡</span>
+          <span class="toolbar-label" title="When enabled, if the actively routing account hits an HTTP 429 on Primary Model, it retries with Secondary Model within that same account before rotating to other accounts.">Model Fallback (All Accounts):</span>
+          <span class="badge badge-neutral mono" style="font-size: 10px; padding: 2px 6px; letter-spacing: 0.04em;" title="Global policy applied to whichever account is actively routing">POOL-WIDE POLICY</span>
           <div class="toolbar-select-wrapper">
             <select id="select-model-primary" class="form-select-mini" title="Primary model attempted first">
               <option value="gemini-2.5-pro">Loading models...</option>
@@ -136,7 +137,7 @@
               <option value="gemini-2.5-flash">Loading models...</option>
             </select>
           </div>
-          <div class="switch-control-mini" title="Enable or disable secondary fallback within same account">
+          <div class="switch-control-mini" title="Enable or disable secondary model retry within the same account on HTTP 429">
             <input type="checkbox" id="fallback-enabled-toggle" class="toggle-checkbox" role="switch" aria-checked="false">
             <label for="fallback-enabled-toggle" class="toggle-track" aria-hidden="true"></label>
             <span id="fallback-toggle-status" class="toggle-label-text">Disabled</span>

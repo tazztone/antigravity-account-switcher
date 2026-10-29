@@ -357,12 +357,43 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 		}
 	}
 	if !hasArgonInFetched {
-		existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
-		for _, eb := range existing {
-			if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
-				!eb.ResetTime.IsZero() && eb.ResetTime.After(now) && eb.RemainingFraction <= 0.0 {
-				buckets = append(buckets, eb)
-				break
+		entitled := false
+		if p.accountRepo != nil {
+			entitled, _ = p.accountRepo.HasArgonEntitlement(ctx, acc.ID)
+		}
+		if entitled {
+			existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+			var existingArgon *domain.QuotaBucket
+			for _, eb := range existing {
+				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+					strings.Contains(strings.ToLower(string(eb.Window)), "weekly") {
+					existingArgon = eb
+					break
+				}
+			}
+			if existingArgon != nil && !existingArgon.ResetTime.IsZero() && existingArgon.ResetTime.After(now) && existingArgon.RemainingFraction <= 0.0 {
+				buckets = append(buckets, existingArgon)
+			} else {
+				var weeklyReset time.Time
+				for _, b := range buckets {
+					if strings.Contains(strings.ToLower(string(b.Window)), "weekly") && !b.ResetTime.IsZero() {
+						weeklyReset = b.ResetTime
+						break
+					}
+				}
+				remFrac := 1.0
+				if existingArgon != nil && existingArgon.RemainingFraction > 0 {
+					remFrac = existingArgon.RemainingFraction
+				}
+				buckets = append(buckets, &domain.QuotaBucket{
+					AccountID:         acc.ID,
+					BucketID:          "argon-weekly",
+					DisplayName:       "Gemini 4 Argon Weekly Limit",
+					Window:            domain.QuotaWindow("weekly"),
+					RemainingFraction: remFrac,
+					ResetTime:         weeklyReset,
+					UpdatedAt:         now,
+				})
 			}
 		}
 	}

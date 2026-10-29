@@ -393,8 +393,14 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		}()
 	}
 
-	// 4. Construct child process
-	childCmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	// 4. Construct child process (re-resolving binary if unlinked by auto-updater)
+	targetBin := cmdArgs[0]
+	if _, err := os.Stat(targetBin); err != nil {
+		if resolved, rErr := config.ResolveAntigravityBin(""); rErr == nil && resolved != "" {
+			targetBin = resolved
+		}
+	}
+	childCmd := exec.CommandContext(ctx, targetBin, cmdArgs[1:]...)
 	scopedEnv := BuildScopedEnv(os.Environ(), proxyURL)
 
 	// Ensure APPIMAGE is defined for Electron auto-updater (AppImageUpdater) to work seamlessly.
@@ -408,7 +414,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		}
 	}
 	if !hasAppImage {
-		targetExe := cmdArgs[0]
+		targetExe := targetBin
 		if abs, err := filepath.Abs(targetExe); err == nil {
 			targetExe = abs
 		}

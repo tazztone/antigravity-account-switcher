@@ -709,7 +709,7 @@
       if (cat === 'gemini_argon' || /argon/i.test(mid)) {
         return 'argon';
       }
-      if (/^chat_|^tab_|preview/i.test(mid)) {
+      if (/^chat_|^tab_|preview|flash-image|-tiered|gemini-3-flash$|gemini-3\.5-flash|gemini-3\.1-flash|gemini-2\.5/i.test(mid)) {
         return 'preview';
       }
       return 'gemini';
@@ -894,7 +894,7 @@
     const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude, []);
     const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini, groupedRules.preview);
     const argonModelsHtml = renderBucketModels('argon', groupedRules.argon, []);
-    const hasArgonAccess = Boolean(argonWeekly) || (groupedRules.argon && groupedRules.argon.length > 0);
+    const hasArgonAccess = Boolean(argonWeekly) || (groupedRules.argon && groupedRules.argon.length > 0) || rules.some(r => /5-5|argon/i.test(r.model_id));
 
     // Build Model Groups with Bucket-Level Borders
     let extraHtml = '';

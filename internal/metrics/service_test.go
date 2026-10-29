@@ -88,6 +88,10 @@ func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, acc
 	return false, nil
 }
 
+func (m *mockAccountRepo) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+	return true, nil
+}
+
 func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
 	return domain.RoutingModePool, nil
 }

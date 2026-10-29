@@ -382,11 +382,12 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 			dName = mid
 		}
 		dName = disambiguateModelName(mid, dName, nameCounts, usedNames)
+		isInternal := domain.IsInternalOrPreviewModel(mid)
 		result = append(result, &domain.ModelInfo{
 			ID:          mid,
 			DisplayName: dName,
 			Category:    categorizeModelID(mid),
-			Recommended: modelMeta.Recommended,
+			Recommended: !isInternal && modelMeta.Recommended,
 		})
 	}
 

@@ -264,6 +264,10 @@ func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, acc
 	return acc.IsAvailable(), nil
 }
 
+func (m *mockAccountRepo) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+	return true, nil
+}
+
 func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

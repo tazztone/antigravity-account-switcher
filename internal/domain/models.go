@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ModelInfo represents an AI model available in Google Antigravity 2.0.
 type ModelInfo struct {
@@ -18,28 +21,19 @@ func (m *ModelInfo) IsInternalOrPreview() bool {
 	return IsInternalOrPreviewModel(m.ID)
 }
 
-// IsInternalOrPreviewModel checks if a model ID is an internal, tab, or preview endpoint.
+// IsInternalOrPreviewModel checks if a model ID is an internal, tab, tool, or preview endpoint.
 func IsInternalOrPreviewModel(modelID string) bool {
-	lower := modelID
-	for i := 0; i < len(modelID); i++ {
-		c := modelID[i]
-		if c >= 'A' && c <= 'Z' {
-			lower = ""
-			break
-		}
+	lower := strings.ToLower(modelID)
+	if len(lower) >= 4 && (strings.HasPrefix(lower, "chat_") || strings.HasPrefix(lower, "tab_") || strings.Contains(lower, "preview")) {
+		return true
 	}
-	if lower == "" {
-		lower = ""
-		for i := 0; i < len(modelID); i++ {
-			c := modelID[i]
-			if c >= 'A' && c <= 'Z' {
-				lower += string(c + ('a' - 'A'))
-			} else {
-				lower += string(c)
-			}
-		}
+	// Internal task, tool, command, and non-agent models
+	if lower == "gemini-3-flash" || strings.Contains(lower, "flash-image") ||
+		strings.HasPrefix(lower, "gemini-3.5-flash") || strings.HasPrefix(lower, "gemini-3.1-flash") ||
+		strings.HasPrefix(lower, "gemini-2.5") || strings.HasSuffix(lower, "-tiered") {
+		return true
 	}
-	return len(lower) >= 5 && (lower[:5] == "chat_" || lower[:4] == "tab_" || containsSubstr(lower, "preview"))
+	return false
 }
 
 func containsSubstr(s, substr string) bool {
