@@ -403,6 +403,8 @@
     requestAnimationFrame(() => drawPoolCircuits());
   }
 
+  const renderAccounts = renderAccountsGrid;
+
   function drawPoolCircuits() {
     if (!accountsGrid || rawAccountsData.length < 2) {
       const existing = document.getElementById('pool-circuit-canvas');
@@ -1127,12 +1129,14 @@
           modelsSourceBadge.textContent = 'Antigravity IDE (Live)';
           modelsSourceBadge.className = 'badge badge-success mono';
           modelsSourceBadge.title = 'Discovered dynamically from running language_server';
-        } else if (data.source === 'quota_buckets') {
-          modelsSourceBadge.textContent = 'Quota Buckets';
+        } else if (data.source === 'cloud_code_pa' || data.source === 'quota_buckets') {
+          modelsSourceBadge.textContent = 'Cloud Code PA (Live)';
           modelsSourceBadge.className = 'badge badge-info mono';
+          modelsSourceBadge.title = 'Discovered dynamically from Google Cloud Code PA API';
         } else {
           modelsSourceBadge.textContent = 'Standard Catalog';
           modelsSourceBadge.className = 'badge badge-neutral mono';
+          modelsSourceBadge.title = 'Built-in standard model catalog';
         }
       }
 
