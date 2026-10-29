@@ -54,7 +54,7 @@ func TestFallback_Adversarial_DirectSecondaryRequest429_RotatesAccount(t *testin
 
 	// Verify rotation happened
 	ctx := context.Background()
-	active, err := env.AccountRepo.GetActive(ctx)
+	active, err := env.AccountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
 	if err != nil || active == nil {
 		t.Fatalf("failed to get active account: %v", err)
 	}
@@ -151,8 +151,10 @@ func TestFallback_Adversarial_CrossFamilyFallbackAndReplay(t *testing.T) {
 		t.Errorf("attempt 3 mismatch: bearer=%s, path=%s", recorded[2].AuthBearer, recorded[2].Path)
 	}
 
+	// The 429 on the replayed secondary (gemini-2.5-flash) drives rotation, so the
+	// gemini pin moves to acc-cross-2.
 	ctx := context.Background()
-	active, err := env.AccountRepo.GetActive(ctx)
+	active, err := env.AccountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
 	if err != nil || active == nil || active.ID != "acc-cross-2" {
 		t.Errorf("expected active account to be acc-cross-2, got: %v", active)
 	}
@@ -291,7 +293,7 @@ func TestFallback_Adversarial_AntiStampede_MixedPrimarySecondaryBurst(t *testing
 
 	// Verify active account is acc-stamp-2
 	ctx := context.Background()
-	active, err := env.AccountRepo.GetActive(ctx)
+	active, err := env.AccountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
 	if err != nil || active == nil || active.ID != "acc-stamp-2" {
 		t.Errorf("expected active account to be acc-stamp-2, got: %v", active)
 	}

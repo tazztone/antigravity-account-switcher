@@ -73,8 +73,18 @@ func TestTier3_QuotaPoller_AutoRestore(t *testing.T) {
 	if len(buckets) == 0 {
 		t.Fatalf("expected quota bucket saved in DB, got 0")
 	}
-	if buckets[0].RemainingFraction != 0.90 {
-		t.Errorf("expected remaining fraction 0.90, got %f", buckets[0].RemainingFraction)
+	var targetBucket *domain.QuotaBucket
+	for _, b := range buckets {
+		if b.BucketID == "gemini-2.5-pro" {
+			targetBucket = b
+			break
+		}
+	}
+	if targetBucket == nil {
+		targetBucket = buckets[0]
+	}
+	if targetBucket.RemainingFraction != 0.90 {
+		t.Errorf("expected remaining fraction 0.90, got %f", targetBucket.RemainingFraction)
 	}
 }
 

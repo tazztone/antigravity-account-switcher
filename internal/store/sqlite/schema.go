@@ -91,6 +91,45 @@ CREATE TABLE IF NOT EXISTS proxy_events (
 CREATE INDEX IF NOT EXISTS idx_proxy_events_created_at ON proxy_events(created_at);
 `,
 	},
+	{
+		Version:     2,
+		Description: "active_category_accounts",
+		SQL: `
+-- 6. Model category active accounts table
+CREATE TABLE IF NOT EXISTS active_category_accounts (
+    category TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
+);
+`,
+	},
+	{
+		Version:     3,
+		Description: "account_model_rules",
+		SQL: `
+-- 7. Per-account model eligibility and fallback routing rules
+CREATE TABLE IF NOT EXISTS account_model_rules (
+    account_id          TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    model_id            TEXT NOT NULL,
+    display_name        TEXT NOT NULL DEFAULT '',
+    category            TEXT NOT NULL DEFAULT 'unknown',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    fallback_account_id TEXT NOT NULL DEFAULT '',
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY (account_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_model_rules_model ON account_model_rules(model_id, enabled);
+`,
+	},
+	{
+		Version:     4,
+		Description: "category_routing_mode_and_disabled_categories",
+		SQL: `
+-- 8. Add routing_mode to active_category_accounts and disabled_categories to accounts
+ALTER TABLE active_category_accounts ADD COLUMN routing_mode TEXT NOT NULL DEFAULT 'pool';
+ALTER TABLE accounts ADD COLUMN disabled_categories TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.
@@ -137,6 +176,18 @@ func Migrate(db *DB) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("failed to commit migration %d: %w", m.Version, err)
 		}
+	}
+
+	// Seed active_category_accounts if empty and an active account exists
+	seedSQL := `
+	INSERT OR IGNORE INTO active_category_accounts (category, account_id)
+	SELECT 'claude_gpt', id FROM accounts WHERE is_active = 1
+	UNION ALL
+	SELECT 'gemini', id FROM accounts WHERE is_active = 1
+	UNION ALL
+	SELECT 'gemini_argon', id FROM accounts WHERE is_active = 1;`
+	if _, err := db.ExecContext(ctx, seedSQL); err != nil {
+		return fmt.Errorf("failed to seed active_category_accounts: %w", err)
 	}
 
 	return nil

@@ -93,9 +93,10 @@ func TestTier4_LauncherScriptExecution(t *testing.T) {
 		t.Fatalf("lookPath echo: %v", err)
 	}
 
+	tmpDir := t.TempDir()
 	cmd := exec.CommandContext(ctx, scriptPath, "--bin", echoBin, "launcher script test successful")
 	cmd.Dir = filepath.Dir(scriptPath)
-	cmd.Env = append(os.Environ(), "ANTIGRAVITY_PORT=0")
+	cmd.Env = append(os.Environ(), "ANTIGRAVITY_PORT=0", "XDG_CONFIG_HOME="+tmpDir, "HOME="+tmpDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script execution failed: %v (output: %s)", err, string(out))

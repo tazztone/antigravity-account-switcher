@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -101,5 +102,86 @@ func TestDoLSRequest_MockServer(t *testing.T) {
 	}
 	if res["status"] != "ok" {
 		t.Errorf("expected status ok, got %v", res["status"])
+	}
+}
+
+func TestExtractModels_Disambiguation(t *testing.T) {
+	payload := &modelsPayload{
+		Models: map[string]modelPayloadItem{
+			"gemini-3.5-flash-lite": {
+				DisplayName: "Gemini 3.5 Flash Lite",
+			},
+			"gemini-3.5-flash-lite-high": {
+				DisplayName: "Gemini 3.5 Flash Lite",
+			},
+			"gemini-3.5-flash-lite-preview": {
+				DisplayName: "Gemini 3.5 Flash Lite",
+			},
+			"claude-opus-5.5-high": {
+				DisplayName: "Claude Opus 5.5 (High)",
+			},
+		},
+	}
+
+	models, err := extractModels(payload)
+	if err != nil {
+		t.Fatalf("extractModels failed: %v", err)
+	}
+
+	if len(models) != 4 {
+		t.Fatalf("expected 4 models, got %d", len(models))
+	}
+
+	names := make(map[string]bool)
+	for _, m := range models {
+		if names[m.DisplayName] {
+			t.Errorf("duplicate display name found after disambiguation: %s", m.DisplayName)
+		}
+		names[m.DisplayName] = true
+	}
+
+	// Verify specific variants were recognized
+	if !names["Claude Opus 5.5 (High)"] {
+		t.Error("expected Claude Opus 5.5 (High) to remain unchanged")
+	}
+	if !names["Gemini 3.5 Flash Lite (High)"] {
+		t.Errorf("expected Gemini 3.5 Flash Lite (High), found: %+v", names)
+	}
+	if !names["Gemini 3.5 Flash Lite (Preview)"] {
+		t.Errorf("expected Gemini 3.5 Flash Lite (Preview), found: %+v", names)
+	}
+}
+
+func TestExtractModels_FiltersDisabledModels(t *testing.T) {
+	payload := &modelsPayload{
+		Models: map[string]modelPayloadItem{
+			"gemini-3.8-flash-high": {
+				DisplayName: "Gemini 3.8 Flash (High)",
+				Recommended: true,
+			},
+			"gemini-4-argon-disabled": {
+				DisplayName: "Gemini 4 Argon",
+				Disabled:    true,
+				Recommended: true,
+			},
+			"claude-opus-4.6": {
+				DisplayName: "Claude Opus 4.6",
+				Disabled:    false,
+			},
+		},
+	}
+
+	models, err := extractModels(payload)
+	if err != nil {
+		t.Fatalf("extractModels failed: %v", err)
+	}
+
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models after filtering disabled, got %d", len(models))
+	}
+	for _, m := range models {
+		if strings.Contains(m.ID, "argon") || strings.Contains(m.ID, "disabled") {
+			t.Errorf("expected disabled model to be filtered out, got: %+v", m)
+		}
 	}
 }

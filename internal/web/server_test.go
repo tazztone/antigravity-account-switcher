@@ -76,6 +76,10 @@ func TestServer_StaticFiles(t *testing.T) {
 	if !strings.Contains(respJS.Header.Get("Content-Type"), "javascript") {
 		t.Errorf("expected javascript content-type, got %s", respJS.Header.Get("Content-Type"))
 	}
+	bodyJS, _ := io.ReadAll(respJS.Body)
+	if !strings.Contains(string(bodyJS), "bucket-active-pool") || !strings.Contains(string(bodyJS), "bucket-standby-pool") || !strings.Contains(string(bodyJS), "drawPoolCircuits") || !strings.Contains(string(bodyJS), "bucket-unentitled") || !strings.Contains(string(bodyJS), "hasArgonAccess") {
+		t.Errorf("expected app.js to contain bucket routing, standby pool, drawPoolCircuits, and argon entitlement logic")
+	}
 
 	// 3. /dist/style.css
 	respCSS, err := http.Get(ts.URL + "/dist/style.css")
@@ -85,6 +89,10 @@ func TestServer_StaticFiles(t *testing.T) {
 	defer respCSS.Body.Close()
 	if respCSS.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK for /dist/style.css, got %d", respCSS.StatusCode)
+	}
+	bodyCSS, _ := io.ReadAll(respCSS.Body)
+	if !strings.Contains(string(bodyCSS), ".bucket-active-pool") || !strings.Contains(string(bodyCSS), ".pool-circuit-canvas") || !strings.Contains(string(bodyCSS), ".circuit-path") || !strings.Contains(string(bodyCSS), ".bucket-unentitled") || !strings.Contains(string(bodyCSS), ".badge-unentitled") {
+		t.Errorf("expected style.css to contain bucket routing, pool circuit canvas, circuit path, and unentitled bucket styling")
 	}
 
 	// 4. SPA fallback
@@ -719,6 +727,7 @@ type mockFallbackSetter struct {
 	primary   string
 	secondary string
 	enabled   bool
+	strategy  string
 	calls     int
 }
 
@@ -729,6 +738,12 @@ func (m *mockFallbackSetter) SetFallbackConfig(p, s string, e bool) {
 	m.secondary = s
 	m.enabled = e
 	m.calls++
+}
+
+func (m *mockFallbackSetter) SetFallbackStrategy(s string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.strategy = s
 }
 
 func TestServer_ConfigAPI(t *testing.T) {

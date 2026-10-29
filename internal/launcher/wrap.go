@@ -34,6 +34,8 @@ type Config struct {
 	ModelPrimary             string
 	ModelSecondary           string
 	FallbackSecondaryEnabled bool
+	FallbackStrategy         string
+	MaxBodyMB                int
 	Stdin                    io.Reader
 	Stdout                   io.Writer
 	Stderr                   io.Writer
@@ -46,6 +48,11 @@ type Config struct {
 
 // Option configures Wrap behavior.
 type Option func(*Config)
+
+// WithMaxBodyMB sets the maximum request body buffer size in megabytes.
+func WithMaxBodyMB(mb int) Option {
+	return func(c *Config) { c.MaxBodyMB = mb }
+}
 
 // WithModelFallback configures the model fallback primary, secondary, and enabled flag.
 func WithModelFallback(primary, secondary string, enabled bool) Option {
@@ -222,6 +229,12 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			appCfg.ModelSecondary = cfg.ModelSecondary
 		}
 		appCfg.FallbackSecondaryEnabled = cfg.FallbackSecondaryEnabled
+		if cfg.FallbackStrategy != "" {
+			appCfg.FallbackStrategy = cfg.FallbackStrategy
+		}
+		if cfg.MaxBodyMB > 0 {
+			appCfg.MaxBodyMB = cfg.MaxBodyMB
+		}
 
 		broadcaster = proxy.NewBroadcaster(100)
 		failoverEngine = proxy.NewFailoverEngine(
@@ -229,7 +242,8 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			broadcaster,
 			eventRepo,
 			proxy.WithQuotaRepository(quotaRepo),
-			proxy.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+			proxy.WithModelFallback(appCfg.ModelPrimary, appCfg.ModelSecondary, appCfg.FallbackSecondaryEnabled),
+			proxy.WithFallbackStrategy(appCfg.FallbackStrategy),
 		)
 		oauthService = oauth.NewOAuthService(accRepo)
 
@@ -250,6 +264,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			proxy.WithEventRepository(eventRepo),
 			proxy.WithFailoverEngine(failoverEngine),
 			proxy.WithTokenRefresher(tokenRefresher),
+			proxy.WithMaxBodyBytes(appCfg.MaxBodyBytes()),
 		}
 		if cfg.TargetURL != "" {
 			proxyOpts = append(proxyOpts, proxy.WithTargetURL(cfg.TargetURL))
@@ -383,8 +398,14 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		}()
 	}
 
-	// 4. Construct child process
-	childCmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	// 4. Construct child process (re-resolving binary if unlinked by auto-updater)
+	targetBin := cmdArgs[0]
+	if _, err := exec.LookPath(targetBin); err != nil {
+		if resolved, rErr := config.ResolveAntigravityBin(targetBin); rErr == nil && resolved != "" {
+			targetBin = resolved
+		}
+	}
+	childCmd := exec.CommandContext(ctx, targetBin, cmdArgs[1:]...)
 	scopedEnv := BuildScopedEnv(os.Environ(), proxyURL)
 
 	// Ensure APPIMAGE is defined for Electron auto-updater (AppImageUpdater) to work seamlessly.
@@ -398,7 +419,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		}
 	}
 	if !hasAppImage {
-		targetExe := cmdArgs[0]
+		targetExe := targetBin
 		if abs, err := filepath.Abs(targetExe); err == nil {
 			targetExe = abs
 		}

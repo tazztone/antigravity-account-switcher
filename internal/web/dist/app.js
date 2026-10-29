@@ -9,6 +9,7 @@
   let rawTimelineData = [];
   let rawAccountsData = [];
   let rawModelsData = [];
+  let rawCategoryModes = { claude_gpt: 'pool', gemini: 'pool', gemini_argon: 'pool' };
   let currentAppConfig = {
     model_primary: 'gemini-2.5-pro',
     model_secondary: 'gemini-2.5-flash',
@@ -39,16 +40,10 @@
   const gridMaxLabel = document.getElementById('grid-max-label');
   const gridMidLabel = document.getElementById('grid-mid-label');
 
-  // Model Fallback DOM Elements
-  const fallbackToggle = document.getElementById('fallback-enabled-toggle');
-  const fallbackToggleStatus = document.getElementById('fallback-toggle-status');
-  const selectModelPrimary = document.getElementById('select-model-primary');
-  const selectModelSecondary = document.getElementById('select-model-secondary');
-  const btnSaveConfig = document.getElementById('btn-save-config');
+  // Discovery Controls DOM Elements
   const btnRefreshModels = document.getElementById('btn-refresh-models');
   const refreshModelsIcon = document.getElementById('refresh-models-icon');
   const modelsSourceBadge = document.getElementById('models-source-badge');
-  const configStatusMsg = document.getElementById('config-status-msg');
 
   // =========================================================================
   // Formatting & Utility Helpers
@@ -331,6 +326,11 @@
         const standby = Math.max(0, (data.total_accounts || 0) - (data.active_account ? 1 : 0));
         accountsSubtext.textContent = standby > 0 ? `${standby} standby failover target${standby === 1 ? '' : 's'}` : 'Single account routing';
       }
+
+      if (data.category_modes) {
+        rawCategoryModes = Object.assign({}, rawCategoryModes, data.category_modes);
+      }
+      updateHeaderRoutingStrip();
     } catch (e) {
       console.warn('Failed to fetch status:', e);
     }
@@ -340,6 +340,14 @@
   // Accounts Pool & Live Quota Matrix
   // =========================================================================
 
+  function updateHeaderRoutingStrip() {
+    const stripEl = document.getElementById('header-routing-strip');
+    if (stripEl) {
+      stripEl.innerHTML = '';
+      stripEl.style.display = 'none';
+    }
+  }
+
   async function fetchAccounts() {
     try {
       const res = await fetch('/api/accounts');
@@ -347,12 +355,17 @@
       const accounts = await res.json();
       rawAccountsData = Array.isArray(accounts) ? accounts : [];
 
+      if (rawAccountsData.length > 0 && rawAccountsData[0].category_modes) {
+        rawCategoryModes = Object.assign({}, rawCategoryModes, rawAccountsData[0].category_modes);
+      }
+
       const countBadge = document.getElementById('accounts-count-badge');
       if (countBadge) {
         countBadge.textContent = `${rawAccountsData.length} account${rawAccountsData.length === 1 ? '' : 's'}`;
       }
 
       renderAccountsGrid();
+      updateHeaderRoutingStrip();
     } catch (e) {
       console.warn('Failed to fetch accounts:', e);
     }
@@ -386,6 +399,108 @@
       const card = createAccountCard(acc);
       accountsGrid.appendChild(card);
     });
+
+    requestAnimationFrame(() => drawPoolCircuits());
+  }
+
+  const renderAccounts = renderAccountsGrid;
+
+  function drawPoolCircuits() {
+    if (!accountsGrid || rawAccountsData.length < 2) {
+      const existing = document.getElementById('pool-circuit-canvas');
+      if (existing) existing.remove();
+      return;
+    }
+
+    let svg = document.getElementById('pool-circuit-canvas');
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = 'pool-circuit-canvas';
+      svg.setAttribute('class', 'pool-circuit-canvas');
+      accountsGrid.appendChild(svg);
+    }
+    svg.innerHTML = '';
+
+    const gridRect = accountsGrid.getBoundingClientRect();
+    if (gridRect.width === 0 || gridRect.height === 0) return;
+
+    svg.setAttribute('viewBox', `0 0 ${gridRect.width} ${gridRect.height}`);
+
+    const categories = ['claude_gpt', 'gemini', 'gemini_argon'];
+
+    categories.forEach(catKey => {
+      const activeEl = accountsGrid.querySelector(`.quota-group.bucket-active-pool[data-category-group="${catKey}"]`);
+      const standbyEls = Array.from(accountsGrid.querySelectorAll(`.quota-group.bucket-standby-pool[data-category-group="${catKey}"]`));
+
+      if (!activeEl || standbyEls.length === 0) return;
+
+      const sequence = [activeEl, ...standbyEls];
+
+      for (let i = 0; i < sequence.length - 1; i++) {
+        const fromEl = sequence[i];
+        const toEl = sequence[i + 1];
+
+        const r1 = fromEl.getBoundingClientRect();
+        const r2 = toEl.getBoundingClientRect();
+
+        const h1 = fromEl.querySelector('.quota-group-header');
+        const h2 = toEl.querySelector('.quota-group-header');
+        const r1H = h1 ? h1.getBoundingClientRect() : r1;
+        const r2H = h2 ? h2.getBoundingClientRect() : r2;
+
+        let x1, y1, x2, y2;
+
+        if (r1.left < r2.left) {
+          x1 = r1.right - gridRect.left;
+          y1 = (r1H.top + r1H.bottom) / 2 - gridRect.top;
+          x2 = r2.left - gridRect.left;
+          y2 = (r2H.top + r2H.bottom) / 2 - gridRect.top;
+        } else if (r1.left > r2.left) {
+          x1 = r1.left - gridRect.left;
+          y1 = (r1H.top + r1H.bottom) / 2 - gridRect.top;
+          x2 = r2.right - gridRect.left;
+          y2 = (r2H.top + r2H.bottom) / 2 - gridRect.top;
+        } else {
+          x1 = (r1.left + r1.right) / 2 - gridRect.left;
+          y1 = r1.bottom - gridRect.top;
+          x2 = (r2.left + r2.right) / 2 - gridRect.left;
+          y2 = r2.top - gridRect.top;
+        }
+
+        const dx = Math.abs(x2 - x1) * 0.5;
+        let d = '';
+
+        if (Math.abs(r1.left - r2.left) < 10) {
+          d = `M ${x1} ${y1} C ${x1} ${y1 + 15}, ${x2} ${y2 - 15}, ${x2} ${y2}`;
+        } else {
+          const cx1 = x1 + (x2 > x1 ? dx : -dx);
+          const cx2 = x2 - (x2 > x1 ? dx : -dx);
+          d = `M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`;
+        }
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('class', 'circuit-path');
+        path.setAttribute('data-category', catKey);
+        path.setAttribute('d', d);
+        svg.appendChild(path);
+
+        const dot1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot1.setAttribute('class', 'circuit-dot origin-dot');
+        dot1.setAttribute('data-category', catKey);
+        dot1.setAttribute('cx', x1);
+        dot1.setAttribute('cy', y1);
+        dot1.setAttribute('r', '2.5');
+        svg.appendChild(dot1);
+
+        const dot2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot2.setAttribute('class', 'circuit-dot target-dot');
+        dot2.setAttribute('data-category', catKey);
+        dot2.setAttribute('cx', x2);
+        dot2.setAttribute('cy', y2);
+        dot2.setAttribute('r', '2.5');
+        svg.appendChild(dot2);
+      }
+    });
   }
 
   function createAccountCard(acc) {
@@ -398,22 +513,24 @@
 
     const buckets = acc.buckets || [];
 
-    function findBucket(windowPattern, namePattern) {
+    function findBucket(windowPattern, namePattern, excludePattern) {
       return buckets.find(b => {
         const idOrName = ((b.bucket_id || '') + ' ' + (b.display_name || '')).toLowerCase();
         const windowMatch = (b.window || '').toLowerCase().includes(windowPattern.toLowerCase());
-        const nameMatch = idOrName.includes(namePattern.toLowerCase());
+        const nameMatch = idOrName.includes(namePattern.toLowerCase()) &&
+          !(excludePattern && idOrName.includes(excludePattern.toLowerCase()));
         return windowMatch && nameMatch;
       }) || null;
     }
 
     const claude5h = findBucket('5h', '3p') || findBucket('5h', 'claude');
     const claudeWeekly = findBucket('weekly', '3p') || findBucket('weekly', 'claude');
-    const gemini5h = findBucket('5h', 'gemini');
-    const geminiWeekly = findBucket('weekly', 'gemini');
+    const argonWeekly = findBucket('weekly', 'argon');
+    const gemini5h = findBucket('5h', 'gemini', 'argon');
+    const geminiWeekly = findBucket('weekly', 'gemini', 'argon');
 
     // Identify standard buckets to find any custom/other buckets
-    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly].filter(Boolean));
+    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly, argonWeekly].filter(Boolean));
     const extraBuckets = buckets.filter(b => !standardBucketSet.has(b));
 
     function renderQuotaRow(label, bucket) {
@@ -472,59 +589,364 @@
       `;
     }
 
-    // Build Model Groups
-    let quotaBodyHtml = '';
-    if (buckets.length === 0) {
-      quotaBodyHtml = `
-        <div class="quota-group" style="text-align: center; padding: 0.75rem 0.5rem;">
-          <div class="text-xs text-muted">Awaiting quota poll from Google Cloud Code PA...</div>
-          <div class="text-xs text-secondary mt-1">Automatic sync occurs every 60s</div>
-        </div>
-      `;
-    } else {
-      let extraHtml = '';
-      if (extraBuckets.length > 0) {
-        extraHtml = `
-          <div class="quota-group">
-            <div class="quota-group-header">
-              <span class="quota-group-name">Additional Quota Limits</span>
-              <span class="quota-group-models">${extraBuckets.length} bucket${extraBuckets.length === 1 ? '' : 's'}</span>
-            </div>
-            ${extraBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('')}
-          </div>
-        `;
+    // Per-category interactive routing state (Bucket Borders & In-Header Controls)
+    const activeCats = acc.active_categories || [];
+    const disabledCats = acc.disabled_categories || [];
+
+    function getCategoryRouting(catKey, catLabel) {
+      const isPinned = activeCats.includes(catKey);
+      const isDisabled = disabledCats.includes(catKey);
+      const catMode = (acc.category_modes && acc.category_modes[catKey]) || rawCategoryModes[catKey] || 'pool';
+
+      let pillClass = '';
+      let groupClass = '';
+      let actionIcon = '';
+      let actionTitle = '';
+      let nextMode = '';
+      let nextEnabled = false;
+      let isInPool = false;
+
+      if (isPinned) {
+        if (catMode === 'solo') {
+          pillClass = 'state-active-solo';
+          groupClass = 'bucket-active-solo';
+          actionIcon = '🔒';
+          actionTitle = 'Solo Mode active (rotation blocked). Click to switch to Pool';
+          nextMode = 'pool';
+          isInPool = false;
+        } else {
+          pillClass = 'state-active-pool';
+          groupClass = 'bucket-active-pool';
+          actionIcon = '🔄';
+          actionTitle = 'Pool Mode active (auto-rotates). Click to switch to Solo';
+          nextMode = 'solo';
+          isInPool = true;
+        }
+      } else {
+        if (isDisabled) {
+          pillClass = 'state-excluded';
+          groupClass = 'bucket-excluded';
+          actionIcon = '🚫';
+          actionTitle = 'Excluded from category failover. Click to re-enable';
+          nextEnabled = true;
+          isInPool = false;
+        } else if (catMode === 'solo') {
+          pillClass = 'state-standby-solo';
+          groupClass = 'bucket-standby-solo';
+          actionIcon = '🔒';
+          actionTitle = 'Solo Mode active on serving account (rotation blocked). Click to switch to Pool';
+          nextMode = 'pool';
+          isInPool = false;
+        } else {
+          pillClass = 'state-standby';
+          groupClass = 'bucket-standby-pool';
+          actionIcon = '✓';
+          actionTitle = 'Standby failover target. Click to exclude from pool';
+          nextEnabled = false;
+          isInPool = true;
+        }
       }
 
-      quotaBodyHtml = `
-        <!-- Group 1: Claude & GPT Models (3P) -->
-        <div class="quota-group">
-          <div class="quota-group-header">
-            <span class="quota-group-name">Claude & GPT Models</span>
-            <span class="quota-group-models">Opus, Sonnet, GPT-OSS</span>
-          </div>
-          ${renderQuotaRow('5-Hour Sliding Limit', claude5h)}
-          ${renderQuotaRow('Weekly Sliding Limit', claudeWeekly)}
+      const pillHtml = `
+        <div class="category-pin-pill ${pillClass}">
+          <button type="button" class="pill-label-zone"
+                  data-id="${escapeHtml(acc.id)}"
+                  data-category="${catKey}"
+                  title="${isPinned ? `${catLabel} is currently serving traffic on this account` : `Click to activate ${catLabel} on this account`}"
+                  aria-label="${isPinned ? `${catLabel} active on ${escapeHtml(acc.id.slice(0, 8))}` : `Activate ${catLabel} on ${escapeHtml(acc.id.slice(0, 8))}`}">
+            <span class="pin-icon">${isPinned ? '●' : (isDisabled ? '🚫' : '○')}</span>
+            <span class="pin-label">${isPinned ? 'Active' : 'Activate'}</span>
+          </button>
+          <button type="button" class="pill-action-zone"
+                  data-id="${escapeHtml(acc.id)}"
+                  data-category="${catKey}"
+                  data-is-pinned="${isPinned ? 'true' : 'false'}"
+                  data-next-mode="${nextMode}"
+                  data-next-enabled="${nextEnabled ? 'true' : 'false'}"
+                  title="${actionTitle}"
+                  aria-label="${actionTitle}">
+            <span class="action-icon">${actionIcon}</span>
+          </button>
         </div>
+      `;
 
-        <!-- Group 2: Gemini Models -->
-        <div class="quota-group">
-          <div class="quota-group-header">
-            <span class="quota-group-name">Gemini Models</span>
-            <span class="quota-group-models">Flash, Pro</span>
+      return { groupClass, pillHtml, isInPool };
+    }
+
+    const claudeRouting = getCategoryRouting('claude_gpt', 'Claude/GPT');
+    const geminiRouting = getCategoryRouting('gemini', 'Gemini');
+    const argonRouting = getCategoryRouting('gemini_argon', 'Argon');
+
+    // Model rules categorized by bucket
+    const rules = acc.model_rules || [];
+
+    function parseModelTierInfo(r) {
+      const rawMid = (r.model_id || '').trim();
+      let dName = (r.display_name || rawMid).trim();
+      let baseName = dName;
+      let tier = '';
+
+      // 1. If dName is raw slug like "gemini-3.8-flash-tiered", humanize baseName & extract tier
+      if (/^[a-z0-9_.-]+$/.test(dName) && dName.includes('-')) {
+        const parts = dName.split('-');
+        const lastPart = parts[parts.length - 1].toLowerCase();
+        if (['high', 'medium', 'med', 'low', 'thinking', 'preview', 'tiered', 'image'].includes(lastPart)) {
+          tier = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+          parts.pop();
+        }
+        baseName = parts.map(p => {
+          const pl = p.toLowerCase();
+          if (pl === 'gemini') return 'Gemini';
+          if (pl === 'claude') return 'Claude';
+          if (pl === 'gpt') return 'GPT';
+          if (pl === 'pro') return 'Pro';
+          if (pl === 'flash') return 'Flash';
+          if (pl === 'lite') return 'Lite';
+          if (pl === 'argon') return 'Argon';
+          return p.charAt(0).toUpperCase() + p.slice(1);
+        }).join(' ');
+      }
+
+      // 2. Check for explicit standard tier in parentheses: (High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)
+      const tierMatch = baseName.match(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i);
+      if (tierMatch) {
+        tier = tierMatch[1];
+        tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
+        baseName = baseName.replace(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
+      } else {
+        // 3. Check for disambiguated model ID in parentheses like (gemini-2.5-flash-lite)
+        const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
+        if (disambigMatch) {
+          const innerSlug = disambigMatch[1].toLowerCase();
+          if (innerSlug.includes('2.5')) tier = '2.5';
+          else if (innerSlug.includes('3.5')) tier = '3.5';
+          else if (innerSlug.includes('3.8')) tier = '3.8';
+          else if (innerSlug.includes('thinking')) tier = 'Think';
+          else if (innerSlug.includes('preview')) tier = 'Preview';
+          else tier = 'Std';
+          baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
+        }
+      }
+
+      // 4. Fallback: inspect model_id suffix if tier is still empty
+      if (!tier) {
+        const mid = rawMid.toLowerCase();
+        if (mid.endsWith('-high')) tier = 'High';
+        else if (mid.endsWith('-medium') || mid.endsWith('-med')) tier = 'Med';
+        else if (mid.endsWith('-low')) tier = 'Low';
+        else if (mid.endsWith('-thinking')) tier = 'Thinking';
+        else if (mid.endsWith('-preview')) tier = 'Preview';
+        else if (mid.endsWith('-tiered')) tier = 'Tiered';
+      }
+
+      return { baseName, tier };
+    }
+
+    function formatTierLabel(tier) {
+      const t = tier.toLowerCase();
+      if (t === 'medium') return 'Med';
+      if (t === 'thinking') return 'Think';
+      return tier;
+    }
+
+    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
+    rules.forEach(r => {
+      const g = getModelRuleCategory(r);
+      if (g && groupedRules[g]) {
+        groupedRules[g].push(r);
+      }
+    });
+
+    function buildModelGroupRows(ruleList, groupKey) {
+      if (!ruleList || ruleList.length === 0) return { count: 0, html: '' };
+      const tierWeights = { 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'thinking': 4, 'think': 4, '2.5': 5, '3.5': 6, '3.8': 7, 'preview': 8, 'tiered': 9, 'image': 10 };
+      const baseModelMap = new Map();
+      ruleList.forEach(r => {
+        const { baseName, tier } = parseModelTierInfo(r);
+        if (!baseModelMap.has(baseName)) {
+          baseModelMap.set(baseName, { baseName, rules: [], tiers: [] });
+        }
+        const item = baseModelMap.get(baseName);
+        item.rules.push(r);
+        if (tier) {
+          if (!item.tiers.some(t => t.tier.toLowerCase() === tier.toLowerCase())) {
+            item.tiers.push({ tier, rule: r });
+          }
+        }
+      });
+
+      baseModelMap.forEach(item => {
+        item.tiers.sort((a, b) => (tierWeights[a.tier.toLowerCase()] || 99) - (tierWeights[b.tier.toLowerCase()] || 99));
+      });
+
+      const rowsHtml = Array.from(baseModelMap.values()).map(item => {
+        const modelIds = item.rules.map(r => r.model_id).join(',');
+
+        let badgesHtml = '';
+        if (item.tiers.length > 0) {
+          badgesHtml = `
+            <div class="model-tier-badges">
+              ${item.tiers.map(({ tier, rule }) => `
+                <span class="model-tier-badge"
+                      title="${escapeHtml(rule.display_name || rule.model_id)}">
+                  ${escapeHtml(formatTierLabel(tier))}
+                </span>
+              `).join('')}
+            </div>
+          `;
+        }
+
+        let fallbackHtml = '';
+        const isFallbackActive = Boolean(currentAppConfig.fallback_secondary_enabled);
+        const isPrimary = isFallbackActive && item.rules.some(r => r.model_id === currentAppConfig.model_primary);
+        const isSecondary = isFallbackActive && item.rules.some(r => r.model_id === currentAppConfig.model_secondary);
+
+        if (isPrimary) {
+          const secModel = rawModelsData.find(m => m.id === currentAppConfig.model_secondary);
+          const secName = secModel?.display_name || currentAppConfig.model_secondary;
+          fallbackHtml = `
+            <button type="button" class="model-fallback-btn is-active"
+                    data-action="configure-fallback"
+                    data-model-ids="${escapeHtml(modelIds)}"
+                    data-base-name="${escapeHtml(item.baseName)}"
+                    title="Active 429 Fallback: Retries on ${escapeHtml(secName)}">
+              ↪ ${escapeHtml(secName)}
+            </button>
+          `;
+        } else if (isSecondary) {
+          fallbackHtml = `
+            <span class="model-fallback-badge" title="Target fallback model when primary hits 429">
+              fallback target
+            </span>
+          `;
+        } else {
+          fallbackHtml = `
+            <button type="button" class="model-fallback-btn"
+                    data-action="set-fallback"
+                    data-model-ids="${escapeHtml(modelIds)}"
+                    data-base-name="${escapeHtml(item.baseName)}"
+                    title="Set 429 fallback for ${escapeHtml(item.baseName)}">
+              ↪
+            </button>
+          `;
+        }
+
+        return `
+          <div class="model-rule-row" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
+            <div class="model-rule-info" title="${escapeHtml(modelIds)}">
+              <span class="model-rule-bullet">▪</span>
+              <span class="model-rule-name">${escapeHtml(item.baseName)}</span>
+              ${badgesHtml}
+            </div>
+            ${fallbackHtml}
           </div>
-          ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
-          ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
-        </div>
+        `;
+      }).join('');
 
-        ${extraHtml}
+      return { count: baseModelMap.size, html: rowsHtml };
+    }
+
+    function renderBucketModels(groupKey, rulesForGroup) {
+      const std = buildModelGroupRows(rulesForGroup, groupKey);
+
+      if (std.count === 0) {
+        return '';
+      }
+
+      return `
+        <div class="bucket-models-section" data-group="${groupKey}">
+          <div class="bucket-models-header">
+            <span class="bucket-models-title">Models (${std.count})</span>
+          </div>
+          <div class="bucket-models-rows">
+            ${std.html}
+          </div>
+        </div>
       `;
     }
 
+    const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude);
+    const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini);
+    const argonModelsHtml = renderBucketModels('argon', groupedRules.argon);
+    const hasArgonAccess = Boolean(argonWeekly) ||
+      (groupedRules.argon && groupedRules.argon.length > 0) ||
+      rules.some(r => /5-5/i.test(r.model_id) || (/argon/i.test(r.model_id) && !r.model_id.includes('disabled')));
+
+    // Build Model Groups with Bucket-Level Borders
+    let extraHtml = '';
+    if (extraBuckets.length > 0) {
+      extraHtml = `
+        <div class="quota-group">
+          <div class="quota-group-header">
+            <span class="quota-group-name">Additional Quota Limits</span>
+          </div>
+          ${extraBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('')}
+        </div>
+      `;
+    }
+
+    const quotaBodyHtml = `
+      <!-- Group 1: Claude & GPT Models (3P) -->
+      <div class="quota-group ${claudeRouting.groupClass}" data-category-group="claude_gpt" data-in-pool="${claudeRouting.isInPool ? 'true' : 'false'}">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Claude & GPT Models</span>
+          ${claudeRouting.pillHtml}
+        </div>
+        ${renderQuotaRow('5-Hour Sliding Limit', claude5h)}
+        ${renderQuotaRow('Weekly Sliding Limit', claudeWeekly)}
+        ${claudeModelsHtml}
+      </div>
+
+      <!-- Group 2: Gemini Models -->
+      <div class="quota-group ${geminiRouting.groupClass}" data-category-group="gemini" data-in-pool="${geminiRouting.isInPool ? 'true' : 'false'}">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Gemini Models</span>
+          ${geminiRouting.pillHtml}
+        </div>
+        ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
+        ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
+        ${geminiModelsHtml}
+      </div>
+
+      <!-- Group 3: Gemini 4 Argon -->
+      ${hasArgonAccess ? `
+      <div class="quota-group ${argonRouting.groupClass}" data-category-group="gemini_argon" data-in-pool="${argonRouting.isInPool ? 'true' : 'false'}">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Gemini 4 Argon</span>
+          ${argonRouting.pillHtml}
+        </div>
+        ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
+        ${argonModelsHtml}
+      </div>
+      ` : `
+      <div class="quota-group bucket-unentitled" data-category-group="gemini_argon" data-in-pool="false">
+        <div class="quota-group-header">
+          <span class="quota-group-name">Gemini 4 Argon</span>
+          <span class="badge-unentitled" title="This account does not have a paid Pro plan with Argon access">No Plan Access</span>
+        </div>
+        <div class="quota-row-unentitled">Not available on this account tier</div>
+      </div>
+      `}
+
+      ${extraHtml}
+    `;
+
     // Status badge formatting
     let statusBadgeClass = 'badge-neutral';
-    if (isExhausted) statusBadgeClass = 'badge-danger';
-    else if (isActive) statusBadgeClass = 'badge-success';
-    else if (acc.status === 'error') statusBadgeClass = 'badge-danger';
+    let statusText = 'STANDBY';
+    if (isExhausted) {
+      statusBadgeClass = 'badge-danger';
+      statusText = 'EXHAUSTED';
+    } else if (acc.status === 'error') {
+      statusBadgeClass = 'badge-danger';
+      statusText = 'ERROR';
+    } else if (acc.status === 'disabled') {
+      statusBadgeClass = 'badge-neutral';
+      statusText = 'DISABLED';
+    } else if (activeCats.length > 0) {
+      statusBadgeClass = 'badge-success';
+      statusText = `ROUTING (${activeCats.length}/3)`;
+    }
 
     const cardTitle = isPrivacyMode ? '[Protected in Privacy Mode]' : escapeHtml(acc.email);
     const copyTitle = isPrivacyMode ? 'Copy redacted email' : 'Copy email address';
@@ -545,7 +967,7 @@
           </div>
         </div>
         <div class="badge ${statusBadgeClass}">
-          ${escapeHtml((acc.status || 'ACTIVE').toUpperCase())}
+          ${escapeHtml(statusText)}
         </div>
       </div>
 
@@ -554,13 +976,13 @@
       </div>
 
       <div class="account-actions">
-        ${isActive ? `
+        ${activeCats.length === 3 ? `
           <div class="active-pill" aria-current="true">
-            Active Routing Target
+            All Categories Active
           </div>
         ` : `
-          <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;">
-            Make Active
+          <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Activate all model categories on this account">
+            Activate All Categories
           </button>
         `}
         <button class="btn btn-danger-subtle btn-delete-account" data-id="${escapeHtml(acc.id)}" title="Remove Account" aria-label="Remove Account">
@@ -586,6 +1008,38 @@
     if (switchBtn) {
       switchBtn.addEventListener('click', () => handleSwitchAccount(acc.id));
     }
+
+    card.querySelectorAll('.pill-label-zone').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleSwitchAccount(btn.dataset.id, btn.dataset.category);
+      });
+    });
+
+    card.querySelectorAll('.pill-action-zone').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const cat = btn.dataset.category;
+        const nextMode = btn.dataset.nextMode;
+        if (nextMode) {
+          const activeAccount = rawAccountsData.find(a => (a.active_categories || []).includes(cat));
+          const targetId = activeAccount ? activeAccount.id : id;
+          handleToggleCategoryMode(targetId, cat, nextMode);
+        } else {
+          handleToggleCategoryExclusion(id, cat, btn.dataset.nextEnabled === 'true');
+        }
+      });
+    });
+
+    // Bind fallback popovers across model rows
+    card.querySelectorAll('.model-fallback-btn').forEach(fallbackBtn => {
+      fallbackBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        openFallbackPopover(fallbackBtn, fallbackBtn.dataset.modelIds, fallbackBtn.dataset.baseName, acc);
+      });
+    });
 
     // Bind safe two-step delete button (inline confirmation without window.confirm)
     const deleteBtn = card.querySelector('.btn-delete-account');
@@ -652,32 +1106,9 @@
     try {
       const res = await fetch('/api/config');
       if (!res.ok) return;
-      const data = await res.json();
-      currentAppConfig = data;
-
-      if (fallbackToggle) {
-        fallbackToggle.checked = Boolean(data.fallback_secondary_enabled);
-        updateToggleStatusText(Boolean(data.fallback_secondary_enabled));
-      }
-      if (selectModelPrimary && data.model_primary) {
-        selectModelPrimary.value = data.model_primary;
-      }
-      if (selectModelSecondary && data.model_secondary) {
-        selectModelSecondary.value = data.model_secondary;
-      }
+      currentAppConfig = await res.json();
     } catch (err) {
       console.warn('Failed to fetch config:', err);
-    }
-  }
-
-  function updateToggleStatusText(isEnabled) {
-    if (!fallbackToggleStatus) return;
-    if (isEnabled) {
-      fallbackToggleStatus.textContent = 'Enabled';
-      fallbackToggleStatus.className = 'toggle-label-text is-enabled';
-    } else {
-      fallbackToggleStatus.textContent = 'Disabled';
-      fallbackToggleStatus.className = 'toggle-label-text';
     }
   }
 
@@ -698,16 +1129,18 @@
           modelsSourceBadge.textContent = 'Antigravity IDE (Live)';
           modelsSourceBadge.className = 'badge badge-success mono';
           modelsSourceBadge.title = 'Discovered dynamically from running language_server';
-        } else if (data.source === 'quota_buckets') {
-          modelsSourceBadge.textContent = 'Quota Buckets';
+        } else if (data.source === 'cloud_code_pa' || data.source === 'quota_buckets') {
+          modelsSourceBadge.textContent = 'Cloud Code PA (Live)';
           modelsSourceBadge.className = 'badge badge-info mono';
+          modelsSourceBadge.title = 'Discovered dynamically from Google Cloud Code PA API';
         } else {
           modelsSourceBadge.textContent = 'Standard Catalog';
           modelsSourceBadge.className = 'badge badge-neutral mono';
+          modelsSourceBadge.title = 'Built-in standard model catalog';
         }
       }
 
-      populateModelSelects();
+      renderAccounts();
     } catch (err) {
       console.warn('Failed to fetch models:', err);
       if (modelsSourceBadge) {
@@ -724,171 +1157,357 @@
     }
   }
 
-  function getModelCategory(modelId) {
-    const found = rawModelsData.find(m => m.id === modelId);
-    if (found && found.category) return found.category;
-    const lower = (modelId || '').toLowerCase();
-    if (lower.includes('claude') || lower.includes('gpt') || lower.includes('sonnet') || lower.includes('opus') || lower.includes('haiku') || lower.includes('3p')) {
-      return 'claude_gpt';
+  function isInternalOrPreviewModel(modelId) {
+    const mid = (modelId || '').toLowerCase();
+    if (mid.startsWith('chat_') || mid.startsWith('tab_') || mid.includes('preview')) {
+      return true;
+    }
+    if (mid === 'gemini-3-flash' || mid.includes('flash-image') ||
+        mid.startsWith('gemini-3.5-flash') || mid.startsWith('gemini-3.1-flash') ||
+        mid.startsWith('gemini-2.5') || mid.endsWith('-tiered')) {
+      return true;
+    }
+    return false;
+  }
+
+  function getModelRuleCategory(r) {
+    if (!r) return 'unknown';
+    const mid = (r.model_id || r.id || '').toLowerCase();
+    const cat = (r.category || '').toLowerCase();
+    if (mid.includes('disabled')) {
+      return null;
+    }
+    if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
+      return 'claude';
+    }
+    if (cat === 'gemini_argon' || /argon/i.test(mid)) {
+      return 'argon';
+    }
+    if (isInternalOrPreviewModel(mid)) {
+      return 'preview';
     }
     return 'gemini';
   }
 
-  function updateSecondaryOptions() {
-    if (!selectModelPrimary || !selectModelSecondary) return;
-    const primaryVal = selectModelPrimary.value;
-    const primaryCat = getModelCategory(primaryVal);
-    const prevSecondary = selectModelSecondary.value || currentAppConfig.model_secondary;
-
-    const allowedModels = rawModelsData.filter(m => {
-      const cat = m.category || getModelCategory(m.id);
-      return cat !== primaryCat;
+  function getCandidateModels() {
+    const map = new Map();
+    (rawModelsData || []).forEach(m => {
+      if (m && m.id && !map.has(m.id)) {
+        map.set(m.id, m);
+      }
     });
-
-    let html = '';
-    const label = primaryCat === 'gemini' ? 'Claude & GPT (Standby Fallback)' : 'Google Gemini (Standby Fallback)';
-    html += `<optgroup label="${label}">`;
-    allowedModels.forEach(m => {
-      const isSelected = m.id === prevSecondary ? 'selected' : '';
-      const star = m.recommended ? ' ★' : '';
-      html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+    (rawAccountsData || []).forEach(acc => {
+      (acc.model_rules || []).forEach(r => {
+        if (r && r.model_id && !map.has(r.model_id)) {
+          map.set(r.model_id, {
+            id: r.model_id,
+            display_name: r.display_name || r.model_id,
+            category: r.category || 'unknown',
+            recommended: false
+          });
+        }
+      });
     });
-    html += '</optgroup>';
-
-    selectModelSecondary.innerHTML = html;
-
-    // Validate if previously selected model is still in the new option list
-    const stillValid = Array.from(selectModelSecondary.options).some(opt => opt.value === prevSecondary);
-    if (!stillValid && selectModelSecondary.options.length > 0) {
-      selectModelSecondary.selectedIndex = 0;
-    }
+    return Array.from(map.values());
   }
 
-  function populateModelSelects() {
-    if (!selectModelPrimary || !selectModelSecondary) return;
+  let activePopoverTrigger = null;
+  let activePopoverAccount = null;
 
-    const currentPrimary = currentAppConfig.model_primary || selectModelPrimary.value;
-    const currentSecondary = currentAppConfig.model_secondary || selectModelSecondary.value;
-
-    const geminiModels = [];
-    const claudeGptModels = [];
-    const otherModels = [];
-
-    rawModelsData.forEach(m => {
-      if (m.category === 'gemini') {
-        geminiModels.push(m);
-      } else if (m.category === 'claude_gpt') {
-        claudeGptModels.push(m);
-      } else {
-        otherModels.push(m);
-      }
-    });
-
-    function buildOptionsHtml(selectedVal) {
-      let html = '';
-
-      if (geminiModels.length > 0) {
-        html += '<optgroup label="Google Gemini">';
-        geminiModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      if (claudeGptModels.length > 0) {
-        html += '<optgroup label="Claude & GPT (3P)">';
-        claudeGptModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      if (otherModels.length > 0) {
-        html += '<optgroup label="Other Models">';
-        otherModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      return html;
+  function closeFallbackPopover() {
+    const popover = document.getElementById('fallback-popover');
+    if (popover) {
+      popover.hidden = true;
     }
-
-    selectModelPrimary.innerHTML = buildOptionsHtml(currentPrimary);
-
-    // If current selection wasn't in list, add explicit option
-    if (currentPrimary && !selectModelPrimary.value) {
-      const opt = new Option(currentPrimary, currentPrimary, true, true);
-      selectModelPrimary.add(opt);
-    }
-
-    // Populate secondary options strictly scoped to cross-vendor models
-    updateSecondaryOptions();
-
-    if (currentSecondary && !selectModelSecondary.value) {
-      const opt = new Option(currentSecondary, currentSecondary, true, true);
-      selectModelSecondary.add(opt);
-    }
+    activePopoverTrigger = null;
+    activePopoverAccount = null;
   }
 
-  async function handleSaveConfig() {
-    if (!btnSaveConfig) return;
+  function positionPopover(triggerEl, popover) {
+    if (!triggerEl || !popover) return;
+    const rect = triggerEl.getBoundingClientRect();
+    popover.hidden = false;
 
-    const primaryVal = selectModelPrimary ? selectModelPrimary.value : currentAppConfig.model_primary;
-    const secondaryVal = selectModelSecondary ? selectModelSecondary.value : currentAppConfig.model_secondary;
-    const isFallbackEnabled = fallbackToggle ? fallbackToggle.checked : false;
+    const popoverRect = popover.getBoundingClientRect();
+    const popoverWidth = popoverRect.width || 440;
+    const popoverHeight = popoverRect.height || 420;
 
-    // Client-side cross-vendor validation
-    if (isFallbackEnabled && primaryVal && secondaryVal) {
-      const pCat = getModelCategory(primaryVal);
-      const sCat = getModelCategory(secondaryVal);
-      if (pCat === sCat) {
-        showToast('Primary and Secondary models cannot be from the same provider. Choose Gemini ↔ Claude/GPT.', 'error', 5000);
-        return;
+    const margin = 12;
+    // Align right edge with trigger button
+    let left = rect.right - popoverWidth;
+    if (left < margin) left = margin;
+    if (left + popoverWidth > window.innerWidth - margin) {
+      left = window.innerWidth - popoverWidth - margin;
+    }
+
+    let top = rect.bottom + 8;
+    if (top + popoverHeight > window.innerHeight - margin) {
+      const topAbove = rect.top - popoverHeight - 8;
+      if (topAbove >= margin) {
+        top = topAbove;
       }
     }
 
-    const origText = btnSaveConfig.textContent;
-    btnSaveConfig.disabled = true;
-    btnSaveConfig.textContent = 'Saving...';
+    popover.style.left = `${Math.round(left)}px`;
+    popover.style.top = `${Math.round(top)}px`;
+  }
 
-    const payload = {
-      model_primary: primaryVal,
-      model_secondary: secondaryVal,
-      fallback_secondary_enabled: isFallbackEnabled
-    };
+  function openFallbackPopover(triggerEl, modelIdsStr, baseName, account) {
+    const popover = document.getElementById('fallback-popover');
+    if (!popover) {
+      console.error('fallback-popover element not found in DOM');
+      return;
+    }
+
+    activePopoverTrigger = triggerEl;
+    activePopoverAccount = account;
 
     try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const titleEl = document.getElementById('popover-title');
+      const accountTagEl = document.getElementById('popover-account-tag');
+      const tierGroup = document.getElementById('popover-primary-tier-group');
+      const selectPrimary = document.getElementById('popover-select-primary');
+      const selectSecondary = document.getElementById('popover-select-secondary');
+      const btnDisable = document.getElementById('btn-disable-fallback');
+      const radioPool = document.getElementById('strategy-pool-first');
+      const radioAccount = document.getElementById('strategy-account-first');
+      const explanationText = document.getElementById('popover-explanation-text');
+      const warningNote = document.getElementById('popover-account-warning');
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `HTTP ${res.status}`);
+      if (titleEl) titleEl.textContent = `Model Fallback: ${baseName || 'Model'}`;
+      if (accountTagEl) {
+        const email = account?.email || 'Active Account';
+        accountTagEl.textContent = `Triggered from ${email}`;
       }
 
-      const updated = await res.json();
-      currentAppConfig = updated;
-      showToast('Model fallback configuration saved successfully', 'success', 3000);
-      if (configStatusMsg) {
-        configStatusMsg.textContent = `Saved at ${new Date().toLocaleTimeString()}`;
-        setTimeout(() => {
-          if (configStatusMsg) configStatusMsg.textContent = '';
-        }, 4000);
+      // Set strategy radio based on current config
+      const currentStrat = currentAppConfig.fallback_strategy || 'pool_first';
+      if (currentStrat === 'account_first') {
+        if (radioAccount) radioAccount.checked = true;
+      } else {
+        if (radioPool) radioPool.checked = true;
       }
+
+      const allCandidates = getCandidateModels();
+      const ids = (modelIdsStr || '').split(',').filter(Boolean);
+
+      if (ids.length > 1 && tierGroup && selectPrimary) {
+        tierGroup.style.display = 'block';
+        selectPrimary.innerHTML = ids.map(id => {
+          const m = allCandidates.find(rm => rm.id === id);
+          const label = m?.display_name || id;
+          const isSel = id === currentAppConfig.model_primary;
+          return `<option value="${escapeHtml(id)}" ${isSel ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        }).join('');
+      } else if (selectPrimary) {
+        if (tierGroup) tierGroup.style.display = 'none';
+        const singleId = ids[0] || '';
+        const m = allCandidates.find(rm => rm.id === singleId);
+        selectPrimary.innerHTML = `<option value="${escapeHtml(singleId)}" selected>${escapeHtml(m?.display_name || baseName || singleId)}</option>`;
+      }
+
+      function updateExplanationAndWarnings() {
+        if (!explanationText || !selectPrimary || !selectSecondary) return;
+        const priOption = selectPrimary.options[selectPrimary.selectedIndex];
+        const secOption = selectSecondary.options[selectSecondary.selectedIndex];
+        const priName = priOption?.text || baseName || 'Primary Model';
+        const secName = secOption?.text || 'Fallback Model';
+        const isPoolFirst = radioPool?.checked;
+
+        if (isPoolFirst) {
+          explanationText.innerHTML = `When <strong>${escapeHtml(priName)}</strong> encounters HTTP 429, the switcher rotates through all available pool accounts for <strong>${escapeHtml(priName)}</strong> first. If the entire pool is exhausted, it switches to <strong>${escapeHtml(secName)}</strong>.`;
+          if (warningNote) warningNote.style.display = 'none';
+        } else {
+          explanationText.innerHTML = `When <strong>${escapeHtml(priName)}</strong> encounters HTTP 429, the switcher retries with <strong>${escapeHtml(secName)}</strong> on this account first before rotating accounts.`;
+          const secId = selectSecondary.value;
+          const isEnabledOnThisAccount = (account?.model_rules || []).some(r => r.model_id === secId);
+          if (!isEnabledOnThisAccount && warningNote) {
+            warningNote.style.display = 'block';
+            warningNote.innerHTML = `⚠️ <strong>${escapeHtml(secName)}</strong> is only available on other accounts in the pool. When 429 occurs, failover will rotate to an account that supports it.`;
+          } else if (warningNote) {
+            warningNote.style.display = 'none';
+          }
+        }
+      }
+
+      function populateSecondarySelect() {
+        if (!selectSecondary || !selectPrimary) return;
+        const currentPri = selectPrimary.value;
+        const currentSec = currentAppConfig.model_secondary;
+
+        const allowed = allCandidates.filter(m => m.id !== currentPri && !isInternalOrPreviewModel(m.id));
+
+        const thisAccRules = account?.model_rules || [];
+        const thisAccModels = [];
+        const otherAccModels = [];
+
+        allowed.forEach(m => {
+          const rule = thisAccRules.find(r => r.model_id === m.id);
+          if (rule) {
+            thisAccModels.push(m);
+          } else {
+            // Find which other account has it
+            const otherAcc = (rawAccountsData || []).find(a => a.id !== account?.id && (a.model_rules || []).some(r => r.model_id === m.id));
+            otherAccModels.push({ model: m, otherAccount: otherAcc });
+          }
+        });
+
+        let html = '';
+        const thisEmail = account?.email || 'this account';
+        if (thisAccModels.length > 0) {
+          html += `<optgroup label="Available on ${escapeHtml(thisEmail)} (This Account)">`;
+          thisAccModels.forEach(m => {
+            const sel = m.id === currentSec ? 'selected' : '';
+            const star = m.recommended ? ' ★' : '';
+            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+          });
+          html += '</optgroup>';
+        }
+
+        if (otherAccModels.length > 0) {
+          html += '<optgroup label="Available on other accounts in pool">';
+          otherAccModels.forEach(({ model, otherAccount }) => {
+            const sel = model.id === currentSec ? 'selected' : '';
+            const accTag = otherAccount ? ` [${otherAccount.email}]` : '';
+            html += `<option value="${escapeHtml(model.id)}" ${sel}>${escapeHtml(model.display_name || model.id)}${escapeHtml(accTag)}</option>`;
+          });
+          html += '</optgroup>';
+        }
+
+        selectSecondary.innerHTML = html;
+        updateExplanationAndWarnings();
+      }
+
+      populateSecondarySelect();
+      if (selectPrimary) {
+        selectPrimary.onchange = () => {
+          populateSecondarySelect();
+          updateExplanationAndWarnings();
+        };
+      }
+      if (selectSecondary) {
+        selectSecondary.onchange = updateExplanationAndWarnings;
+      }
+      if (radioPool) radioPool.onchange = updateExplanationAndWarnings;
+      if (radioAccount) radioAccount.onchange = updateExplanationAndWarnings;
+
+      const isCurrentlyActivePrimary = currentAppConfig.fallback_secondary_enabled && ids.includes(currentAppConfig.model_primary);
+      if (btnDisable) {
+        btnDisable.style.display = isCurrentlyActivePrimary ? 'inline-block' : 'none';
+      }
+
+      positionPopover(triggerEl, popover);
     } catch (err) {
-      showToast(`Failed to save settings: ${err.message}`, 'error', 5000);
-    } finally {
-      btnSaveConfig.disabled = false;
-      btnSaveConfig.textContent = origText;
+      console.error('Error opening fallback popover:', err);
+      showToast(`Error opening popover: ${err.message}`, 'error', 4000);
+    }
+  }
+
+  async function saveFallbackPolicy(primaryId, secondaryId, enabled, strategy) {
+    const strat = strategy || (document.getElementById('strategy-pool-first')?.checked ? 'pool_first' : 'account_first');
+    const payload = {
+      model_primary: primaryId,
+      model_secondary: secondaryId,
+      fallback_secondary_enabled: enabled,
+      fallback_strategy: strat
+    };
+
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData?.error?.message || `HTTP ${res.status}`);
+    }
+
+    const updated = await res.json();
+    currentAppConfig = updated;
+    const candidates = getCandidateModels();
+    const priDisplay = candidates.find(m => m.id === updated.model_primary)?.display_name || updated.model_primary;
+    const secDisplay = candidates.find(m => m.id === updated.model_secondary)?.display_name || updated.model_secondary;
+    const stratLabel = updated.fallback_strategy === 'account_first' ? 'Same-account first' : 'Pool-first';
+    if (enabled) {
+      showToast(`Model fallback active: ${priDisplay} ↪ ${secDisplay} (${stratLabel})`, 'success', 3000);
+    } else {
+      showToast('Model fallback disabled', 'info', 2500);
+    }
+    renderAccounts();
+  }
+
+  function setupFallbackPopoverEvents() {
+    const popover = document.getElementById('fallback-popover');
+    if (!popover) return;
+
+    const btnClose = document.getElementById('btn-close-fallback-popover');
+    const btnCancel = document.getElementById('btn-cancel-fallback');
+    const btnSave = document.getElementById('btn-save-fallback');
+    const btnDisable = document.getElementById('btn-disable-fallback');
+    const selectPrimary = document.getElementById('popover-select-primary');
+    const selectSecondary = document.getElementById('popover-select-secondary');
+
+    if (btnClose) btnClose.onclick = closeFallbackPopover;
+    if (btnCancel) btnCancel.onclick = closeFallbackPopover;
+
+    document.addEventListener('pointerdown', e => {
+      if (!popover.hidden) {
+        if (!popover.contains(e.target) && !e.target.closest('.model-fallback-btn')) {
+          closeFallbackPopover();
+        }
+      }
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && !popover.hidden) {
+        closeFallbackPopover();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if (!popover.hidden && activePopoverTrigger) {
+        positionPopover(activePopoverTrigger, popover);
+      }
+    });
+
+    if (btnSave) {
+      btnSave.onclick = async () => {
+        const pri = selectPrimary?.value;
+        const sec = selectSecondary?.value;
+        if (!pri || !sec) {
+          showToast('Please select both primary and fallback models', 'warning', 3000);
+          return;
+        }
+        if (pri === sec) {
+          showToast('Primary and fallback models must be distinct', 'warning', 3000);
+          return;
+        }
+        btnSave.disabled = true;
+        btnSave.textContent = 'Saving...';
+        try {
+          const strat = document.getElementById('strategy-pool-first')?.checked ? 'pool_first' : 'account_first';
+          await saveFallbackPolicy(pri, sec, true, strat);
+          closeFallbackPopover();
+        } finally {
+          btnSave.disabled = false;
+          btnSave.textContent = 'Save Policy';
+        }
+      };
+    }
+
+    if (btnDisable) {
+      btnDisable.onclick = async () => {
+        btnDisable.disabled = true;
+        btnDisable.textContent = 'Removing...';
+        try {
+          await saveFallbackPolicy(currentAppConfig.model_primary, currentAppConfig.model_secondary, false);
+          closeFallbackPopover();
+        } finally {
+          btnDisable.disabled = false;
+          btnDisable.textContent = 'Remove Fallback';
+        }
+      };
     }
   }
 
@@ -1197,13 +1816,40 @@
   // Account Actions: Switch & Delete
   // =========================================================================
 
-  async function handleSwitchAccount(accountID) {
+
+  async function saveModelRule(accountID, rule, shouldRefetch = true) {
     try {
-      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/select`, {
-        method: 'POST'
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/models`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rule)
       });
       if (res.ok) {
-        showToast(`Active proxy account switched to ${accountID.slice(0, 8)}`, 'success');
+        if (shouldRefetch) {
+          showToast('Model rule saved', 'success');
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error?.message || 'Failed to save model rule', 'error');
+      }
+    } catch (e) {
+      showToast(`Network error saving model rule: ${e.message}`, 'error');
+    }
+    if (shouldRefetch) {
+      await fetchAccounts();
+    }
+  }
+
+  async function handleSwitchAccount(accountID, category = 'all') {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category })
+      });
+      if (res.ok) {
+        const what = category === 'all' ? 'Active proxy account' : `Active ${category} account`;
+        showToast(`${what} switched to ${accountID.slice(0, 8)}`, 'success');
         await Promise.all([fetchStatus(), fetchAccounts()]);
       } else {
         const err = await res.json().catch(() => ({}));
@@ -1212,6 +1858,44 @@
       }
     } catch (e) {
       showToast(`Network error switching account: ${e.message}`, 'error');
+    }
+  }
+
+  async function handleToggleCategoryMode(accountID, category, newMode) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, mode: newMode })
+      });
+      if (res.ok) {
+        showToast(`${category} mode set to ${newMode.toUpperCase()}`, 'success');
+        await Promise.all([fetchStatus(), fetchAccounts()]);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error?.message || 'Failed to update category mode', 'error');
+      }
+    } catch (e) {
+      showToast(`Network error updating mode: ${e.message}`, 'error');
+    }
+  }
+
+  async function handleToggleCategoryExclusion(accountID, category, enabled) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/categories`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, enabled })
+      });
+      if (res.ok) {
+        showToast(`${category} ${enabled ? 'enabled' : 'excluded'} for ${accountID.slice(0, 8)}`, 'info');
+        await Promise.all([fetchStatus(), fetchAccounts()]);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error?.message || 'Failed to update category exclusion', 'error');
+      }
+    } catch (e) {
+      showToast(`Network error updating exclusion: ${e.message}`, 'error');
     }
   }
 
@@ -1422,27 +2106,54 @@
   // =========================================================================
 
   function initListeners() {
-    // Model fallback toggle
-    if (fallbackToggle) {
-      fallbackToggle.addEventListener('change', () => {
-        updateToggleStatusText(fallbackToggle.checked);
+    // Cross-card Pool Circuit Hover Sync
+    if (accountsGrid) {
+      accountsGrid.addEventListener('mouseover', (e) => {
+        const bucket = e.target.closest('.quota-group[data-in-pool="true"]');
+        if (!bucket) return;
+        const catKey = bucket.dataset.categoryGroup;
+        if (!catKey) return;
+        accountsGrid.querySelectorAll(`.quota-group[data-category-group="${catKey}"][data-in-pool="true"]`).forEach(el => {
+          el.classList.add('pool-circuit-active');
+        });
+        const svg = document.getElementById('pool-circuit-canvas');
+        if (svg) {
+          svg.querySelectorAll(`.circuit-path[data-category="${catKey}"], .circuit-dot[data-category="${catKey}"]`).forEach(el => {
+            el.classList.add('active');
+          });
+        }
+      });
+
+      accountsGrid.addEventListener('mouseout', (e) => {
+        const bucket = e.target.closest('.quota-group[data-in-pool="true"]');
+        if (!bucket) return;
+        if (e.relatedTarget && bucket.contains(e.relatedTarget)) return;
+        const catKey = bucket.dataset.categoryGroup;
+        if (!catKey) return;
+        accountsGrid.querySelectorAll(`.quota-group[data-category-group="${catKey}"][data-in-pool="true"]`).forEach(el => {
+          el.classList.remove('pool-circuit-active');
+        });
+        const svg = document.getElementById('pool-circuit-canvas');
+        if (svg) {
+          svg.querySelectorAll(`.circuit-path[data-category="${catKey}"], .circuit-dot[data-category="${catKey}"]`).forEach(el => {
+            el.classList.remove('active');
+          });
+        }
       });
     }
 
-    // Dynamic secondary model options on primary model change
-    if (selectModelPrimary) {
-      selectModelPrimary.addEventListener('change', updateSecondaryOptions);
-    }
+    window.addEventListener('resize', () => {
+      requestAnimationFrame(() => drawPoolCircuits());
+    });
 
-    // Save model fallback settings
-    if (btnSaveConfig) {
-      btnSaveConfig.addEventListener('click', handleSaveConfig);
-    }
+    // Fallback modal setup
+    setupFallbackPopoverEvents();
 
-    // Refresh models button
+    // Refresh models button with account refetch
     if (btnRefreshModels) {
       btnRefreshModels.addEventListener('click', async () => {
         await fetchModels();
+        await fetchAccounts();
         showToast('AI models refreshed from Antigravity', 'info', 2000);
       });
     }
@@ -1469,7 +2180,7 @@
           }
         }, 500);
       }
-      await Promise.all([fetchStatus(), fetchAccounts(), fetchMetrics()]);
+      await Promise.all([fetchStatus(), fetchAccounts(), fetchMetrics(), fetchModels()]);
     };
 
     if (btnRefresh) {

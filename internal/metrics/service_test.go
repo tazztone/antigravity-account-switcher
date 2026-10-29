@@ -50,6 +50,63 @@ func (m *mockAccountRepo) Delete(ctx context.Context, id string) error { return 
 func (m *mockAccountRepo) GetNextAvailable(ctx context.Context, excludeID string) (*domain.Account, error) {
 	return nil, nil
 }
+func (m *mockAccountRepo) GetActiveForCategory(ctx context.Context, category domain.ModelCategory) (*domain.Account, error) {
+	return nil, nil
+}
+func (m *mockAccountRepo) SetActiveForCategory(ctx context.Context, category domain.ModelCategory, accountID string) error {
+	return nil
+}
+func (m *mockAccountRepo) GetNextAvailableForCategory(ctx context.Context, category domain.ModelCategory, excludeID string) (*domain.Account, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) GetActiveCategoriesByAccount(ctx context.Context) (map[string][]domain.ModelCategory, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) UpsertAccountModels(ctx context.Context, accountID string, models []*domain.ModelInfo) error {
+	return nil
+}
+
+func (m *mockAccountRepo) ListAccountModelRules(ctx context.Context, accountID string) ([]*domain.AccountModelRule, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) UpdateAccountModelRule(ctx context.Context, rule *domain.AccountModelRule) error {
+	return nil
+}
+
+func (m *mockAccountRepo) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, accountID string, category domain.ModelCategory) (bool, error) {
+	return false, nil
+}
+
+func (m *mockAccountRepo) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
+	return domain.RoutingModePool, nil
+}
+
+func (m *mockAccountRepo) SetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory, mode string) error {
+	return nil
+}
+
+func (m *mockAccountRepo) GetAllCategoryRoutingModes(ctx context.Context) (map[domain.ModelCategory]string, error) {
+	return map[domain.ModelCategory]string{}, nil
+}
+
+func (m *mockAccountRepo) SetAccountCategoryDisabled(ctx context.Context, accountID string, category domain.ModelCategory, disabled bool) error {
+	return nil
+}
 
 type mockMetricsRepo struct {
 	summaryRes        *domain.AggregatedMetrics

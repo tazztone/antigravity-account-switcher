@@ -194,9 +194,13 @@ Quando a cota do modelo principal se esgota (ex.: `gemini-2.5-pro` ou `claude-3-
 
 ### 2. Configuração pelo Dashboard Web
 Você pode gerenciar as preferências de modelos diretamente pelo navegador (`http://127.0.0.1:8080` ou `launch --open`):
-- **Toggle em Tempo Real**: Ative ou desative o fallback intra-conta instantaneamente.
-- **Descoberta de Modelos**: Clique em **Buscar Modelos** para inspecionar os endpoints do `language_server` / Cloud Code PA e listar todos os modelos disponíveis.
-- **Recarregamento Sem Reiniciar**: Ao salvar as configurações, o `config.json` é atualizado e o motor de proxy aplica as mudanças imediatamente sem necessidade de reiniciar o Antigravity 2.0 ou o daemon.
+- **Fallback Unificado por Linha**: Clique em **↪** em qualquer linha de modelo para abrir o popover de fallback ancorado. Configure os modelos Primário e Secundário com ordem de failover configurável: **Pool-first** (rotaciona todas as contas disponíveis no modelo primário antes de degradar qualidade) ou **Same-account first** (degrada o modelo na conta ativa antes de alternar). Os modelos são agrupados por disponibilidade de conta (`Nesta Conta` vs `Outras Contas no Pool`).
+- **Descoberta de Modelos**: Clique no botão de atualização no cabeçalho para consultar os endpoints do `language_server` / Cloud Code PA. Endpoints internos (`tab_*`, `chat_*`) são filtrados da interface automaticamente.
+- **Suporte de Modelos por Conta**: Cada cartão exibe de forma limpa os modelos descobertos e suportados pelo plano daquela conta, com pills de esforço de raciocínio e botões **↪** para configuração de fallback.
+- **Fixação por Categoria & Roteamento por Bordas de Bucket**: Fixe contas separadamente para Claude/GPT, Gemini ou Gemini 4 Argon (`POST /api/accounts/{id}/select` com `{"category": "..."}`). Cada grupo de modelos conta com bordas visuais diretas e controles integrados indicando o estado de roteamento: `🔄 Pool` (failover automático) vs `🔒 Solo` (bloqueia rotação na conta, devolvendo 429 para proteger as outras contas). Contas também podem desativar categorias inteiras (`🚫 Off / Excluído`) com um clique (`PUT /api/accounts/{id}/categories`).
+- **Rastreamento de Cota Semanal do Gemini 4 Argon**: A cota semanal do Argon é monitorada de forma independente com barra de progresso, porcentagem e contador de cooldown em tempo real, lado a lado com as cotas padrão do Claude e Gemini.
+- **Linhas de Modelos Consolidadas**: Variantes de esforço de raciocínio (`High`, `Med`, `Low`, `Think`) são unificadas em linhas únicas por modelo base, exibidas como pills de capacidade compactas.
+- **Recarregamento Sem Reiniciar**: Salvar as configurações atualiza o `config.json` e o motor de proxy aplica as mudanças imediatamente sem necessidade de reiniciar o Antigravity 2.0 ou o daemon.
 
 ### 3. Recuperação Automática de Assinatura de Pensamento (HTTP 400)
 Ao alternar entre provedores de modelos (ex.: Claude <-> Gemini) ou em sessões de múltiplos turnos, o Google Cloud Code PA valida blocos criptográficos HMAC de raciocínio (`thought_signature` ou blocos de `thinking` do Claude). Assinaturas incompatíveis ou corrompidas causam erro `HTTP 400 ("Corrupted thought signature" ou "Invalid signature in thinking block")`.
@@ -245,6 +249,7 @@ antigravity-account-switcher config set fallback_secondary_enabled true
 | `ANTIGRAVITY_MODEL_PRIMARY` | Sobrescreve o modelo primário configurado. |
 | `ANTIGRAVITY_MODEL_SECONDARY` | Sobrescreve o modelo secundário de contingência. |
 | `ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED` | Habilita/desabilita o fallback intra-conta (`true`/`false`). |
+| `ANTIGRAVITY_FALLBACK_STRATEGY` | Estratégia de failover: `pool_first` (padrão) ou `account_first`. |
 
 ---
 

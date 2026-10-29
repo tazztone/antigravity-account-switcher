@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
@@ -40,6 +42,56 @@ func main() {
 
 	command := os.Args[1]
 	args := os.Args[2:]
+
+	// Support optional global/root flags before subcommand (e.g. --max-body-mb)
+	if strings.HasPrefix(command, "-") {
+		rootFs := flag.NewFlagSet("antigravity-account-switcher", flag.ContinueOnError)
+		rootFs.SetOutput(io.Discard)
+		rootMaxBodyMB := rootFs.Int("max-body-mb", 0, "Maximum request body buffer size in MB (default: 100)")
+		var showHelp, showVersion bool
+		rootFs.BoolVar(&showHelp, "help", false, "Show help")
+		rootFs.BoolVar(&showHelp, "h", false, "Show help")
+		rootFs.BoolVar(&showVersion, "version", false, "Show version")
+		rootFs.BoolVar(&showVersion, "v", false, "Show version")
+
+		err := rootFs.Parse(os.Args[1:])
+		if errors.Is(err, flag.ErrHelp) || showHelp {
+			printUsage()
+			return
+		}
+		if showVersion {
+			runVersion()
+			return
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n\n", err)
+			printUsage()
+			os.Exit(1)
+		}
+
+		maxBodyMBProvided := false
+		rootFs.Visit(func(f *flag.Flag) {
+			if f.Name == "max-body-mb" {
+				maxBodyMBProvided = true
+			}
+		})
+
+		if maxBodyMBProvided {
+			if *rootMaxBodyMB <= 0 {
+				fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *rootMaxBodyMB)
+				os.Exit(1)
+			}
+			_ = os.Setenv("ANTIGRAVITY_MAX_BODY_MB", strconv.Itoa(*rootMaxBodyMB))
+		}
+
+		remArgs := rootFs.Args()
+		if len(remArgs) == 0 {
+			printUsage()
+			os.Exit(1)
+		}
+		command = remArgs[0]
+		args = remArgs[1:]
+	}
 
 	switch command {
 	case "launch":
@@ -76,7 +128,9 @@ func main() {
 func printUsage() {
 	fmt.Printf("antigravity-account-switcher v%s (%s)\n\n", Version, Commit)
 	fmt.Println("Usage:")
-	fmt.Println("  antigravity-account-switcher <command> [arguments]")
+	fmt.Println("  antigravity-account-switcher [flags] <command> [arguments]")
+	fmt.Println("\nGlobal Flags:")
+	fmt.Println("  --max-body-mb int  Maximum request body buffer size in MB (default: 100)")
 	fmt.Println("\nCommands:")
 	fmt.Println("  launch             Launch Google Antigravity 2.0 directly with coupled proxy supervisor")
 	fmt.Println("  serve              Start the local proxy, quota monitor, and web dashboard")
@@ -136,6 +190,10 @@ func runServe(args []string) {
 	if cfg.UpstreamURL != "" {
 		defaultTargetURL = cfg.UpstreamURL
 	}
+	defaultMaxBodyMB := config.DefaultMaxBodyMB
+	if cfg.MaxBodyMB > 0 {
+		defaultMaxBodyMB = cfg.MaxBodyMB
+	}
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", defaultPort, "Web dashboard and proxy port")
@@ -143,14 +201,21 @@ func runServe(args []string) {
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Background quota polling interval")
 	targetURL := fs.String("target-url", defaultTargetURL, "Google Cloud Code PA upstream target")
+	maxBodyMB := fs.Int("max-body-mb", defaultMaxBodyMB, "Maximum request body buffer size in MB (default: 100)")
 	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
 	_ = fs.Parse(args)
+
+	if *maxBodyMB <= 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *maxBodyMB)
+		os.Exit(1)
+	}
 
 	cfg.Port = *port
 	cfg.UpstreamURL = *targetURL
 	cfg.FallbackSecondaryEnabled = *fallbackSecondary
 	cfg.ModelPrimary = *modelPrimary
 	cfg.ModelSecondary = *modelSecondary
+	cfg.MaxBodyMB = *maxBodyMB
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -205,6 +270,7 @@ func runServe(args []string) {
 	proxyHandler, err := proxy.NewProxyHandler(
 		accRepo,
 		proxy.WithTargetURL(*targetURL),
+		proxy.WithMaxBodyBytes(cfg.MaxBodyBytes()),
 		proxy.WithMetricsRepository(metricsRepo),
 		proxy.WithEventBroadcaster(broadcaster),
 		proxy.WithEventRepository(eventRepo),
@@ -303,12 +369,17 @@ func runWrap(args []string) {
 	if cfg.UpstreamURL != "" {
 		defaultTargetURL = cfg.UpstreamURL
 	}
+	defaultMaxBodyMB := config.DefaultMaxBodyMB
+	if cfg.MaxBodyMB > 0 {
+		defaultMaxBodyMB = cfg.MaxBodyMB
+	}
 
 	fs := flag.NewFlagSet("wrap", flag.ExitOnError)
 	port := fs.Int("port", 0, "Switcher port (0 for random ephemeral port)")
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
 	targetURL := fs.String("target-url", defaultTargetURL, "Google Cloud Code PA upstream target")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Quota polling interval")
+	maxBodyMB := fs.Int("max-body-mb", defaultMaxBodyMB, "Maximum request body buffer size in MB (default: 100)")
 
 	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
 
@@ -337,6 +408,10 @@ func runWrap(args []string) {
 		fmt.Fprintf(os.Stderr, "Configuration error: invalid port %d: must be between 0 and 65535\n", *port)
 		os.Exit(1)
 	}
+	if *maxBodyMB <= 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *maxBodyMB)
+		os.Exit(1)
+	}
 	if *port > 0 {
 		cfg.Port = *port
 	}
@@ -344,6 +419,7 @@ func runWrap(args []string) {
 	cfg.FallbackSecondaryEnabled = *fallbackSecondary
 	cfg.ModelPrimary = *modelPrimary
 	cfg.ModelSecondary = *modelSecondary
+	cfg.MaxBodyMB = *maxBodyMB
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -370,6 +446,7 @@ func runWrap(args []string) {
 		launcher.WithTargetURL(*targetURL),
 		launcher.WithPollInterval(*pollInterval),
 		launcher.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+		launcher.WithMaxBodyMB(cfg.MaxBodyMB),
 	)
 
 	if err != nil {
@@ -429,14 +506,23 @@ func runAddAccount(args []string) {
 }
 
 func runListAccounts(args []string) {
-	fs := flag.NewFlagSet("list-accounts", flag.ExitOnError)
+	if code := executeListAccounts(args, os.Stdout, os.Stderr); code != 0 {
+		os.Exit(code)
+	}
+}
+
+func executeListAccounts(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("list-accounts", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
 
 	db, err := sqlite.Open(*dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
 	}
 	defer db.Close()
 
@@ -446,19 +532,134 @@ func runListAccounts(args []string) {
 
 	accounts, err := accRepo.List(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to list accounts: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "Failed to list accounts: %v\n", err)
+		return 1
 	}
 
 	if len(accounts) == 0 {
-		fmt.Println("No accounts registered yet. Run 'add-account' to add one.")
-		return
+		fmt.Fprintln(stdout, "No accounts registered yet. Run 'add-account' to add one.")
+		return 0
 	}
 
 	allBuckets, _ := quotaRepo.ListAll(ctx)
+	if allBuckets == nil {
+		allBuckets = make(map[string][]*domain.QuotaBucket)
+	}
 
-	fmt.Printf("%-36s  %-30s  %-10s  %-8s  %-12s  %-12s\n", "ID", "EMAIL", "STATUS", "ACTIVE", "DAILY QUOTA", "WEEKLY QUOTA")
-	fmt.Println("-------------------------------------------------------------------------------------------------------------")
+	renderAccountsTable(stdout, accounts, allBuckets)
+	return 0
+}
+
+func extractCanonicalFamilyAndWindow(b *domain.QuotaBucket) (string, string) {
+	if b == nil {
+		return "Default", "quota"
+	}
+
+	window := strings.TrimSpace(string(b.Window))
+	name := strings.TrimSpace(b.DisplayName)
+
+	if name == "" {
+		name = strings.TrimSpace(b.BucketID)
+		if b.AccountID != "" {
+			name = strings.TrimPrefix(name, b.AccountID+"-")
+			name = strings.TrimPrefix(name, b.AccountID+"_")
+		}
+	}
+
+	// 1. Check for parenthesized or bracketed suffix, e.g. " (5h)", " (weekly)", " [5h]"
+	// Strip only if the inner string matches the bucket's known window or window is empty.
+	if idx := strings.LastIndex(name, "("); idx != -1 && strings.HasSuffix(name, ")") {
+		inside := strings.TrimSpace(name[idx+1 : len(name)-1])
+		if inside != "" {
+			if window == "" {
+				window = inside
+				name = strings.TrimSpace(name[:idx])
+			} else if strings.EqualFold(inside, window) {
+				name = strings.TrimSpace(name[:idx])
+			}
+		}
+	} else if idx := strings.LastIndex(name, "["); idx != -1 && strings.HasSuffix(name, "]") {
+		inside := strings.TrimSpace(name[idx+1 : len(name)-1])
+		if inside != "" {
+			if window == "" {
+				window = inside
+				name = strings.TrimSpace(name[:idx])
+			} else if strings.EqualFold(inside, window) {
+				name = strings.TrimSpace(name[:idx])
+			}
+		}
+	}
+
+	// 2. If window is known, check for trailing window suffix like " - 5h", "-5h", "_5h"
+	if window != "" {
+		lowerName := strings.ToLower(name)
+		lowerWin := strings.ToLower(window)
+		for _, sep := range []string{" - ", " -", "-", "_"} {
+			suffix := sep + lowerWin
+			if strings.HasSuffix(lowerName, suffix) {
+				name = strings.TrimSpace(name[:len(name)-len(suffix)])
+				break
+			}
+		}
+	}
+
+	if name == "" {
+		name = strings.TrimSpace(b.BucketID)
+		if name == "" {
+			name = "Default"
+		}
+	}
+
+	if window == "" {
+		window = "quota"
+	}
+
+	return name, strings.ToLower(window)
+}
+
+func padRight(s string, width int) string {
+	w := utf8.RuneCountInString(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+func renderAccountsTable(w io.Writer, accounts []*domain.Account, allBuckets map[string][]*domain.QuotaBucket) {
+	accIDs := make(map[string]struct{}, len(accounts))
+	for _, acc := range accounts {
+		accIDs[acc.ID] = struct{}{}
+	}
+
+	canonicalFamilySet := make(map[string]struct{})
+	for accID, buckets := range allBuckets {
+		if _, ok := accIDs[accID]; !ok {
+			continue
+		}
+		for _, b := range buckets {
+			fam, _ := extractCanonicalFamilyAndWindow(b)
+			if fam != "" {
+				key := strings.ToUpper(strings.TrimSpace(fam))
+				canonicalFamilySet[key] = struct{}{}
+			}
+		}
+	}
+
+	families := make([]string, 0, len(canonicalFamilySet))
+	for f := range canonicalFamilySet {
+		families = append(families, f)
+	}
+	sort.Strings(families)
+
+	type tableRow struct {
+		id         string
+		email      string
+		status     string
+		active     string
+		familyCols map[string]string
+	}
+
+	rows := make([]tableRow, 0, len(accounts))
 
 	for _, acc := range accounts {
 		activeMark := ""
@@ -466,27 +667,134 @@ func runListAccounts(args []string) {
 			activeMark = "*"
 		}
 
-		dailyStr := "N/A"
-		weeklyStr := "N/A"
-
+		famBuckets := make(map[string][]*domain.QuotaBucket)
 		if buckets, ok := allBuckets[acc.ID]; ok {
 			for _, b := range buckets {
-				if b.Window == domain.QuotaWindowDaily {
-					dailyStr = fmt.Sprintf("%.0f%%", b.RemainingFraction*100)
-				} else if b.Window == domain.QuotaWindowWeekly {
-					weeklyStr = fmt.Sprintf("%.0f%%", b.RemainingFraction*100)
+				fam, _ := extractCanonicalFamilyAndWindow(b)
+				if fam != "" {
+					key := strings.ToUpper(strings.TrimSpace(fam))
+					famBuckets[key] = append(famBuckets[key], b)
 				}
 			}
 		}
 
-		fmt.Printf("%-36s  %-30s  %-10s  %-8s  %-12s  %-12s\n",
-			acc.ID,
-			acc.Email,
-			string(acc.Status),
-			activeMark,
-			dailyStr,
-			weeklyStr,
-		)
+		statusStr := string(acc.Status)
+		if acc.Status == domain.AccountStatusExhausted {
+			hasHealthyFamily := false
+			hasExhaustedFamily := false
+			for _, bList := range famBuckets {
+				if len(bList) == 0 {
+					continue
+				}
+				familyHealthy := true
+				for _, b := range bList {
+					if b.RemainingFraction <= 0.0 {
+						familyHealthy = false
+						break
+					}
+				}
+				if familyHealthy {
+					hasHealthyFamily = true
+				} else {
+					hasExhaustedFamily = true
+				}
+			}
+			if hasHealthyFamily && (hasExhaustedFamily || len(famBuckets) > 1) {
+				statusStr = "partial"
+			}
+		}
+
+		colVals := make(map[string]string, len(families))
+		for _, fam := range families {
+			bList := famBuckets[fam]
+			if len(bList) == 0 {
+				colVals[fam] = "N/A"
+				continue
+			}
+
+			winMap := make(map[string]*domain.QuotaBucket)
+			for _, b := range bList {
+				_, win := extractCanonicalFamilyAndWindow(b)
+				if existing, ok := winMap[win]; !ok || b.UpdatedAt.After(existing.UpdatedAt) {
+					winMap[win] = b
+				}
+			}
+
+			windows := make([]string, 0, len(winMap))
+			for win := range winMap {
+				windows = append(windows, win)
+			}
+			sort.Strings(windows)
+
+			parts := make([]string, 0, len(windows))
+			for _, win := range windows {
+				b := winMap[win]
+				pct := b.RemainingFraction * 100
+				parts = append(parts, fmt.Sprintf("%s: %.0f%%", win, pct))
+			}
+
+			if len(parts) == 0 {
+				colVals[fam] = "N/A"
+			} else {
+				colVals[fam] = strings.Join(parts, ", ")
+			}
+		}
+
+		rows = append(rows, tableRow{
+			id:         acc.ID,
+			email:      acc.Email,
+			status:     statusStr,
+			active:     activeMark,
+			familyCols: colVals,
+		})
+	}
+
+	emailWidth := 30
+	for _, r := range rows {
+		if w := utf8.RuneCountInString(r.email); w > emailWidth {
+			emailWidth = w
+		}
+	}
+
+	familyWidths := make(map[string]int, len(families))
+	for _, fam := range families {
+		w := utf8.RuneCountInString(fam)
+		for _, r := range rows {
+			if rw := utf8.RuneCountInString(r.familyCols[fam]); rw > w {
+				w = rw
+			}
+		}
+		familyWidths[fam] = w
+	}
+
+	headerParts := []string{
+		padRight("ID", 36),
+		padRight("EMAIL", emailWidth),
+		padRight("STATUS", 10),
+		padRight("ACTIVE", 8),
+	}
+	for _, fam := range families {
+		w := familyWidths[fam]
+		headerParts = append(headerParts, padRight(fam, w))
+	}
+	headerLine := strings.Join(headerParts, "  ")
+	separatorLine := strings.Repeat("-", utf8.RuneCountInString(headerLine))
+
+	fmt.Fprintln(w, headerLine)
+	fmt.Fprintln(w, separatorLine)
+
+	for _, r := range rows {
+		rowParts := []string{
+			padRight(r.id, 36),
+			padRight(r.email, emailWidth),
+			padRight(r.status, 10),
+			padRight(r.active, 8),
+		}
+		for _, fam := range families {
+			w := familyWidths[fam]
+			rowParts = append(rowParts, padRight(r.familyCols[fam], w))
+		}
+		fmt.Fprintln(w, strings.Join(rowParts, "  "))
 	}
 }
 
@@ -550,6 +858,11 @@ func runLaunch(args []string) {
 		}
 	}
 
+	defaultMaxBodyMB := config.DefaultMaxBodyMB
+	if cfg.MaxBodyMB > 0 {
+		defaultMaxBodyMB = cfg.MaxBodyMB
+	}
+
 	fs := flag.NewFlagSet("launch", flag.ExitOnError)
 	binFlag := fs.String("bin", "", "Path to Antigravity 2.0 binary (overrides auto-detection)")
 	port := fs.Int("port", cfg.Port, "Proxy and web dashboard port (defaults to configured port)")
@@ -558,6 +871,7 @@ func runLaunch(args []string) {
 	dbPath := fs.String("db", cfg.DBPath, "Path to SQLite database file")
 	targetURL := fs.String("target-url", cfg.UpstreamURL, "Google Cloud Code PA upstream target")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Quota polling interval")
+	maxBodyMB := fs.Int("max-body-mb", defaultMaxBodyMB, "Maximum request body buffer size in MB (default: 100)")
 
 	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
 
@@ -580,11 +894,17 @@ func runLaunch(args []string) {
 		passthroughArgs = fs.Args()
 	}
 
+	if *maxBodyMB <= 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *maxBodyMB)
+		os.Exit(1)
+	}
+
 	cfg.Port = *port
 	cfg.UpstreamURL = *targetURL
 	cfg.FallbackSecondaryEnabled = *fallbackSecondary
 	cfg.ModelPrimary = *modelPrimary
 	cfg.ModelSecondary = *modelSecondary
+	cfg.MaxBodyMB = *maxBodyMB
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -632,6 +952,7 @@ func runLaunch(args []string) {
 		launcher.WithTargetURL(*targetURL),
 		launcher.WithPollInterval(*pollInterval),
 		launcher.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+		launcher.WithMaxBodyMB(cfg.MaxBodyMB),
 	)
 
 	if err != nil {
@@ -672,6 +993,7 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  model_primary:              %s\n", cfg.ModelPrimary)
 		fmt.Fprintf(stdout, "  model_secondary:            %s\n", cfg.ModelSecondary)
 		fmt.Fprintf(stdout, "  fallback_secondary_enabled: %t\n", cfg.FallbackSecondaryEnabled)
+		fmt.Fprintf(stdout, "  max_body_mb:                %d\n", cfg.MaxBodyMB)
 		if cfg.ClientID != "" {
 			fmt.Fprintf(stdout, "  client_id:                  %s\n", cfg.ClientID)
 		}
@@ -715,6 +1037,8 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, cfg.ModelSecondary)
 		case "fallback_secondary_enabled":
 			fmt.Fprintln(stdout, cfg.FallbackSecondaryEnabled)
+		case "max_body_mb":
+			fmt.Fprintln(stdout, cfg.MaxBodyMB)
 		case "client_id":
 			fmt.Fprintln(stdout, cfg.ClientID)
 		case "client_secret":
@@ -788,6 +1112,13 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			cfg.FallbackSecondaryEnabled = b
+		case "max_body_mb":
+			mb, err := strconv.Atoi(strings.TrimSpace(val))
+			if err != nil || mb <= 0 {
+				fmt.Fprintf(stderr, "Invalid max_body_mb value: %s\n", val)
+				return 1
+			}
+			cfg.MaxBodyMB = mb
 		case "client_id":
 			cfg.ClientID = strings.TrimSpace(val)
 		case "client_secret":

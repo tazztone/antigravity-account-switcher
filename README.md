@@ -194,9 +194,13 @@ When your active account runs out of quota on a heavy model tier (e.g. `gemini-2
 
 ### 2. Dashboard Web UI Configuration
 You can configure model fallback directly from the browser dashboard (`http://127.0.0.1:8080` or `launch --open`):
-- **Live Toggle**: Enable or disable intra-account secondary fallback on the fly.
-- **Model Discovery**: Click **Fetch Models** to query active `language_server` / Cloud Code PA endpoints and populate model selectors with currently supported models.
-- **Instant Hot-Reload**: Clicking **Save Settings** persists changes to `config.json` and immediately applies them to the running proxy engine without restarting Antigravity 2.0 or the daemon.
+- **Unified Model Fallback**: Click **↪** on any model row to open the anchored fallback popover. Configure Primary and Secondary models with configurable failover order: **Pool-first** (rotate all available pool accounts on the primary model before degrading quality) or **Same-account first** (degrade model tier on active account before rotating). Models are transparently grouped by account availability (`This Account` vs `Other Accounts in Pool`).
+- **Model Discovery**: Click the refresh button in the header to query active `language_server` / Cloud Code PA endpoints and populate model catalogs. Internal endpoints (`tab_*`, `chat_*`) are automatically filtered from the UI.
+- **Per-Account Model Support**: Each account card cleanly displays the models discovered and supported by that account's tier with reasoning effort pills and individual **↪** fallback policy triggers.
+- **Per-Category Pins & Bucket-Level Routing**: Pin accounts separately for Claude/GPT, Gemini, or Gemini 4 Argon (`POST /api/accounts/{id}/select` with `{"category": "..."}`). Each model group features direct bucket-level borders and inline controls showing active routing state: `🔄 Pool` (auto-failover) vs `🔒 Solo` (locks category to account, returning 429 on exhaustion to protect other accounts). Accounts can also opt out of entire model categories (`🚫 Off / Excluded`) with a single click (`PUT /api/accounts/{id}/categories`).
+- **Gemini 4 Argon Weekly Quota Tracking**: Argon weekly sliding quota is tracked independently with live progress bars, percentages, and reset cooldown timers alongside standard Claude and Gemini quotas.
+- **Consolidated Model Rows**: Repetitive reasoning effort variants (`High`, `Med`, `Low`, `Think`) are combined into single clean base-model rows with compact capability pills.
+- **Instant Hot-Reload**: Persisting fallback settings updates `config.json` and immediately applies changes to the running proxy engine without restarting Antigravity 2.0 or the daemon.
 
 ### 3. Automatic 400 Thought Signature Recovery
 When switching between model providers (e.g. Claude <-> Gemini) or continuing multi-turn agent sessions, Google Cloud Code PA validates cryptographic HMAC thought signatures (`thought_signature` or Claude `thinking` blocks). Incompatible or stale thought blocks trigger `HTTP 400 ("Corrupted thought signature" or "Invalid signature in thinking block")`.
@@ -245,6 +249,7 @@ antigravity-account-switcher config set fallback_secondary_enabled true
 | `ANTIGRAVITY_MODEL_PRIMARY` | Overrides default primary model tier. |
 | `ANTIGRAVITY_MODEL_SECONDARY` | Overrides default secondary fallback model tier. |
 | `ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED` | Enables/disables intra-account secondary fallback (`true`/`false`). |
+| `ANTIGRAVITY_FALLBACK_STRATEGY` | Failover strategy: `pool_first` (default) or `account_first`. |
 
 ---
 

@@ -16,34 +16,43 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
 type lsQuotaResponse struct {
 	Response struct {
 		Groups []struct {
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			Buckets     []struct {
+			DisplayName    string `json:"displayName"`
+			DisplayNameAlt string `json:"display_name"`
+			Description    string `json:"description"`
+			Buckets        []struct {
 				BucketID          string  `json:"bucketId"`
+				BucketIDAlt       string  `json:"bucket_id"`
 				DisplayName       string  `json:"displayName"`
+				DisplayNameAlt    string  `json:"display_name"`
 				Description       string  `json:"description"`
 				Window            string  `json:"window"`
 				RemainingFraction float64 `json:"remainingFraction"`
+				RemainingFracAlt  float64 `json:"remaining_fraction"`
 				ResetTime         string  `json:"resetTime"`
+				ResetTimeAlt      string  `json:"reset_time"`
 			} `json:"buckets"`
 		} `json:"groups"`
 		Description string `json:"description"`
 	} `json:"response"`
 }
 
+type modelPayloadItem struct {
+	DisplayName      string `json:"displayName"`
+	Recommended      bool   `json:"recommended"`
+	SupportsThinking bool   `json:"supportsThinking"`
+	Disabled         bool   `json:"disabled"`
+}
+
 type modelsPayload struct {
-	Models map[string]struct {
-		DisplayName      string `json:"displayName"`
-		Recommended      bool   `json:"recommended"`
-		SupportsThinking bool   `json:"supportsThinking"`
-	} `json:"models"`
-	DefaultAgentModelID string `json:"defaultAgentModelId"`
+	Models              map[string]modelPayloadItem `json:"models"`
+	DefaultAgentModelID string                      `json:"defaultAgentModelId"`
 	AgentModelSorts     []struct {
 		DisplayName string `json:"displayName"`
 		Groups      []struct {
@@ -228,16 +237,34 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 
 	for _, g := range parsed.Response.Groups {
 		groupName := g.DisplayName
+		if groupName == "" {
+			groupName = g.DisplayNameAlt
+		}
+		isArgon := strings.Contains(strings.ToLower(groupName), "argon")
 		if strings.Contains(strings.ToLower(groupName), "claude") {
 			groupName = "Claude & GPT"
+		} else if isArgon {
+			groupName = "Gemini 4 Argon"
 		} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 			groupName = "Gemini"
 		}
 
 		for _, b := range g.Buckets {
+			rawBucketID := b.BucketID
+			if rawBucketID == "" {
+				rawBucketID = b.BucketIDAlt
+			}
+			remFraction := b.RemainingFraction
+			if remFraction == 0 && b.RemainingFracAlt != 0 {
+				remFraction = b.RemainingFracAlt
+			}
+			resetStr := b.ResetTime
+			if resetStr == "" {
+				resetStr = b.ResetTimeAlt
+			}
 			var resetTime time.Time
-			if b.ResetTime != "" {
-				t, tErr := time.Parse(time.RFC3339, b.ResetTime)
+			if resetStr != "" {
+				t, tErr := time.Parse(time.RFC3339, resetStr)
 				if tErr == nil {
 					resetTime = t
 				}
@@ -250,13 +277,21 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 				windowName = "5H"
 			}
 
+			if isArgon && !strings.Contains(strings.ToLower(rawBucketID), "argon") {
+				if strings.Contains(strings.ToLower(rawBucketID), "weekly") || strings.EqualFold(windowName, "WEEKLY") {
+					rawBucketID = "argon-weekly"
+				} else {
+					rawBucketID = "argon-" + rawBucketID
+				}
+			}
+
 			displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
 			bucket := &domain.QuotaBucket{
 				AccountID:         accountID,
-				BucketID:          fmt.Sprintf("%s-%s", accountID, b.BucketID),
+				BucketID:          fmt.Sprintf("%s-%s", accountID, rawBucketID),
 				DisplayName:       displayName,
 				Window:            domain.QuotaWindow(windowName),
-				RemainingFraction: b.RemainingFraction,
+				RemainingFraction: remFraction,
 				ResetTime:         resetTime,
 				UpdatedAt:         now,
 			}
@@ -297,6 +332,17 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 		return nil, fmt.Errorf("empty models map")
 	}
 
+	nameCounts := make(map[string]int, len(p.Models))
+	for mid, meta := range p.Models {
+		if meta.Disabled || strings.Contains(strings.ToLower(mid), "disabled") {
+			continue
+		}
+		if meta.DisplayName != "" {
+			nameCounts[strings.ToLower(strings.TrimSpace(meta.DisplayName))]++
+		}
+	}
+	usedNames := make(map[string]bool, len(p.Models))
+
 	seen := make(map[string]bool)
 	var result []*domain.ModelInfo
 
@@ -309,7 +355,7 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 					continue
 				}
 				modelMeta, ok := p.Models[mid]
-				if !ok {
+				if !ok || modelMeta.Disabled || strings.Contains(strings.ToLower(mid), "disabled") {
 					continue
 				}
 				seen[mid] = true
@@ -317,6 +363,7 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 				if dName == "" {
 					dName = mid
 				}
+				dName = disambiguateModelName(mid, dName, nameCounts, usedNames)
 				result = append(result, &domain.ModelInfo{
 					ID:          mid,
 					DisplayName: dName,
@@ -337,19 +384,78 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	sort.Strings(remainingIDs)
 	for _, mid := range remainingIDs {
 		modelMeta := p.Models[mid]
+		if modelMeta.Disabled || strings.Contains(strings.ToLower(mid), "disabled") {
+			continue
+		}
+		seen[mid] = true
 		dName := modelMeta.DisplayName
 		if dName == "" {
 			dName = mid
 		}
+		dName = disambiguateModelName(mid, dName, nameCounts, usedNames)
+		isInternal := domain.IsInternalOrPreviewModel(mid)
 		result = append(result, &domain.ModelInfo{
 			ID:          mid,
 			DisplayName: dName,
 			Category:    categorizeModelID(mid),
-			Recommended: modelMeta.Recommended,
+			Recommended: !isInternal && modelMeta.Recommended,
 		})
 	}
 
 	return result, nil
+}
+
+func extractModelVariant(mid string) string {
+	lower := strings.ToLower(mid)
+	var parts []string
+	if strings.Contains(lower, "high") {
+		parts = append(parts, "High")
+	} else if strings.Contains(lower, "medium") {
+		parts = append(parts, "Medium")
+	} else if strings.Contains(lower, "low") {
+		parts = append(parts, "Low")
+	}
+	if strings.Contains(lower, "preview") {
+		parts = append(parts, "Preview")
+	}
+	if strings.Contains(lower, "tiered") {
+		parts = append(parts, "Tiered")
+	}
+	if strings.Contains(lower, "thinking") {
+		parts = append(parts, "Thinking")
+	}
+	if strings.Contains(lower, "image") {
+		parts = append(parts, "Image")
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " ")
+	}
+	return ""
+}
+
+func disambiguateModelName(mid, dName string, nameCounts map[string]int, usedNames map[string]bool) string {
+	cleanName := strings.TrimSpace(dName)
+	if cleanName == "" {
+		return mid
+	}
+	if nameCounts[strings.ToLower(cleanName)] <= 1 && !usedNames[strings.ToLower(cleanName)] {
+		usedNames[strings.ToLower(cleanName)] = true
+		return cleanName
+	}
+
+	variant := extractModelVariant(mid)
+	candidate := cleanName
+	if variant != "" && !strings.Contains(strings.ToLower(cleanName), strings.ToLower(variant)) {
+		candidate = fmt.Sprintf("%s (%s)", cleanName, variant)
+	} else if !strings.Contains(strings.ToLower(cleanName), strings.ToLower(mid)) {
+		candidate = fmt.Sprintf("%s (%s)", cleanName, mid)
+	}
+
+	if usedNames[strings.ToLower(candidate)] {
+		candidate = fmt.Sprintf("%s (%s)", cleanName, mid)
+	}
+	usedNames[strings.ToLower(candidate)] = true
+	return candidate
 }
 
 // FetchAvailableModelsFromCloudCode queries Cloud Code PA at /v1internal:fetchAvailableModels using a Bearer token.
@@ -365,7 +471,8 @@ func FetchAvailableModelsFromCloudCode(ctx context.Context, token string) ([]*do
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/cli/1.1.26 (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)")
+	req.Header.Set("User-Agent", config.AntigravityUserAgent(""))
+	req.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
@@ -417,6 +524,9 @@ func categorizeModelID(id string) string {
 	if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") || strings.Contains(lower, "sonnet") || strings.Contains(lower, "opus") || strings.Contains(lower, "haiku") || strings.Contains(lower, "3p") {
 		return "claude_gpt"
 	}
+	if strings.Contains(lower, "argon") {
+		return "gemini_argon"
+	}
 	if strings.Contains(lower, "gemini") || strings.Contains(lower, "gemma") || strings.Contains(lower, "flash") || strings.Contains(lower, "pro") {
 		return "gemini"
 	}
@@ -435,8 +545,14 @@ func DefaultModelCatalog() []*domain.ModelInfo {
 		{ID: "gemini-3.1-pro-low", DisplayName: "Gemini 3.1 Pro (Low)", Category: "gemini", Recommended: true},
 		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini", Recommended: false},
 		{ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", Category: "gemini", Recommended: false},
+		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini_argon", Recommended: true},
+		{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon", Recommended: true},
+		{ID: "gemini-4-argon-low", DisplayName: "Gemini 4 Argon (Low)", Category: "gemini_argon", Recommended: true},
 		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6 (Thinking)", Category: "claude_gpt", Recommended: true},
 		{ID: "claude-opus-4-6-thinking", DisplayName: "Claude Opus 4.6 (Thinking)", Category: "claude_gpt", Recommended: true},
 		{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B (Medium)", Category: "claude_gpt", Recommended: true},
 	}
 }
+
+// CategorizeModelID returns the category string (claude_gpt, gemini_argon, gemini) for a model ID.
+func CategorizeModelID(id string) string { return categorizeModelID(id) }

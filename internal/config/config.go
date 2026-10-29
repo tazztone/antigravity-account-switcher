@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +25,10 @@ const (
 	DefaultModelPrimary             = "gemini-2.5-pro"
 	DefaultModelSecondary           = "claude-3-5-sonnet"
 	DefaultFallbackSecondaryEnabled = false
+	DefaultMaxBodyMB                = 100
+	FallbackStrategyPoolFirst       = "pool_first"
+	FallbackStrategyAccountFirst    = "account_first"
+	DefaultFallbackStrategy         = FallbackStrategyPoolFirst
 )
 
 // Config holds persistent user configuration.
@@ -34,6 +42,8 @@ type Config struct {
 	ModelPrimary             string `json:"model_primary"`
 	ModelSecondary           string `json:"model_secondary"`
 	FallbackSecondaryEnabled bool   `json:"fallback_secondary_enabled"`
+	FallbackStrategy         string `json:"fallback_strategy,omitempty"`
+	MaxBodyMB                int    `json:"max_body_mb,omitempty"`
 	ClientID                 string `json:"client_id,omitempty"`
 	ClientSecret             string `json:"client_secret,omitempty"`
 }
@@ -75,6 +85,8 @@ func DefaultConfig() *Config {
 		ModelPrimary:             DefaultModelPrimary,
 		ModelSecondary:           DefaultModelSecondary,
 		FallbackSecondaryEnabled: DefaultFallbackSecondaryEnabled,
+		FallbackStrategy:         DefaultFallbackStrategy,
+		MaxBodyMB:                DefaultMaxBodyMB,
 	}
 }
 
@@ -94,12 +106,18 @@ func LoadDiskConfig() (*Config, error) {
 		}
 	}
 
-	// Defensive defaults if unmarshaled JSON contained explicit empty strings
+	// Defensive defaults if unmarshaled JSON contained explicit empty strings or invalid limits
 	if cfg.ModelPrimary == "" {
 		cfg.ModelPrimary = DefaultModelPrimary
 	}
 	if cfg.ModelSecondary == "" {
 		cfg.ModelSecondary = DefaultModelSecondary
+	}
+	if cfg.FallbackStrategy == "" {
+		cfg.FallbackStrategy = DefaultFallbackStrategy
+	}
+	if cfg.MaxBodyMB <= 0 {
+		cfg.MaxBodyMB = DefaultMaxBodyMB
 	}
 
 	return cfg, nil
@@ -143,11 +161,21 @@ func Load() (*Config, error) {
 			cfg.FallbackSecondaryEnabled = b
 		}
 	}
+	if envStrategy := os.Getenv("ANTIGRAVITY_FALLBACK_STRATEGY"); envStrategy != "" {
+		if trimmed := strings.TrimSpace(envStrategy); trimmed != "" {
+			cfg.FallbackStrategy = trimmed
+		}
+	}
 	if envClientID := os.Getenv("ANTIGRAVITY_CLIENT_ID"); envClientID != "" {
 		cfg.ClientID = strings.TrimSpace(envClientID)
 	}
 	if envClientSecret := os.Getenv("ANTIGRAVITY_CLIENT_SECRET"); envClientSecret != "" {
 		cfg.ClientSecret = strings.TrimSpace(envClientSecret)
+	}
+	if envMaxBody := os.Getenv("ANTIGRAVITY_MAX_BODY_MB"); envMaxBody != "" {
+		if mb, err := strconv.Atoi(strings.TrimSpace(envMaxBody)); err == nil && mb > 0 {
+			cfg.MaxBodyMB = mb
+		}
 	}
 
 	return cfg, nil
@@ -189,10 +217,22 @@ func ParseBool(val string) (bool, error) {
 	}
 }
 
+// MaxBodyBytes returns the maximum request body buffer size in bytes.
+// If MaxBodyMB is <= 0 or the receiver is nil, it falls back to DefaultMaxBodyMB in bytes.
+func (c *Config) MaxBodyBytes() int64 {
+	if c == nil || c.MaxBodyMB <= 0 {
+		return int64(DefaultMaxBodyMB) * 1024 * 1024
+	}
+	return int64(c.MaxBodyMB) * 1024 * 1024
+}
+
 // Validate verifies configuration boundaries, network URLs, and model fallback invariants.
 func (c *Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d: must be between 1 and 65535", c.Port)
+	}
+	if c.MaxBodyMB < 0 {
+		return fmt.Errorf("invalid max_body_mb %d: cannot be negative", c.MaxBodyMB)
 	}
 	if c.UpstreamURL != "" {
 		parsed, err := url.Parse(c.UpstreamURL)
@@ -221,6 +261,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("model_primary and model_secondary cannot be identical (%q)", c.ModelPrimary)
 		}
 	}
+	if c.FallbackStrategy != "" && c.FallbackStrategy != FallbackStrategyPoolFirst && c.FallbackStrategy != FallbackStrategyAccountFirst {
+		return fmt.Errorf("invalid fallback_strategy %q: must be %q or %q", c.FallbackStrategy, FallbackStrategyPoolFirst, FallbackStrategyAccountFirst)
+	}
 	return nil
 }
 
@@ -233,6 +276,7 @@ func CandidateAntigravityPaths() []string {
 		candidates = append(candidates,
 			// 1. Standard XDG user application directories (Recommended, no sudo)
 			filepath.Join(home, ".local", "bin", "antigravity"),
+			filepath.Join(home, ".local", "bin", "agy"),
 			filepath.Join(home, ".local", "share", "antigravity", "antigravity"),
 			filepath.Join(home, ".local", "share", "antigravity", "Antigravity-x64", "antigravity"),
 			filepath.Join(home, ".local", "share", "Antigravity", "antigravity"),
@@ -343,4 +387,57 @@ func FindAntigravityIcon(resolvedBin string) string {
 	}
 
 	return ""
+}
+
+var (
+	detectedVersionMu sync.RWMutex
+	detectedVersion   string
+)
+
+// DetectAntigravityCLIVersion determines the Antigravity / AGY CLI semantic version.
+// It probes the resolved binary with '--version'. If detection fails or returns a
+// version earlier than "1.4.10", it defaults to "1.4.10" so that Google Cloud Code PA
+// enables Gemini 4 Argon quota and models.
+func DetectAntigravityCLIVersion(overrideBin string) string {
+	detectedVersionMu.RLock()
+	if detectedVersion != "" && overrideBin == "" {
+		v := detectedVersion
+		detectedVersionMu.RUnlock()
+		return v
+	}
+	detectedVersionMu.RUnlock()
+
+	const minSupportedVersion = "1.4.10"
+	targetVersion := minSupportedVersion
+
+	bin, err := ResolveAntigravityBin(overrideBin)
+	if err == nil && bin != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, "--version")
+		if out, cmdErr := cmd.Output(); cmdErr == nil {
+			trimmed := strings.TrimSpace(string(out))
+			re := regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
+			if m := re.FindString(trimmed); m != "" {
+				if m >= minSupportedVersion {
+					targetVersion = m
+				}
+			}
+		}
+	}
+
+	if overrideBin == "" {
+		detectedVersionMu.Lock()
+		detectedVersion = targetVersion
+		detectedVersionMu.Unlock()
+	}
+
+	return targetVersion
+}
+
+// AntigravityUserAgent returns a User-Agent string simulating the Antigravity CLI
+// with at least version 1.4.10, ensuring Google Cloud Code PA exposes the Gemini 4 Argon tier.
+func AntigravityUserAgent(overrideBin string) string {
+	ver := DetectAntigravityCLIVersion(overrideBin)
+	return fmt.Sprintf("antigravity/cli/%s (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)", ver)
 }

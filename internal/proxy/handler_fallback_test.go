@@ -377,15 +377,20 @@ func TestAccountRotationOnDoubleExhaustion(t *testing.T) {
 		t.Errorf("req 2: expected token-rot-2 / pro (model reset to primary), got %s / %s", reqs[2].AuthBearer, reqs[2].Path)
 	}
 
-	// Verify Account statuses in DB
+	// Verify Account statuses in DB (global is_active stays with the primary IDE login;
+	// category rotation is tracked by active_category_accounts)
 	dbAcc1, _ := env.accountRepo.GetByID(ctx, acc1.ID)
-	if dbAcc1.Status != domain.AccountStatusExhausted || dbAcc1.IsActive {
-		t.Errorf("expected acc1 exhausted, got status=%s is_active=%v", dbAcc1.Status, dbAcc1.IsActive)
+	if dbAcc1.Status != domain.AccountStatusExhausted {
+		t.Errorf("expected acc1 exhausted, got status=%s", dbAcc1.Status)
 	}
 
 	dbAcc2, _ := env.accountRepo.GetByID(ctx, acc2.ID)
-	if dbAcc2.Status != domain.AccountStatusActive || !dbAcc2.IsActive {
-		t.Errorf("expected acc2 active, got status=%s is_active=%v", dbAcc2.Status, dbAcc2.IsActive)
+	if dbAcc2.Status != domain.AccountStatusActive {
+		t.Errorf("expected acc2 active, got status=%s", dbAcc2.Status)
+	}
+	pinnedAcc, err := env.accountRepo.GetActiveForCategory(ctx, domain.CategoryGemini)
+	if err != nil || pinnedAcc == nil || pinnedAcc.ID != acc2.ID {
+		t.Errorf("expected gemini pin on acc2, got %v (err=%v)", pinnedAcc, err)
 	}
 
 	// Verify events: model_fallback -> failover_429 -> account_switched

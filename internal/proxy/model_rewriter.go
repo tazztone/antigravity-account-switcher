@@ -28,28 +28,18 @@ var (
 )
 
 // ModelCategory represents the top-level quota and provider tier for a model.
-type ModelCategory int
+type ModelCategory = domain.ModelCategory
 
 const (
 	// CategoryUnknown represents unrecognized model identifiers.
-	CategoryUnknown ModelCategory = iota
+	CategoryUnknown = domain.CategoryUnknown
 	// CategoryClaudeGPT covers Anthropic Claude and OpenAI GPT third-party models.
-	CategoryClaudeGPT
+	CategoryClaudeGPT = domain.CategoryClaudeGPT
 	// CategoryGemini covers Google Gemini and Gemma first-party models.
-	CategoryGemini
+	CategoryGemini = domain.CategoryGemini
+	// CategoryGeminiArgon covers Gemini 4 Argon tiers with their own weekly quota buckets.
+	CategoryGeminiArgon = domain.CategoryGeminiArgon
 )
-
-// String returns a canonical string representation of the ModelCategory.
-func (c ModelCategory) String() string {
-	switch c {
-	case CategoryClaudeGPT:
-		return "claude_gpt"
-	case CategoryGemini:
-		return "gemini"
-	default:
-		return "unknown"
-	}
-}
 
 // ModelSource identifies where the model was discovered in the request.
 type ModelSource string
@@ -114,7 +104,12 @@ func CategorizeModel(model string) ModelCategory {
 		return CategoryClaudeGPT
 	}
 
-	// 2. Gemini Family Check
+	// 2. Gemini 4 Argon Check (before generic gemini to avoid bucket collision)
+	if strings.Contains(lower, "argon") {
+		return CategoryGeminiArgon
+	}
+
+	// 3. Gemini Family Check
 	if strings.Contains(lower, "gemini") ||
 		strings.Contains(lower, "gemma") ||
 		strings.Contains(lower, "flash") ||
@@ -509,9 +504,16 @@ func MatchesBucketCategory(cat ModelCategory, displayName, bucketID string) bool
 			strings.Contains(id, "_3p") ||
 			strings.Contains(id, "-3p")
 
+	case CategoryGeminiArgon:
+		return strings.Contains(name, "argon") ||
+			strings.Contains(id, "argon")
+
 	case CategoryGemini:
-		return strings.Contains(name, "gemini") ||
+		hasGemini := strings.Contains(name, "gemini") ||
 			strings.Contains(id, "gemini")
+		hasArgon := strings.Contains(name, "argon") ||
+			strings.Contains(id, "argon")
+		return hasGemini && !hasArgon
 
 	default:
 		return false

@@ -9,17 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
 type mockAccountRepo struct {
-	mu       sync.Mutex
-	accounts map[string]*domain.Account
+	mu             sync.Mutex
+	accounts       map[string]*domain.Account
+	categoryActive map[domain.ModelCategory]string
+	categoryModes  map[domain.ModelCategory]string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
 	return &mockAccountRepo{
-		accounts: make(map[string]*domain.Account),
+		accounts:       make(map[string]*domain.Account),
+		categoryActive: make(map[domain.ModelCategory]string),
+		categoryModes:  make(map[domain.ModelCategory]string),
 	}
 }
 
@@ -159,6 +164,164 @@ func (m *mockAccountRepo) GetNextAvailable(ctx context.Context, excludeID string
 	}
 	cp := *best
 	return &cp, nil
+}
+
+func (m *mockAccountRepo) GetActiveForCategory(ctx context.Context, category domain.ModelCategory) (*domain.Account, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id, ok := m.categoryActive[category]; ok {
+		if acc, ok := m.accounts[id]; ok {
+			cp := *acc
+			return &cp, nil
+		}
+	}
+	for _, acc := range m.accounts {
+		if acc.IsActive {
+			cp := *acc
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrNoActiveAccount
+}
+
+func (m *mockAccountRepo) SetActiveForCategory(ctx context.Context, category domain.ModelCategory, accountID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target, ok := m.accounts[accountID]
+	if !ok {
+		return domain.ErrAccountNotFound
+	}
+	m.categoryActive[category] = accountID
+	for _, acc := range m.accounts {
+		acc.IsActive = false
+	}
+	target.IsActive = true
+	target.Status = domain.AccountStatusActive
+	target.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *mockAccountRepo) GetNextAvailableForCategory(ctx context.Context, category domain.ModelCategory, excludeID string) (*domain.Account, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best *domain.Account
+	for _, acc := range m.accounts {
+		if acc.ID == excludeID || acc.IsCategoryDisabled(category) {
+			continue
+		}
+		if acc.Status == domain.AccountStatusActive {
+			if best == nil || acc.UpdatedAt.Before(best.UpdatedAt) {
+				best = acc
+			}
+		}
+	}
+	if best == nil {
+		return nil, domain.ErrNoAvailableAccount
+	}
+	cp := *best
+	return &cp, nil
+}
+
+func (m *mockAccountRepo) GetActiveCategoriesByAccount(ctx context.Context) (map[string][]domain.ModelCategory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make(map[string][]domain.ModelCategory)
+	for cat, accID := range m.categoryActive {
+		result[accID] = append(result[accID], cat)
+	}
+	return result, nil
+}
+
+func (m *mockAccountRepo) UpsertAccountModels(ctx context.Context, accountID string, models []*domain.ModelInfo) error {
+	return nil
+}
+
+func (m *mockAccountRepo) ListAccountModelRules(ctx context.Context, accountID string) ([]*domain.AccountModelRule, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepo) UpdateAccountModelRule(ctx context.Context, rule *domain.AccountModelRule) error {
+	return nil
+}
+
+func (m *mockAccountRepo) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockAccountRepo) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
+	return m.GetNextAvailable(ctx, excludeID)
+}
+
+func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, accountID string, category domain.ModelCategory) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acc, ok := m.accounts[accountID]
+	if !ok {
+		return false, domain.ErrAccountNotFound
+	}
+	if acc.IsCategoryDisabled(category) {
+		return false, nil
+	}
+	return acc.IsAvailable(), nil
+}
+
+func (m *mockAccountRepo) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.categoryModes != nil {
+		if mode, ok := m.categoryModes[category]; ok {
+			return mode, nil
+		}
+	}
+	return domain.RoutingModePool, nil
+}
+
+func (m *mockAccountRepo) SetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory, mode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.categoryModes == nil {
+		m.categoryModes = make(map[domain.ModelCategory]string)
+	}
+	m.categoryModes[category] = mode
+	return nil
+}
+
+func (m *mockAccountRepo) GetAllCategoryRoutingModes(ctx context.Context) (map[domain.ModelCategory]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	modes := map[domain.ModelCategory]string{
+		domain.CategoryClaudeGPT:   domain.RoutingModePool,
+		domain.CategoryGemini:      domain.RoutingModePool,
+		domain.CategoryGeminiArgon: domain.RoutingModePool,
+	}
+	for k, v := range m.categoryModes {
+		modes[k] = v
+	}
+	return modes, nil
+}
+
+func (m *mockAccountRepo) SetAccountCategoryDisabled(ctx context.Context, accountID string, category domain.ModelCategory, disabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acc, ok := m.accounts[accountID]
+	if !ok {
+		return domain.ErrAccountNotFound
+	}
+	var newCats []string
+	for _, c := range acc.DisabledCategories {
+		if c != category.String() {
+			newCats = append(newCats, c)
+		}
+	}
+	if disabled {
+		newCats = append(newCats, category.String())
+	}
+	acc.DisabledCategories = newCats
+	return nil
 }
 
 type mockEventRepo struct {
@@ -623,6 +786,68 @@ func TestFailoverEngine_HandleExhaustion_PrimaryToSecondary(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for EventTypeModelFallback")
+	}
+}
+
+func TestFailoverEngine_HandleExhaustion_PoolFirstStrategy(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	now := time.Now().UTC()
+
+	accA := &domain.Account{
+		ID:        "acc-A",
+		Email:     "a@example.com",
+		Status:    domain.AccountStatusActive,
+		IsActive:  true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	accB := &domain.Account{
+		ID:        "acc-B",
+		Email:     "b@example.com",
+		Status:    domain.AccountStatusActive,
+		IsActive:  false,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	accRepo.addAccount(accA)
+	accRepo.addAccount(accB)
+
+	broadcaster := NewBroadcaster(10)
+	engine := NewFailoverEngine(
+		accRepo, broadcaster, nil,
+		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyPoolFirst),
+	)
+
+	// Step 1: Account A fails on primary -> Pool-first rotates to Account B preserving primary model!
+	action1, target1, next1, err1 := engine.HandleExhaustion(ctx, accA, "gemini-2.5-pro")
+	if err1 != nil {
+		t.Fatalf("step 1 unexpected error: %v", err1)
+	}
+	if action1 != ActionRotateAccount {
+		t.Fatalf("expected ActionRotateAccount under pool-first, got %v", action1)
+	}
+	if target1 != "gemini-2.5-pro" {
+		t.Fatalf("expected targetModel to remain primary gemini-2.5-pro, got %s", target1)
+	}
+	if next1.ID != "acc-B" {
+		t.Fatalf("expected rotation to acc-B, got %s", next1.ID)
+	}
+
+	// Step 2: Account B ALSO fails on primary -> Entire pool exhausted for primary! Falls back to secondary!
+	action2, target2, next2, err2 := engine.HandleExhaustion(ctx, accB, "gemini-2.5-pro")
+	if err2 != nil {
+		t.Fatalf("step 2 unexpected error: %v", err2)
+	}
+	if action2 != ActionFallbackSecondary {
+		t.Fatalf("expected ActionFallbackSecondary when pool exhausted for primary, got %v", action2)
+	}
+	if target2 != "gemini-2.5-flash" {
+		t.Fatalf("expected fallback model gemini-2.5-flash, got %s", target2)
+	}
+	if next2.ID != "acc-B" {
+		t.Fatalf("expected next2 acc-B, got %s", next2.ID)
 	}
 }
 

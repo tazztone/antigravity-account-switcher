@@ -3,9 +3,11 @@ package quota
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -664,5 +666,52 @@ func TestPoller_DisabledAccounts_Skipped(t *testing.T) {
 
 	if called {
 		t.Error("expected disabled account to be skipped, but server was called")
+	}
+}
+
+func TestPoller_FetchQuotaSummary_RequestHeadersAndProjectBody(t *testing.T) {
+	var capturedBody string
+	var capturedUA string
+	var capturedClient string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		capturedBody = string(b)
+		capturedUA = r.Header.Get("User-Agent")
+		capturedClient = r.Header.Get("X-Goog-Api-Client")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"groups":[]}`))
+	}))
+	defer server.Close()
+
+	_, accRepo, quotaRepo := setupTestStore(t)
+	ctx := context.Background()
+
+	acc := &domain.Account{
+		ID:          "acc-req-check",
+		Email:       "user@example.com",
+		AccessToken: "token-check",
+		TokenExpiry: time.Now().Add(1 * time.Hour),
+		Status:      domain.AccountStatusActive,
+	}
+	_ = accRepo.Create(ctx, acc)
+
+	p, err := NewPoller(accRepo, quotaRepo, WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+
+	_, _ = p.fetchQuotaSummary(ctx, acc)
+
+	if !strings.Contains(capturedBody, `"project":"aicode-consumers"`) {
+		t.Errorf("expected request body to contain project:aicode-consumers, got %q", capturedBody)
+	}
+	if !strings.Contains(capturedUA, "aidev_client") || !strings.Contains(capturedUA, "antigravity/cli") {
+		t.Errorf("expected User-Agent with aidev_client and antigravity/cli, got %q", capturedUA)
+	}
+	if capturedClient == "" {
+		t.Errorf("expected X-Goog-Api-Client header to be set, got empty")
 	}
 }

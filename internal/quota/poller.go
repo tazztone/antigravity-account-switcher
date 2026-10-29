@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
@@ -336,6 +337,47 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 		buckets = b
 	}
 
+	// 2. Preserve any active cooldown / lower remaining fraction for argon-weekly
+	hasArgonInFetched := false
+	for _, b := range buckets {
+		if (strings.Contains(strings.ToLower(b.BucketID), "argon") || strings.Contains(strings.ToLower(b.DisplayName), "argon")) &&
+			strings.Contains(strings.ToLower(string(b.Window)), "weekly") {
+			hasArgonInFetched = true
+			existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+			for _, eb := range existing {
+				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+					strings.Contains(strings.ToLower(string(eb.Window)), "weekly") {
+					if !eb.ResetTime.IsZero() && eb.ResetTime.After(now) && eb.RemainingFraction <= 0.0 {
+						b.ResetTime = eb.ResetTime
+						b.RemainingFraction = eb.RemainingFraction
+					}
+					break
+				}
+			}
+			break
+		}
+	}
+	if !hasArgonInFetched {
+		entitled := false
+		if p.accountRepo != nil {
+			entitled, _ = p.accountRepo.HasArgonEntitlement(ctx, acc.ID)
+		}
+		if entitled {
+			existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+			var existingArgon *domain.QuotaBucket
+			for _, eb := range existing {
+				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+					strings.Contains(strings.ToLower(string(eb.Window)), "weekly") {
+					existingArgon = eb
+					break
+				}
+			}
+			if existingArgon != nil && !existingArgon.ResetTime.IsZero() && existingArgon.ResetTime.After(now) && existingArgon.RemainingFraction <= 0.0 {
+				buckets = append(buckets, existingArgon)
+			}
+		}
+	}
+
 	// 3. Upsert buckets to SQLite
 	if len(buckets) > 0 {
 		_ = p.quotaRepo.DeleteByAccountID(ctx, acc.ID)
@@ -370,16 +412,18 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 
 func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]*domain.QuotaBucket, error) {
 	url := fmt.Sprintf("%s/v1internal:retrieveUserQuotaSummary", p.cfg.BaseURL)
-	reqBody := []byte(`{}`)
+	reqBody := []byte(`{"project":"aicode-consumers"}`)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create quota request: %w", err)
 	}
 
+	ua := config.AntigravityUserAgent("")
 	req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/2.12.0 (linux; x86_64)")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -400,7 +444,8 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 				retryReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 				retryReq.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 				retryReq.Header.Set("Content-Type", "application/json")
-				retryReq.Header.Set("User-Agent", "antigravity/2.12.0 (linux; x86_64)")
+				retryReq.Header.Set("User-Agent", ua)
+				retryReq.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 				resp2, err2 := p.client.Do(retryReq)
 				if err2 == nil {
 					defer resp2.Body.Close()
@@ -532,7 +577,16 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		UpdatedAt:         now,
 	}
 
-	return []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly}
+	consumerBuckets := []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly}
+	existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
+	for _, eb := range existing {
+		if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
+			!eb.ResetTime.IsZero() && eb.ResetTime.After(now) {
+			consumerBuckets = append(consumerBuckets, eb)
+			break
+		}
+	}
+	return consumerBuckets
 }
 
 func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*domain.QuotaBucket, error) {
@@ -574,8 +628,9 @@ type rawBucketDTO struct {
 }
 
 type rawGroupDTO struct {
-	DisplayName string         `json:"displayName"`
-	Buckets     []rawBucketDTO `json:"buckets"`
+	DisplayName    string         `json:"displayName"`
+	DisplayNameAlt string         `json:"display_name"`
+	Buckets        []rawBucketDTO `json:"buckets"`
 }
 
 type rawQuotaResponseDTO struct {
@@ -596,8 +651,14 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 	if len(payload.Groups) > 0 {
 		for _, g := range payload.Groups {
 			groupName := g.DisplayName
+			if groupName == "" {
+				groupName = g.DisplayNameAlt
+			}
+			isArgon := strings.Contains(strings.ToLower(groupName), "argon")
 			if strings.Contains(strings.ToLower(groupName), "claude") {
 				groupName = "Claude and GPT models"
+			} else if isArgon {
+				groupName = "Gemini 4 Argon"
 			} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 				groupName = "Gemini Models"
 			}
@@ -615,7 +676,17 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 					window = domain.QuotaWindow("weekly")
 				}
 
-				displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
+				if isArgon && !strings.Contains(strings.ToLower(bucketID), "argon") {
+					bucketID = "argon-" + string(window)
+				}
+
+				displayName := b.DisplayName
+				if displayName == "" {
+					displayName = b.DisplayNameAlt
+				}
+				if displayName == "" {
+					displayName = fmt.Sprintf("%s (%s)", groupName, b.Window)
+				}
 
 				fraction := b.RemainingFraction
 				if fraction == 0 && b.RemainingFracAlt > 0 {
@@ -636,6 +707,7 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 				})
 			}
 		}
+
 		return buckets, nil
 	}
 
