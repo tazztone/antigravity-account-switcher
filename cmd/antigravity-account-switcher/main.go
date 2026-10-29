@@ -205,6 +205,7 @@ func runServe(args []string) {
 	targetURL := fs.String("target-url", defaultTargetURL, "Google Cloud Code PA upstream target")
 	maxBodyMB := fs.Int("max-body-mb", defaultMaxBodyMB, "Maximum request body buffer size in MB (default: 100)")
 	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
+	fallbackStrategy := fs.String("fallback-strategy", cfg.FallbackStrategy, "Failover strategy: pool_first or account_first")
 	_ = fs.Parse(args)
 
 	if *maxBodyMB <= 0 {
@@ -218,6 +219,9 @@ func runServe(args []string) {
 	cfg.ModelPrimary = *modelPrimary
 	cfg.ModelSecondary = *modelSecondary
 	cfg.MaxBodyMB = *maxBodyMB
+	if *fallbackStrategy != "" {
+		cfg.FallbackStrategy = *fallbackStrategy
+	}
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -253,6 +257,7 @@ func runServe(args []string) {
 		eventRepo,
 		proxy.WithQuotaRepository(quotaRepo),
 		proxy.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+		proxy.WithFallbackStrategy(cfg.FallbackStrategy),
 	)
 	oauthService := oauth.NewOAuthService(accRepo)
 
@@ -382,8 +387,8 @@ func runWrap(args []string) {
 	targetURL := fs.String("target-url", defaultTargetURL, "Google Cloud Code PA upstream target")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Quota polling interval")
 	maxBodyMB := fs.Int("max-body-mb", defaultMaxBodyMB, "Maximum request body buffer size in MB (default: 100)")
-
 	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
+	fallbackStrategy := fs.String("fallback-strategy", cfg.FallbackStrategy, "Failover strategy: pool_first or account_first")
 
 	// Separate launcher flags from command line
 	var cmdToRun []string
@@ -422,6 +427,9 @@ func runWrap(args []string) {
 	cfg.ModelPrimary = *modelPrimary
 	cfg.ModelSecondary = *modelSecondary
 	cfg.MaxBodyMB = *maxBodyMB
+	if *fallbackStrategy != "" {
+		cfg.FallbackStrategy = *fallbackStrategy
+	}
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -448,6 +456,7 @@ func runWrap(args []string) {
 		launcher.WithTargetURL(*targetURL),
 		launcher.WithPollInterval(*pollInterval),
 		launcher.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+		launcher.WithFallbackStrategy(cfg.FallbackStrategy),
 		launcher.WithMaxBodyMB(cfg.MaxBodyMB),
 	)
 
@@ -841,8 +850,8 @@ func runLaunch(args []string) {
 	targetURL := fs.String("target-url", cfg.UpstreamURL, "Google Cloud Code PA upstream target")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Quota polling interval")
 	maxBodyMB := fs.Int("max-body-mb", defaultMaxBodyMB, "Maximum request body buffer size in MB (default: 100)")
-
 	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
+	fallbackStrategy := fs.String("fallback-strategy", cfg.FallbackStrategy, "Failover strategy: pool_first or account_first")
 
 	dashDashIdx := -1
 	for i, arg := range args {
@@ -874,6 +883,9 @@ func runLaunch(args []string) {
 	cfg.ModelPrimary = *modelPrimary
 	cfg.ModelSecondary = *modelSecondary
 	cfg.MaxBodyMB = *maxBodyMB
+	if *fallbackStrategy != "" {
+		cfg.FallbackStrategy = *fallbackStrategy
+	}
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -921,6 +933,7 @@ func runLaunch(args []string) {
 		launcher.WithTargetURL(*targetURL),
 		launcher.WithPollInterval(*pollInterval),
 		launcher.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+		launcher.WithFallbackStrategy(cfg.FallbackStrategy),
 		launcher.WithMaxBodyMB(cfg.MaxBodyMB),
 	)
 
@@ -962,6 +975,7 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  model_primary:              %s\n", cfg.ModelPrimary)
 		fmt.Fprintf(stdout, "  model_secondary:            %s\n", cfg.ModelSecondary)
 		fmt.Fprintf(stdout, "  fallback_secondary_enabled: %t\n", cfg.FallbackSecondaryEnabled)
+		fmt.Fprintf(stdout, "  fallback_strategy:          %s\n", cfg.FallbackStrategy)
 		fmt.Fprintf(stdout, "  max_body_mb:                %d\n", cfg.MaxBodyMB)
 		if cfg.ClientID != "" {
 			fmt.Fprintf(stdout, "  client_id:                  %s\n", cfg.ClientID)
@@ -1006,6 +1020,8 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, cfg.ModelSecondary)
 		case "fallback_secondary_enabled":
 			fmt.Fprintln(stdout, cfg.FallbackSecondaryEnabled)
+		case "fallback_strategy":
+			fmt.Fprintln(stdout, cfg.FallbackStrategy)
 		case "max_body_mb":
 			fmt.Fprintln(stdout, cfg.MaxBodyMB)
 		case "client_id":
@@ -1081,6 +1097,13 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			cfg.FallbackSecondaryEnabled = b
+		case "fallback_strategy":
+			trimmed := strings.TrimSpace(val)
+			if trimmed != config.FallbackStrategyPoolFirst && trimmed != config.FallbackStrategyAccountFirst {
+				fmt.Fprintf(stderr, "Invalid fallback_strategy value: %s (expected %s or %s)\n", val, config.FallbackStrategyPoolFirst, config.FallbackStrategyAccountFirst)
+				return 1
+			}
+			cfg.FallbackStrategy = trimmed
 		case "max_body_mb":
 			mb, err := strconv.Atoi(strings.TrimSpace(val))
 			if err != nil || mb <= 0 {

@@ -80,6 +80,7 @@ func TestCLI_Config_List(t *testing.T) {
 		"model_primary:",
 		"model_secondary:",
 		"fallback_secondary_enabled:",
+		"fallback_strategy:",
 		"gemini-2.5-pro",
 		"claude-3-5-sonnet",
 		"false",
@@ -225,6 +226,21 @@ func TestCLI_Config_Set(t *testing.T) {
 	if loadedMaxBody.MaxBodyMB != 250 {
 		t.Errorf("expected max_body_mb 250, got %d", loadedMaxBody.MaxBodyMB)
 	}
+
+	// 6. Set fallback_strategy
+	outStrat := captureStdout(func() {
+		runConfig([]string{"set", "fallback_strategy", "account_first"})
+	})
+	if !strings.Contains(outStrat, "Updated 'fallback_strategy' to 'account_first'") {
+		t.Errorf("expected fallback_strategy confirmation, got: %s", outStrat)
+	}
+	loadedStrat, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load failed: %v", err)
+	}
+	if loadedStrat.FallbackStrategy != "account_first" {
+		t.Errorf("expected fallback_strategy account_first, got %s", loadedStrat.FallbackStrategy)
+	}
 }
 
 func TestCLI_Config_Errors(t *testing.T) {
@@ -265,6 +281,12 @@ func TestCLI_Config_Errors(t *testing.T) {
 			args:           []string{"set", "invalid_key", "val"},
 			expectedExit:   1,
 			expectedSubstr: "Unknown configuration key: invalid_key",
+		},
+		{
+			name:           "set invalid fallback_strategy",
+			args:           []string{"set", "fallback_strategy", "invalid_strat"},
+			expectedExit:   1,
+			expectedSubstr: "Invalid fallback_strategy value: invalid_strat",
 		},
 		{
 			name:           "set invalid boolean value",

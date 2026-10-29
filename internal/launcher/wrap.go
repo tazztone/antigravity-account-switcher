@@ -63,6 +63,15 @@ func WithModelFallback(primary, secondary string, enabled bool) Option {
 	}
 }
 
+// WithFallbackStrategy configures the failover strategy (pool_first or account_first).
+func WithFallbackStrategy(strategy string) Option {
+	return func(c *Config) {
+		if strategy != "" {
+			c.FallbackStrategy = strategy
+		}
+	}
+}
+
 // WithPort sets the switcher listening port (0 allocates a random ephemeral port).
 func WithPort(p int) Option {
 	return func(c *Config) { c.Port = p }
