@@ -330,7 +330,6 @@
       if (data.category_modes) {
         rawCategoryModes = Object.assign({}, rawCategoryModes, data.category_modes);
       }
-      updateHeaderRoutingStrip();
     } catch (e) {
       console.warn('Failed to fetch status:', e);
     }
@@ -339,14 +338,6 @@
   // =========================================================================
   // Accounts Pool & Live Quota Matrix
   // =========================================================================
-
-  function updateHeaderRoutingStrip() {
-    const stripEl = document.getElementById('header-routing-strip');
-    if (stripEl) {
-      stripEl.innerHTML = '';
-      stripEl.style.display = 'none';
-    }
-  }
 
   async function fetchAccounts() {
     try {
@@ -365,7 +356,6 @@
       }
 
       renderAccountsGrid();
-      updateHeaderRoutingStrip();
     } catch (e) {
       console.warn('Failed to fetch accounts:', e);
     }
@@ -402,8 +392,6 @@
 
     requestAnimationFrame(() => drawPoolCircuits());
   }
-
-  const renderAccounts = renderAccountsGrid;
 
   function drawPoolCircuits() {
     if (!accountsGrid || rawAccountsData.length < 2) {
@@ -1140,7 +1128,7 @@
         }
       }
 
-      renderAccounts();
+      renderAccountsGrid();
     } catch (err) {
       console.warn('Failed to fetch models:', err);
       if (modelsSourceBadge) {
@@ -1434,7 +1422,7 @@
     } else {
       showToast('Model fallback disabled', 'info', 2500);
     }
-    renderAccounts();
+    renderAccountsGrid();
   }
 
   function setupFallbackPopoverEvents() {
