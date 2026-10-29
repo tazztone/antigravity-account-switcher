@@ -250,6 +250,7 @@ antigravity-account-switcher config set fallback_secondary_enabled true
 | `ANTIGRAVITY_MODEL_SECONDARY` | Sobrescreve o modelo secundário de contingência. |
 | `ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED` | Habilita/desabilita o fallback intra-conta (`true`/`false`). |
 | `ANTIGRAVITY_FALLBACK_STRATEGY` | Estratégia de failover: `pool_first` (padrão) ou `account_first`. |
+| `ANTIGRAVITY_MAX_BODY_MB` | Tamanho máximo do buffer de corpo da requisição em MB (padrão: `100`). |
 
 ---
 
