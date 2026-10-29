@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
@@ -460,7 +461,8 @@ func FetchAvailableModelsFromCloudCode(ctx context.Context, token string) ([]*do
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/cli/1.1.26 (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)")
+	req.Header.Set("User-Agent", config.AntigravityUserAgent(""))
+	req.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)

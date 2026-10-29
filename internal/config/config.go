@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -368,4 +371,57 @@ func FindAntigravityIcon(resolvedBin string) string {
 	}
 
 	return ""
+}
+
+var (
+	detectedVersionMu sync.RWMutex
+	detectedVersion   string
+)
+
+// DetectAntigravityCLIVersion determines the Antigravity / AGY CLI semantic version.
+// It probes the resolved binary with '--version'. If detection fails or returns a
+// version earlier than "1.4.10", it defaults to "1.4.10" so that Google Cloud Code PA
+// enables Gemini 4 Argon quota and models.
+func DetectAntigravityCLIVersion(overrideBin string) string {
+	detectedVersionMu.RLock()
+	if detectedVersion != "" && overrideBin == "" {
+		v := detectedVersion
+		detectedVersionMu.RUnlock()
+		return v
+	}
+	detectedVersionMu.RUnlock()
+
+	const minSupportedVersion = "1.4.10"
+	targetVersion := minSupportedVersion
+
+	bin, err := ResolveAntigravityBin(overrideBin)
+	if err == nil && bin != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, "--version")
+		if out, cmdErr := cmd.Output(); cmdErr == nil {
+			trimmed := strings.TrimSpace(string(out))
+			re := regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
+			if m := re.FindString(trimmed); m != "" {
+				if m >= minSupportedVersion {
+					targetVersion = m
+				}
+			}
+		}
+	}
+
+	if overrideBin == "" {
+		detectedVersionMu.Lock()
+		detectedVersion = targetVersion
+		detectedVersionMu.Unlock()
+	}
+
+	return targetVersion
+}
+
+// AntigravityUserAgent returns a User-Agent string simulating the Antigravity CLI
+// with at least version 1.4.10, ensuring Google Cloud Code PA exposes the Gemini 4 Argon tier.
+func AntigravityUserAgent(overrideBin string) string {
+	ver := DetectAntigravityCLIVersion(overrideBin)
+	return fmt.Sprintf("antigravity/cli/%s (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)", ver)
 }

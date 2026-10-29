@@ -233,3 +233,82 @@ func TestArgonQuota_PollAccount_PreservesActiveCooldown(t *testing.T) {
 		t.Errorf("expected reset time %v, got %v", cooldownExpiry, argonPolled.ResetTime)
 	}
 }
+
+func TestArgonQuota_PollAccount_FreshUpstreamOverridesOldPositiveFraction(t *testing.T) {
+	_, accRepo, quotaRepo := setupTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	acc := &domain.Account{
+		ID:          "acc-fresh-override",
+		Email:       "pro@example.com",
+		AccessToken: "test-token",
+		TokenExpiry: now.Add(1 * time.Hour),
+		Status:      domain.AccountStatusActive,
+	}
+	_ = accRepo.Create(ctx, acc)
+
+	// Pre-seed a stale 100% (1.0) argon-weekly bucket in SQLite with future reset
+	initialArgon := &domain.QuotaBucket{
+		AccountID:         acc.ID,
+		BucketID:          "argon-weekly",
+		DisplayName:       "Gemini 4 Argon (weekly)",
+		Window:            domain.QuotaWindow("weekly"),
+		RemainingFraction: 1.0,
+		ResetTime:         now.Add(7 * 24 * time.Hour),
+		UpdatedAt:         now.Add(-10 * time.Minute),
+	}
+	_ = quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{initialArgon})
+
+	// Upstream returns live Argon quota of 0.5618
+	upstreamReset := now.Add(27 * time.Hour)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"groups": [
+				{
+					"displayName": "GEMINI 4 ARGON",
+					"buckets": [{
+						"bucketId": "gemini-argon-wtu-weekly",
+						"window": "weekly",
+						"remainingFraction": 0.5618,
+						"resetTime": "` + upstreamReset.Format(time.RFC3339) + `"
+					}]
+				}
+			]
+		}`))
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	p, err := NewPoller(accRepo, quotaRepo, WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+
+	polledBuckets, pollErr := p.PollAccount(ctx, acc.ID)
+	if pollErr != nil {
+		t.Fatalf("PollAccount failed: %v", pollErr)
+	}
+
+	var argonPolled *domain.QuotaBucket
+	for _, b := range polledBuckets {
+		if strings.Contains(strings.ToLower(b.BucketID), "argon") {
+			argonPolled = b
+			break
+		}
+	}
+
+	if argonPolled == nil {
+		t.Fatalf("expected argon bucket in polled results")
+	}
+	if argonPolled.RemainingFraction != 0.5618 {
+		t.Errorf("expected fresh remaining fraction 0.5618 from upstream, got %f", argonPolled.RemainingFraction)
+	}
+	if !argonPolled.ResetTime.Equal(upstreamReset) {
+		t.Errorf("expected fresh reset time %v from upstream, got %v", upstreamReset, argonPolled.ResetTime)
+	}
+}
+

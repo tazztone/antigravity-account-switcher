@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
@@ -346,7 +347,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 			for _, eb := range existing {
 				if (strings.Contains(strings.ToLower(eb.BucketID), "argon") || strings.Contains(strings.ToLower(eb.DisplayName), "argon")) &&
 					strings.Contains(strings.ToLower(string(eb.Window)), "weekly") {
-					if !eb.ResetTime.IsZero() && eb.ResetTime.After(now) {
+					if !eb.ResetTime.IsZero() && eb.ResetTime.After(now) && eb.RemainingFraction <= 0.0 {
 						b.ResetTime = eb.ResetTime
 						b.RemainingFraction = eb.RemainingFraction
 					}
@@ -439,9 +440,10 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 		return nil, fmt.Errorf("failed to create quota request: %w", err)
 	}
 
+	ua := config.AntigravityUserAgent("")
 	req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/cli/1.1.26 (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)")
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 
 	resp, err := p.client.Do(req)
@@ -463,7 +465,7 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 				retryReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 				retryReq.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 				retryReq.Header.Set("Content-Type", "application/json")
-				retryReq.Header.Set("User-Agent", "antigravity/cli/1.1.26 (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)")
+				retryReq.Header.Set("User-Agent", ua)
 				retryReq.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 				resp2, err2 := p.client.Do(retryReq)
 				if err2 == nil {
