@@ -26,6 +26,9 @@ const (
 	DefaultModelSecondary           = "claude-3-5-sonnet"
 	DefaultFallbackSecondaryEnabled = false
 	DefaultMaxBodyMB                = 100
+	FallbackStrategyPoolFirst       = "pool_first"
+	FallbackStrategyAccountFirst    = "account_first"
+	DefaultFallbackStrategy         = FallbackStrategyPoolFirst
 )
 
 // Config holds persistent user configuration.
@@ -39,6 +42,7 @@ type Config struct {
 	ModelPrimary             string `json:"model_primary"`
 	ModelSecondary           string `json:"model_secondary"`
 	FallbackSecondaryEnabled bool   `json:"fallback_secondary_enabled"`
+	FallbackStrategy         string `json:"fallback_strategy,omitempty"`
 	MaxBodyMB                int    `json:"max_body_mb,omitempty"`
 	ClientID                 string `json:"client_id,omitempty"`
 	ClientSecret             string `json:"client_secret,omitempty"`
@@ -81,6 +85,7 @@ func DefaultConfig() *Config {
 		ModelPrimary:             DefaultModelPrimary,
 		ModelSecondary:           DefaultModelSecondary,
 		FallbackSecondaryEnabled: DefaultFallbackSecondaryEnabled,
+		FallbackStrategy:         DefaultFallbackStrategy,
 		MaxBodyMB:                DefaultMaxBodyMB,
 	}
 }
@@ -107,6 +112,9 @@ func LoadDiskConfig() (*Config, error) {
 	}
 	if cfg.ModelSecondary == "" {
 		cfg.ModelSecondary = DefaultModelSecondary
+	}
+	if cfg.FallbackStrategy == "" {
+		cfg.FallbackStrategy = DefaultFallbackStrategy
 	}
 	if cfg.MaxBodyMB <= 0 {
 		cfg.MaxBodyMB = DefaultMaxBodyMB
@@ -151,6 +159,11 @@ func Load() (*Config, error) {
 	if envFallback := os.Getenv("ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED"); envFallback != "" {
 		if b, err := ParseBool(envFallback); err == nil {
 			cfg.FallbackSecondaryEnabled = b
+		}
+	}
+	if envStrategy := os.Getenv("ANTIGRAVITY_FALLBACK_STRATEGY"); envStrategy != "" {
+		if trimmed := strings.TrimSpace(envStrategy); trimmed != "" {
+			cfg.FallbackStrategy = trimmed
 		}
 	}
 	if envClientID := os.Getenv("ANTIGRAVITY_CLIENT_ID"); envClientID != "" {
@@ -247,6 +260,9 @@ func (c *Config) Validate() error {
 		if strings.EqualFold(primary, secondary) {
 			return fmt.Errorf("model_primary and model_secondary cannot be identical (%q)", c.ModelPrimary)
 		}
+	}
+	if c.FallbackStrategy != "" && c.FallbackStrategy != FallbackStrategyPoolFirst && c.FallbackStrategy != FallbackStrategyAccountFirst {
+		return fmt.Errorf("invalid fallback_strategy %q: must be %q or %q", c.FallbackStrategy, FallbackStrategyPoolFirst, FallbackStrategyAccountFirst)
 	}
 	return nil
 }

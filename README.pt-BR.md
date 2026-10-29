@@ -194,7 +194,7 @@ Quando a cota do modelo principal se esgota (ex.: `gemini-2.5-pro` ou `claude-3-
 
 ### 2. Configuração pelo Dashboard Web
 Você pode gerenciar as preferências de modelos diretamente pelo navegador (`http://127.0.0.1:8080` ou `launch --open`):
-- **Fallback Unificado por Linha**: Clique em **↪** em qualquer linha de modelo para defini-lo como Primário e selecionar seu modelo Secundário de contingência. Quando ativo, erros 429 no modelo primário tentam o secundário na mesma conta antes de alternar de conta. O modelo alvo exibe um badge `fallback target`.
+- **Fallback Unificado por Linha**: Clique em **↪** em qualquer linha de modelo para abrir o popover de fallback ancorado. Configure os modelos Primário e Secundário com ordem de failover configurável: **Pool-first** (rotaciona todas as contas disponíveis no modelo primário antes de degradar qualidade) ou **Same-account first** (degrada o modelo na conta ativa antes de alternar). Os modelos são agrupados por disponibilidade de conta (`Nesta Conta` vs `Outras Contas no Pool`).
 - **Descoberta de Modelos**: Clique no botão de atualização no cabeçalho para consultar os endpoints do `language_server` / Cloud Code PA. Endpoints internos (`tab_*`, `chat_*`) são filtrados da interface automaticamente.
 - **Elegibilidade de Modelos por Conta**: Cada cartão exibe os modelos suportados pelo bucket. As caixas de seleção definem a elegibilidade—modelos desmarcados ignoram a conta e roteiam para outra conta do pool.
 - **Fixação por Categoria & Roteamento por Bordas de Bucket**: Fixe contas separadamente para Claude/GPT, Gemini ou Gemini 4 Argon (`POST /api/accounts/{id}/select` com `{"category": "..."}`). Cada grupo de modelos conta com bordas visuais diretas e controles integrados indicando o estado de roteamento: `🔄 Pool` (failover automático) vs `🔒 Solo` (bloqueia rotação na conta, devolvendo 429 para proteger as outras contas). Contas também podem desativar categorias inteiras (`🚫 Off / Excluído`) com um clique (`PUT /api/accounts/{id}/categories`).
@@ -249,6 +249,7 @@ antigravity-account-switcher config set fallback_secondary_enabled true
 | `ANTIGRAVITY_MODEL_PRIMARY` | Sobrescreve o modelo primário configurado. |
 | `ANTIGRAVITY_MODEL_SECONDARY` | Sobrescreve o modelo secundário de contingência. |
 | `ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED` | Habilita/desabilita o fallback intra-conta (`true`/`false`). |
+| `ANTIGRAVITY_FALLBACK_STRATEGY` | Estratégia de failover: `pool_first` (padrão) ou `account_first`. |
 
 ---
 

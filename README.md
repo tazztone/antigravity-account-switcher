@@ -194,7 +194,7 @@ When your active account runs out of quota on a heavy model tier (e.g. `gemini-2
 
 ### 2. Dashboard Web UI Configuration
 You can configure model fallback directly from the browser dashboard (`http://127.0.0.1:8080` or `launch --open`):
-- **Unified Model Fallback**: Click **↪** on any model row to set it as Primary and pick its standby Secondary model. When enabled, 429 errors on the primary model retry the secondary model on the same account first before rotating. The target row displays a distinct `fallback target` badge.
+- **Unified Model Fallback**: Click **↪** on any model row to open the anchored fallback popover. Configure Primary and Secondary models with configurable failover order: **Pool-first** (rotate all available pool accounts on the primary model before degrading quality) or **Same-account first** (degrade model tier on active account before rotating). Models are transparently grouped by account availability (`This Account` vs `Other Accounts in Pool`).
 - **Model Discovery**: Click the refresh button in the header to query active `language_server` / Cloud Code PA endpoints and populate model catalogs. Internal endpoints (`tab_*`, `chat_*`) are automatically filtered from the UI.
 - **Per-Account Model Eligibility**: Each account card shows models supported by that bucket. Checkboxes control eligibility—unchecked models skip this account and route to an eligible pool account.
 - **Per-Category Pins & Bucket-Level Routing**: Pin accounts separately for Claude/GPT, Gemini, or Gemini 4 Argon (`POST /api/accounts/{id}/select` with `{"category": "..."}`). Each model group features direct bucket-level borders and inline controls showing active routing state: `🔄 Pool` (auto-failover) vs `🔒 Solo` (locks category to account, returning 429 on exhaustion to protect other accounts). Accounts can also opt out of entire model categories (`🚫 Off / Excluded`) with a single click (`PUT /api/accounts/{id}/categories`).
@@ -249,6 +249,7 @@ antigravity-account-switcher config set fallback_secondary_enabled true
 | `ANTIGRAVITY_MODEL_PRIMARY` | Overrides default primary model tier. |
 | `ANTIGRAVITY_MODEL_SECONDARY` | Overrides default secondary fallback model tier. |
 | `ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED` | Enables/disables intra-account secondary fallback (`true`/`false`). |
+| `ANTIGRAVITY_FALLBACK_STRATEGY` | Failover strategy: `pool_first` (default) or `account_first`. |
 
 ---
 

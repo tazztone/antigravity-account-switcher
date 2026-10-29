@@ -23,6 +23,7 @@ import (
 // FallbackConfigSetter defines an interface for dynamically updating model fallback settings at runtime.
 type FallbackConfigSetter interface {
 	SetFallbackConfig(primary, secondary string, enabled bool)
+	SetFallbackStrategy(strategy string)
 }
 
 // APIHandler implements the REST endpoints and SSE real-time streaming for the switcher.
@@ -804,6 +805,7 @@ type ConfigResponse struct {
 	ModelPrimary             string `json:"model_primary"`
 	ModelSecondary           string `json:"model_secondary"`
 	FallbackSecondaryEnabled bool   `json:"fallback_secondary_enabled"`
+	FallbackStrategy         string `json:"fallback_strategy"`
 }
 
 // ConfigUpdateRequest represents the payload for POST /api/config.
@@ -811,6 +813,7 @@ type ConfigUpdateRequest struct {
 	ModelPrimary             *string `json:"model_primary,omitempty"`
 	ModelSecondary           *string `json:"model_secondary,omitempty"`
 	FallbackSecondaryEnabled *bool   `json:"fallback_secondary_enabled,omitempty"`
+	FallbackStrategy         *string `json:"fallback_strategy,omitempty"`
 }
 
 // HandleConfig serves GET and POST /api/config.
@@ -827,12 +830,13 @@ func (a *APIHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 
 func (a *APIHandler) getConfig(w http.ResponseWriter, _ *http.Request) {
 	a.cfgMu.RLock()
-	var primary, secondary string
+	var primary, secondary, strategy string
 	var enabled bool
 	if a.appConfig != nil {
 		primary = a.appConfig.ModelPrimary
 		secondary = a.appConfig.ModelSecondary
 		enabled = a.appConfig.FallbackSecondaryEnabled
+		strategy = a.appConfig.FallbackStrategy
 	}
 	a.cfgMu.RUnlock()
 
@@ -841,18 +845,24 @@ func (a *APIHandler) getConfig(w http.ResponseWriter, _ *http.Request) {
 			primary = diskCfg.ModelPrimary
 			secondary = diskCfg.ModelSecondary
 			enabled = diskCfg.FallbackSecondaryEnabled
+			strategy = diskCfg.FallbackStrategy
 		} else {
 			def := config.DefaultConfig()
 			primary = def.ModelPrimary
 			secondary = def.ModelSecondary
 			enabled = def.FallbackSecondaryEnabled
+			strategy = def.FallbackStrategy
 		}
+	}
+	if strategy == "" {
+		strategy = config.DefaultFallbackStrategy
 	}
 
 	writeJSON(w, http.StatusOK, ConfigResponse{
 		ModelPrimary:             primary,
 		ModelSecondary:           secondary,
 		FallbackSecondaryEnabled: enabled,
+		FallbackStrategy:         strategy,
 	})
 }
 
@@ -890,6 +900,11 @@ func (a *APIHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	if req.FallbackSecondaryEnabled != nil {
 		currentCfg.FallbackSecondaryEnabled = *req.FallbackSecondaryEnabled
 	}
+	if req.FallbackStrategy != nil {
+		if trimmed := strings.TrimSpace(*req.FallbackStrategy); trimmed != "" {
+			currentCfg.FallbackStrategy = trimmed
+		}
+	}
 
 	if err := currentCfg.Validate(); err != nil {
 		a.cfgMu.Unlock()
@@ -921,12 +936,14 @@ func (a *APIHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
 			currentCfg.ModelSecondary,
 			currentCfg.FallbackSecondaryEnabled,
 		)
+		a.fallbackConfigSetter.SetFallbackStrategy(currentCfg.FallbackStrategy)
 	}
 
 	resp := ConfigResponse{
 		ModelPrimary:             currentCfg.ModelPrimary,
 		ModelSecondary:           currentCfg.ModelSecondary,
 		FallbackSecondaryEnabled: currentCfg.FallbackSecondaryEnabled,
+		FallbackStrategy:         currentCfg.FallbackStrategy,
 	}
 	broadcaster := a.broadcaster
 	a.cfgMu.Unlock()

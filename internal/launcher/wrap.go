@@ -34,6 +34,7 @@ type Config struct {
 	ModelPrimary             string
 	ModelSecondary           string
 	FallbackSecondaryEnabled bool
+	FallbackStrategy         string
 	MaxBodyMB                int
 	Stdin                    io.Reader
 	Stdout                   io.Writer
@@ -228,6 +229,9 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			appCfg.ModelSecondary = cfg.ModelSecondary
 		}
 		appCfg.FallbackSecondaryEnabled = cfg.FallbackSecondaryEnabled
+		if cfg.FallbackStrategy != "" {
+			appCfg.FallbackStrategy = cfg.FallbackStrategy
+		}
 		if cfg.MaxBodyMB > 0 {
 			appCfg.MaxBodyMB = cfg.MaxBodyMB
 		}
@@ -238,7 +242,8 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			broadcaster,
 			eventRepo,
 			proxy.WithQuotaRepository(quotaRepo),
-			proxy.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
+			proxy.WithModelFallback(appCfg.ModelPrimary, appCfg.ModelSecondary, appCfg.FallbackSecondaryEnabled),
+			proxy.WithFallbackStrategy(appCfg.FallbackStrategy),
 		)
 		oauthService = oauth.NewOAuthService(accRepo)
 

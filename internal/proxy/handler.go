@@ -482,7 +482,8 @@ func (h *ProxyHandler) syncFallbackConfigFromEnv() {
 	envFallback := os.Getenv("ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED")
 	envPri := os.Getenv("ANTIGRAVITY_MODEL_PRIMARY")
 	envSec := os.Getenv("ANTIGRAVITY_MODEL_SECONDARY")
-	if envFallback == "" && envPri == "" && envSec == "" {
+	envStrategy := os.Getenv("ANTIGRAVITY_FALLBACK_STRATEGY")
+	if envFallback == "" && envPri == "" && envSec == "" && envStrategy == "" {
 		return
 	}
 
@@ -490,6 +491,7 @@ func (h *ProxyHandler) syncFallbackConfigFromEnv() {
 	pri := h.failoverEngine.modelPrimary
 	sec := h.failoverEngine.modelSecondary
 	enabled := h.failoverEngine.fallbackSecondaryEnabled
+	strategy := h.failoverEngine.fallbackStrategy
 	h.failoverEngine.mu.RUnlock()
 
 	changed := false
@@ -506,6 +508,9 @@ func (h *ProxyHandler) syncFallbackConfigFromEnv() {
 			enabled = b
 			changed = true
 		}
+	}
+	if envStrategy != "" && strings.TrimSpace(envStrategy) != "" && strings.TrimSpace(envStrategy) != strategy {
+		h.failoverEngine.SetFallbackStrategy(strings.TrimSpace(envStrategy))
 	}
 	if changed {
 		h.failoverEngine.SetFallbackConfig(pri, sec, enabled)
@@ -884,13 +889,26 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 					case ActionRotateAccount:
 						discardAndClose()
-						// Account rotated: switch to nextAcc, reset back to primary model and original body
+						// Account rotated: switch to nextAcc
 						currentAcc = nextAcc
-						currentModel = origModel
-						currentCategory = origCategory
-						currentPath = origPath
-						currentQuery = origQuery
+						targetToUse := origModel
+						if targetModel != "" && targetModel != origModel && targetModel == h.failoverEngine.effectiveSecondaryModel() {
+							targetToUse = targetModel
+						}
+						currentModel = targetToUse
+						currentCategory = CategorizeModel(targetToUse)
+						currentPath = RewriteModelInPath(origPath, targetToUse)
+						if origQuery != "" {
+							currentQuery = RewriteModelInQuery(origQuery, targetToUse)
+						} else {
+							currentQuery = ""
+						}
 						currentBody = origBody
+						if targetToUse != origModel && len(origBody) > 0 {
+							if rewritten, rwErr := RewriteModelInBody(origBody, targetToUse); rwErr == nil {
+								currentBody = rewritten
+							}
+						}
 						buffered = &BufferedRequest{Body: currentBody}
 						SynchronizeRequest(r, currentBody, currentPath, currentQuery)
 

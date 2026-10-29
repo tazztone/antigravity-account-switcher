@@ -132,7 +132,7 @@
 
       <div class="section-legend">
         <span class="legend-icon">⚡</span>
-        <span><strong>429 Failover:</strong> Quota exhausted accounts rotate automatically. Optional fallback (<strong>↪</strong>) retries a cheaper model on the same account first.</span>
+        <span><strong>429 Failover:</strong> Quota exhausted accounts rotate automatically. Click <strong>↪</strong> on any model to configure fallback tier and failover strategy (pool-wide vs same-account first).</span>
       </div>
 
       <!-- Dynamic Accounts Grid -->
@@ -278,34 +278,61 @@
     </div>
   </footer>
 
-  <!-- Modal: Configure Model Fallback Policy -->
-  <dialog id="fallback-modal" class="modal-dialog">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3 class="modal-title">Model Fallback Policy</h3>
-        <button type="button" class="btn-close-modal" id="btn-close-fallback-modal" aria-label="Close">✕</button>
+  <!-- Popover: Configure Model Fallback Policy -->
+  <div id="fallback-popover" class="fallback-popover" role="dialog" aria-labelledby="popover-title" hidden>
+    <div class="popover-header">
+      <div class="popover-title-group">
+        <h3 id="popover-title" class="popover-title">Model Fallback Policy</h3>
+        <div id="popover-account-tag" class="popover-account-tag mono text-muted"></div>
       </div>
-      <div class="modal-body">
-        <p class="modal-description">
-          When <strong id="modal-primary-display">Primary Model</strong> encounters an <code>HTTP 429 RESOURCE_EXHAUSTED</code>, the switcher retries the request with this fallback model within the same account before rotating to the next account.
-        </p>
-        <div class="form-group" id="modal-primary-tier-group" style="display: none;">
-          <label for="modal-select-primary" class="form-label">Primary Tier / Variant</label>
-          <select id="modal-select-primary" class="form-select"></select>
-        </div>
-        <div class="form-group">
-          <label for="modal-select-secondary" class="form-label">Fallback Model Target</label>
-          <select id="modal-select-secondary" class="form-select"></select>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" id="btn-disable-fallback" class="btn btn-danger-subtle">Remove Fallback</button>
-        <div style="flex: 1;"></div>
-        <button type="button" id="btn-cancel-fallback" class="btn btn-secondary">Cancel</button>
-        <button type="button" id="btn-save-fallback" class="btn btn-primary">Save Policy</button>
-      </div>
+      <button type="button" class="btn-close-popover" id="btn-close-fallback-popover" aria-label="Close">✕</button>
     </div>
-  </dialog>
+    <div class="popover-body">
+      <div class="form-group" id="popover-primary-tier-group" style="display: none;">
+        <label for="popover-select-primary" class="form-label">Primary Tier / Variant</label>
+        <select id="popover-select-primary" class="form-select"></select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Failover Order (Strategy)</label>
+        <div class="strategy-toggle-group">
+          <label class="strategy-radio-label">
+            <input type="radio" name="fallback_strategy" value="pool_first" id="strategy-pool-first" checked>
+            <span class="strategy-radio-custom"></span>
+            <div class="strategy-label-content">
+              <span class="strategy-name">Pool-first <span class="badge badge-info" style="font-size: 0.65rem; padding: 1px 4px;">Recommended</span></span>
+              <span class="strategy-desc">Rotate accounts on primary model before degrading quality</span>
+            </div>
+          </label>
+          <label class="strategy-radio-label">
+            <input type="radio" name="fallback_strategy" value="account_first" id="strategy-account-first">
+            <span class="strategy-radio-custom"></span>
+            <div class="strategy-label-content">
+              <span class="strategy-name">Same-account first</span>
+              <span class="strategy-desc">Degrade model on active account before switching accounts</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="popover-select-secondary" class="form-label">Fallback Model Target</label>
+        <select id="popover-select-secondary" class="form-select"></select>
+      </div>
+
+      <div class="popover-explanation-card" id="popover-explanation">
+        <span class="explanation-icon">⚡</span>
+        <span id="popover-explanation-text" class="explanation-text"></span>
+      </div>
+      <div id="popover-account-warning" class="popover-warning-note" style="display: none;"></div>
+    </div>
+    <div class="popover-footer">
+      <button type="button" id="btn-disable-fallback" class="btn btn-danger-subtle btn-sm">Remove Fallback</button>
+      <div style="flex: 1;"></div>
+      <button type="button" id="btn-cancel-fallback" class="btn btn-secondary btn-sm">Cancel</button>
+      <button type="button" id="btn-save-fallback" class="btn btn-primary btn-sm">Save Policy</button>
+    </div>
+  </div>
 
   <script src="/dist/app.js"></script>
 </body>

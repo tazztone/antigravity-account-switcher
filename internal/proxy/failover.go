@@ -115,6 +115,17 @@ func WithFallbackConfig(primary, secondary string, enabled bool) FailoverOption 
 	return WithModelFallback(primary, secondary, enabled)
 }
 
+// WithFallbackStrategy sets the initial failover strategy.
+func WithFallbackStrategy(strategy string) FailoverOption {
+	return func(f *FailoverEngine) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if strategy != "" {
+			f.fallbackStrategy = strategy
+		}
+	}
+}
+
 // FailoverEngine coordinates quota exhaustion detection, intra-account model fallback,
 // and atomic active account failover rotation with anti-stampede concurrency protection.
 type FailoverEngine struct {
@@ -125,6 +136,7 @@ type FailoverEngine struct {
 	modelPrimary             string
 	modelSecondary           string
 	fallbackSecondaryEnabled bool
+	fallbackStrategy         string
 
 	// Pre-computed normalized fields to ensure 0 allocations on hot path
 	normPrimary       string
@@ -157,6 +169,7 @@ func NewFailoverEngine(
 		modelPrimary:             config.DefaultModelPrimary,
 		modelSecondary:           config.DefaultModelSecondary,
 		fallbackSecondaryEnabled: false,
+		fallbackStrategy:         config.FallbackStrategyAccountFirst,
 		accountStates:            make(map[string]*accountFallbackState),
 		quotaCache:               make(map[string][]cachedQuotaBucket),
 	}
@@ -166,6 +179,25 @@ func NewFailoverEngine(
 		opt(f)
 	}
 	return f
+}
+
+// SetFallbackStrategy updates the failover strategy dynamically.
+func (f *FailoverEngine) SetFallbackStrategy(strategy string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if strategy != "" {
+		f.fallbackStrategy = strategy
+	}
+}
+
+// FallbackStrategy returns the current fallback strategy under read lock.
+func (f *FailoverEngine) FallbackStrategy() string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.fallbackStrategy == "" {
+		return config.DefaultFallbackStrategy
+	}
+	return f.fallbackStrategy
 }
 
 func (f *FailoverEngine) updateFallbackFieldsLocked(primary, secondary string, enabled bool) {
@@ -632,6 +664,9 @@ func (f *FailoverEngine) hasSecondaryQuotaLocked(ctx context.Context, acc *domai
 	if state != nil && state.secondaryExhausted {
 		return false
 	}
+	if !f.eligibleForModel(ctx, acc.ID, f.modelSecondary) {
+		return false
+	}
 	buckets := f.getAccountBucketsLocked(ctx, acc.ID)
 	if len(buckets) == 0 {
 		return true
@@ -917,6 +952,9 @@ func (f *FailoverEngine) HandleExhaustion(
 		}
 	}
 
+	isPrimary := f.isPrimaryModelLocked(failedModel)
+	isSecondary := f.isSecondaryModelLocked(failedModel)
+
 	// 1. Anti-stampede check: Did another concurrent request already rotate away from acc for this category?
 	var currentActive *domain.Account
 	if failedCat != CategoryUnknown {
@@ -926,30 +964,31 @@ func (f *FailoverEngine) HandleExhaustion(
 	}
 	if err == nil && currentActive != nil && currentActive.ID != acc.ID && currentActive.IsAvailable() &&
 		f.eligibleForModel(ctx, currentActive.ID, failedModel) {
-		return ActionRotateAccount, primary, currentActive, nil
+		target := failedModel
+		if isPrimary || isSecondary {
+			target = primary
+		}
+		return ActionRotateAccount, target, currentActive, nil
 	}
 
 	// 2. If fallback is disabled or no model was requested, rotate immediately to next account for this category
 	if !f.fallbackSecondaryEnabled || strings.TrimSpace(failedModel) == "" {
 		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
 		if rotErr != nil {
-			return ActionRotateAccount, primary, nil, rotErr
+			return ActionRotateAccount, failedModel, nil, rotErr
 		}
-		return ActionRotateAccount, primary, next, nil
+		return ActionRotateAccount, failedModel, next, nil
 	}
 
 	// 3. Fallback is enabled: check if model belongs to fallback tier
-	isPrimary := f.isPrimaryModelLocked(failedModel)
-	isSecondary := f.isSecondaryModelLocked(failedModel)
-
 	// If failed model is neither primary nor secondary, it is outside the fallback tier:
 	// rotate immediately for this category without mutating primary/secondary fallback state.
 	if !isPrimary && !isSecondary {
 		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
 		if rotErr != nil {
-			return ActionRotateAccount, primary, nil, rotErr
+			return ActionRotateAccount, failedModel, nil, rotErr
 		}
-		return ActionRotateAccount, primary, next, nil
+		return ActionRotateAccount, failedModel, next, nil
 	}
 
 	state, exists := f.accountStates[acc.ID]
@@ -959,6 +998,16 @@ func (f *FailoverEngine) HandleExhaustion(
 	}
 
 	hasSecondaryQuota := f.hasSecondaryQuotaLocked(ctx, acc, state)
+
+	// In pool_first strategy (default), rotate across all accounts that can serve the primary model
+	// before degrading model quality.
+	if isPrimary && f.fallbackStrategy != config.FallbackStrategyAccountFirst {
+		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+		if rotErr == nil && next != nil {
+			return ActionRotateAccount, primary, next, nil
+		}
+		// All accounts in pool are exhausted for primary model; proceed to secondary fallback
+	}
 
 	// 4. If failedModel was primary and secondary has available quota: intra-account fallback!
 	if isPrimary && hasSecondaryQuota {
@@ -1037,6 +1086,12 @@ func (f *FailoverEngine) HandleExhaustion(
 
 	next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
 	if rotErr != nil {
+		if isPrimary {
+			nextSec, secErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, secondary, &eventsToEmit)
+			if secErr == nil && nextSec != nil {
+				return ActionRotateAccount, secondary, nextSec, nil
+			}
+		}
 		return ActionRotateAccount, primary, nil, rotErr
 	}
 

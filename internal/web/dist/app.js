@@ -1076,7 +1076,7 @@
         fallbackBtn.addEventListener('click', e => {
           e.preventDefault();
           e.stopPropagation();
-          openFallbackModal(fallbackBtn.dataset.modelIds, fallbackBtn.dataset.baseName);
+          openFallbackPopover(fallbackBtn, fallbackBtn.dataset.modelIds, fallbackBtn.dataset.baseName, acc);
         });
       }
     });
@@ -1270,21 +1270,82 @@
     return Array.from(map.values());
   }
 
-  function openFallbackModal(modelIdsStr, baseName) {
-    const modal = document.getElementById('fallback-modal');
-    if (!modal) {
-      console.error('fallback-modal element not found in DOM');
+  let activePopoverTrigger = null;
+  let activePopoverAccount = null;
+
+  function closeFallbackPopover() {
+    const popover = document.getElementById('fallback-popover');
+    if (popover) {
+      popover.hidden = true;
+    }
+    activePopoverTrigger = null;
+    activePopoverAccount = null;
+  }
+
+  function positionPopover(triggerEl, popover) {
+    if (!triggerEl || !popover) return;
+    const rect = triggerEl.getBoundingClientRect();
+    popover.hidden = false;
+
+    const popoverRect = popover.getBoundingClientRect();
+    const popoverWidth = popoverRect.width || 440;
+    const popoverHeight = popoverRect.height || 420;
+
+    const margin = 12;
+    // Align right edge with trigger button
+    let left = rect.right - popoverWidth;
+    if (left < margin) left = margin;
+    if (left + popoverWidth > window.innerWidth - margin) {
+      left = window.innerWidth - popoverWidth - margin;
+    }
+
+    let top = rect.bottom + 8;
+    if (top + popoverHeight > window.innerHeight - margin) {
+      const topAbove = rect.top - popoverHeight - 8;
+      if (topAbove >= margin) {
+        top = topAbove;
+      }
+    }
+
+    popover.style.left = `${Math.round(left)}px`;
+    popover.style.top = `${Math.round(top)}px`;
+  }
+
+  function openFallbackPopover(triggerEl, modelIdsStr, baseName, account) {
+    const popover = document.getElementById('fallback-popover');
+    if (!popover) {
+      console.error('fallback-popover element not found in DOM');
       return;
     }
 
-    try {
-      const primaryDisplay = document.getElementById('modal-primary-display');
-      const tierGroup = document.getElementById('modal-primary-tier-group');
-      const selectPrimary = document.getElementById('modal-select-primary');
-      const selectSecondary = document.getElementById('modal-select-secondary');
-      const btnDisable = document.getElementById('btn-disable-fallback');
+    activePopoverTrigger = triggerEl;
+    activePopoverAccount = account;
 
-      if (primaryDisplay) primaryDisplay.textContent = baseName || 'Model';
+    try {
+      const titleEl = document.getElementById('popover-title');
+      const accountTagEl = document.getElementById('popover-account-tag');
+      const tierGroup = document.getElementById('popover-primary-tier-group');
+      const selectPrimary = document.getElementById('popover-select-primary');
+      const selectSecondary = document.getElementById('popover-select-secondary');
+      const btnDisable = document.getElementById('btn-disable-fallback');
+      const radioPool = document.getElementById('strategy-pool-first');
+      const radioAccount = document.getElementById('strategy-account-first');
+      const explanationText = document.getElementById('popover-explanation-text');
+      const warningNote = document.getElementById('popover-account-warning');
+
+      if (titleEl) titleEl.textContent = `Model Fallback: ${baseName || 'Model'}`;
+      if (accountTagEl) {
+        const email = account?.email || 'Active Account';
+        accountTagEl.textContent = `Triggered from ${email}`;
+      }
+
+      // Set strategy radio based on current config
+      const currentStrat = currentAppConfig.fallback_strategy || 'pool_first';
+      if (currentStrat === 'account_first') {
+        if (radioAccount) radioAccount.checked = true;
+      } else {
+        if (radioPool) radioPool.checked = true;
+      }
 
       const allCandidates = getCandidateModels();
       const ids = (modelIdsStr || '').split(',').filter(Boolean);
@@ -1304,6 +1365,30 @@
         selectPrimary.innerHTML = `<option value="${escapeHtml(singleId)}" selected>${escapeHtml(m?.display_name || baseName || singleId)}</option>`;
       }
 
+      function updateExplanationAndWarnings() {
+        if (!explanationText || !selectPrimary || !selectSecondary) return;
+        const priOption = selectPrimary.options[selectPrimary.selectedIndex];
+        const secOption = selectSecondary.options[selectSecondary.selectedIndex];
+        const priName = priOption?.text || baseName || 'Primary Model';
+        const secName = secOption?.text || 'Fallback Model';
+        const isPoolFirst = radioPool?.checked;
+
+        if (isPoolFirst) {
+          explanationText.innerHTML = `When <strong>${escapeHtml(priName)}</strong> encounters HTTP 429, the switcher rotates through all available pool accounts for <strong>${escapeHtml(priName)}</strong> first. If the entire pool is exhausted, it switches to <strong>${escapeHtml(secName)}</strong>.`;
+          if (warningNote) warningNote.style.display = 'none';
+        } else {
+          explanationText.innerHTML = `When <strong>${escapeHtml(priName)}</strong> encounters HTTP 429, the switcher retries with <strong>${escapeHtml(secName)}</strong> on this account first before rotating accounts.`;
+          const secId = selectSecondary.value;
+          const isEnabledOnThisAccount = (account?.model_rules || []).some(r => r.model_id === secId && r.enabled);
+          if (!isEnabledOnThisAccount && warningNote) {
+            warningNote.style.display = 'block';
+            warningNote.innerHTML = `⚠️ <strong>${escapeHtml(secName)}</strong> is only available on other accounts in the pool. When 429 occurs, failover will rotate to an account that supports it.`;
+          } else if (warningNote) {
+            warningNote.style.display = 'none';
+          }
+        }
+      }
+
       function populateSecondarySelect() {
         if (!selectSecondary || !selectPrimary) return;
         const currentPri = selectPrimary.value;
@@ -1311,71 +1396,79 @@
 
         const allowed = allCandidates.filter(m => m.id !== currentPri && !isInternalOrPreviewModel(m.id));
 
-        const groups = { claude_gpt: [], gemini: [], other: [] };
+        const thisAccRules = account?.model_rules || [];
+        const thisAccModels = [];
+        const otherAccModels = [];
+
         allowed.forEach(m => {
-          const cat = getModelRuleCategory(m);
-          if (cat === 'claude') groups.claude_gpt.push(m);
-          else if (cat === 'gemini') groups.gemini.push(m);
-          else groups.other.push(m);
+          const rule = thisAccRules.find(r => r.model_id === m.id);
+          if (rule && rule.enabled) {
+            thisAccModels.push(m);
+          } else {
+            // Find which other account has it
+            const otherAcc = (rawAccountsData || []).find(a => a.id !== account?.id && (a.model_rules || []).some(r => r.model_id === m.id && r.enabled));
+            otherAccModels.push({ model: m, otherAccount: otherAcc });
+          }
         });
 
         let html = '';
-        if (groups.claude_gpt.length > 0) {
-          html += '<optgroup label="Claude & GPT (3P)">';
-          groups.claude_gpt.forEach(m => {
+        const thisEmail = account?.email || 'this account';
+        if (thisAccModels.length > 0) {
+          html += `<optgroup label="Available on ${escapeHtml(thisEmail)} (This Account)">`;
+          thisAccModels.forEach(m => {
             const sel = m.id === currentSec ? 'selected' : '';
             const star = m.recommended ? ' ★' : '';
             html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
           });
           html += '</optgroup>';
         }
-        if (groups.gemini.length > 0) {
-          html += '<optgroup label="Google Gemini">';
-          groups.gemini.forEach(m => {
-            const sel = m.id === currentSec ? 'selected' : '';
-            const star = m.recommended ? ' ★' : '';
-            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-          });
-          html += '</optgroup>';
-        }
-        if (groups.other.length > 0) {
-          html += '<optgroup label="Other Models">';
-          groups.other.forEach(m => {
-            const sel = m.id === currentSec ? 'selected' : '';
-            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}</option>`;
+
+        if (otherAccModels.length > 0) {
+          html += '<optgroup label="Available on other accounts in pool">';
+          otherAccModels.forEach(({ model, otherAccount }) => {
+            const sel = model.id === currentSec ? 'selected' : '';
+            const accTag = otherAccount ? ` [${otherAccount.email}]` : '';
+            html += `<option value="${escapeHtml(model.id)}" ${sel}>${escapeHtml(model.display_name || model.id)}${escapeHtml(accTag)}</option>`;
           });
           html += '</optgroup>';
         }
 
         selectSecondary.innerHTML = html;
+        updateExplanationAndWarnings();
       }
 
       populateSecondarySelect();
       if (selectPrimary) {
-        selectPrimary.onchange = populateSecondarySelect;
+        selectPrimary.onchange = () => {
+          populateSecondarySelect();
+          updateExplanationAndWarnings();
+        };
       }
+      if (selectSecondary) {
+        selectSecondary.onchange = updateExplanationAndWarnings;
+      }
+      if (radioPool) radioPool.onchange = updateExplanationAndWarnings;
+      if (radioAccount) radioAccount.onchange = updateExplanationAndWarnings;
 
       const isCurrentlyActivePrimary = currentAppConfig.fallback_secondary_enabled && ids.includes(currentAppConfig.model_primary);
       if (btnDisable) {
         btnDisable.style.display = isCurrentlyActivePrimary ? 'inline-block' : 'none';
       }
 
-      if (typeof modal.showModal === 'function') {
-        modal.showModal();
-      } else {
-        modal.setAttribute('open', '');
-      }
+      positionPopover(triggerEl, popover);
     } catch (err) {
-      console.error('Error opening fallback modal:', err);
-      showToast(`Error opening modal: ${err.message}`, 'error', 4000);
+      console.error('Error opening fallback popover:', err);
+      showToast(`Error opening popover: ${err.message}`, 'error', 4000);
     }
   }
 
-  async function saveFallbackPolicy(primaryId, secondaryId, enabled) {
+  async function saveFallbackPolicy(primaryId, secondaryId, enabled, strategy) {
+    const strat = strategy || (document.getElementById('strategy-pool-first')?.checked ? 'pool_first' : 'account_first');
     const payload = {
       model_primary: primaryId,
       model_secondary: secondaryId,
-      fallback_secondary_enabled: enabled
+      fallback_secondary_enabled: enabled,
+      fallback_strategy: strat
     };
 
     const res = await fetch('/api/config', {
@@ -1394,38 +1487,47 @@
     const candidates = getCandidateModels();
     const priDisplay = candidates.find(m => m.id === updated.model_primary)?.display_name || updated.model_primary;
     const secDisplay = candidates.find(m => m.id === updated.model_secondary)?.display_name || updated.model_secondary;
+    const stratLabel = updated.fallback_strategy === 'account_first' ? 'Same-account first' : 'Pool-first';
     if (enabled) {
-      showToast(`Model fallback active: ${priDisplay} ↪ ${secDisplay}`, 'success', 3000);
+      showToast(`Model fallback active: ${priDisplay} ↪ ${secDisplay} (${stratLabel})`, 'success', 3000);
     } else {
       showToast('Model fallback disabled', 'info', 2500);
     }
     renderAccounts();
   }
 
-  function setupFallbackModalEvents() {
-    const modal = document.getElementById('fallback-modal');
-    if (!modal) return;
+  function setupFallbackPopoverEvents() {
+    const popover = document.getElementById('fallback-popover');
+    if (!popover) return;
 
-    const btnClose = document.getElementById('btn-close-fallback-modal');
+    const btnClose = document.getElementById('btn-close-fallback-popover');
     const btnCancel = document.getElementById('btn-cancel-fallback');
     const btnSave = document.getElementById('btn-save-fallback');
     const btnDisable = document.getElementById('btn-disable-fallback');
-    const selectPrimary = document.getElementById('modal-select-primary');
-    const selectSecondary = document.getElementById('modal-select-secondary');
+    const selectPrimary = document.getElementById('popover-select-primary');
+    const selectSecondary = document.getElementById('popover-select-secondary');
 
-    const closeModal = () => {
-      if (typeof modal.close === 'function') {
-        modal.close();
-      } else {
-        modal.removeAttribute('open');
+    if (btnClose) btnClose.onclick = closeFallbackPopover;
+    if (btnCancel) btnCancel.onclick = closeFallbackPopover;
+
+    document.addEventListener('pointerdown', e => {
+      if (!popover.hidden) {
+        if (!popover.contains(e.target) && !e.target.closest('.model-fallback-btn')) {
+          closeFallbackPopover();
+        }
       }
-    };
+    });
 
-    if (btnClose) btnClose.onclick = closeModal;
-    if (btnCancel) btnCancel.onclick = closeModal;
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && !popover.hidden) {
+        closeFallbackPopover();
+      }
+    });
 
-    modal.addEventListener('click', e => {
-      if (e.target === modal) closeModal();
+    window.addEventListener('resize', () => {
+      if (!popover.hidden && activePopoverTrigger) {
+        positionPopover(activePopoverTrigger, popover);
+      }
     });
 
     if (btnSave) {
@@ -1443,8 +1545,9 @@
         btnSave.disabled = true;
         btnSave.textContent = 'Saving...';
         try {
-          await saveFallbackPolicy(pri, sec, true);
-          closeModal();
+          const strat = document.getElementById('strategy-pool-first')?.checked ? 'pool_first' : 'account_first';
+          await saveFallbackPolicy(pri, sec, true, strat);
+          closeFallbackPopover();
         } finally {
           btnSave.disabled = false;
           btnSave.textContent = 'Save Policy';
@@ -1458,7 +1561,7 @@
         btnDisable.textContent = 'Removing...';
         try {
           await saveFallbackPolicy(currentAppConfig.model_primary, currentAppConfig.model_secondary, false);
-          closeModal();
+          closeFallbackPopover();
         } finally {
           btnDisable.disabled = false;
           btnDisable.textContent = 'Remove Fallback';
@@ -2103,7 +2206,7 @@
     });
 
     // Fallback modal setup
-    setupFallbackModalEvents();
+    setupFallbackPopoverEvents();
 
     // Refresh models button with account refetch
     if (btnRefreshModels) {

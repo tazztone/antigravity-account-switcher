@@ -727,6 +727,7 @@ type mockFallbackSetter struct {
 	primary   string
 	secondary string
 	enabled   bool
+	strategy  string
 	calls     int
 }
 
@@ -737,6 +738,12 @@ func (m *mockFallbackSetter) SetFallbackConfig(p, s string, e bool) {
 	m.secondary = s
 	m.enabled = e
 	m.calls++
+}
+
+func (m *mockFallbackSetter) SetFallbackStrategy(s string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.strategy = s
 }
 
 func TestServer_ConfigAPI(t *testing.T) {

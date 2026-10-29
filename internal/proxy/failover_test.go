@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
@@ -785,6 +786,68 @@ func TestFailoverEngine_HandleExhaustion_PrimaryToSecondary(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for EventTypeModelFallback")
+	}
+}
+
+func TestFailoverEngine_HandleExhaustion_PoolFirstStrategy(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	now := time.Now().UTC()
+
+	accA := &domain.Account{
+		ID:        "acc-A",
+		Email:     "a@example.com",
+		Status:    domain.AccountStatusActive,
+		IsActive:  true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	accB := &domain.Account{
+		ID:        "acc-B",
+		Email:     "b@example.com",
+		Status:    domain.AccountStatusActive,
+		IsActive:  false,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	accRepo.addAccount(accA)
+	accRepo.addAccount(accB)
+
+	broadcaster := NewBroadcaster(10)
+	engine := NewFailoverEngine(
+		accRepo, broadcaster, nil,
+		WithModelFallback("gemini-2.5-pro", "gemini-2.5-flash", true),
+		WithFallbackStrategy(config.FallbackStrategyPoolFirst),
+	)
+
+	// Step 1: Account A fails on primary -> Pool-first rotates to Account B preserving primary model!
+	action1, target1, next1, err1 := engine.HandleExhaustion(ctx, accA, "gemini-2.5-pro")
+	if err1 != nil {
+		t.Fatalf("step 1 unexpected error: %v", err1)
+	}
+	if action1 != ActionRotateAccount {
+		t.Fatalf("expected ActionRotateAccount under pool-first, got %v", action1)
+	}
+	if target1 != "gemini-2.5-pro" {
+		t.Fatalf("expected targetModel to remain primary gemini-2.5-pro, got %s", target1)
+	}
+	if next1.ID != "acc-B" {
+		t.Fatalf("expected rotation to acc-B, got %s", next1.ID)
+	}
+
+	// Step 2: Account B ALSO fails on primary -> Entire pool exhausted for primary! Falls back to secondary!
+	action2, target2, next2, err2 := engine.HandleExhaustion(ctx, accB, "gemini-2.5-pro")
+	if err2 != nil {
+		t.Fatalf("step 2 unexpected error: %v", err2)
+	}
+	if action2 != ActionFallbackSecondary {
+		t.Fatalf("expected ActionFallbackSecondary when pool exhausted for primary, got %v", action2)
+	}
+	if target2 != "gemini-2.5-flash" {
+		t.Fatalf("expected fallback model gemini-2.5-flash, got %s", target2)
+	}
+	if next2.ID != "acc-B" {
+		t.Fatalf("expected next2 acc-B, got %s", next2.ID)
 	}
 }
 
