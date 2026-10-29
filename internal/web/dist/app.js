@@ -778,8 +778,6 @@
       });
 
       const rowsHtml = Array.from(baseModelMap.values()).map(item => {
-        const anyEnabled = item.rules.some(r => r.enabled);
-        const allEnabled = item.rules.every(r => r.enabled);
         const modelIds = item.rules.map(r => r.model_id).join(',');
 
         let badgesHtml = '';
@@ -787,12 +785,10 @@
           badgesHtml = `
             <div class="model-tier-badges">
               ${item.tiers.map(({ tier, rule }) => `
-                <button type="button" class="model-tier-badge ${rule.enabled ? 'is-active' : ''}"
-                        data-model-id="${escapeHtml(rule.model_id)}"
-                        data-tier="${escapeHtml(tier)}"
-                        title="${escapeHtml(rule.display_name || rule.model_id)} (${rule.enabled ? 'Enabled' : 'Disabled'})">
+                <span class="model-tier-badge"
+                      title="${escapeHtml(rule.display_name || rule.model_id)}">
                   ${escapeHtml(formatTierLabel(tier))}
-                </button>
+                </span>
               `).join('')}
             </div>
           `;
@@ -811,7 +807,7 @@
                     data-action="configure-fallback"
                     data-model-ids="${escapeHtml(modelIds)}"
                     data-base-name="${escapeHtml(item.baseName)}"
-                    title="Active 429 Fallback: Retries on ${escapeHtml(secName)} within same account first">
+                    title="Active 429 Fallback: Retries on ${escapeHtml(secName)}">
               ↪ ${escapeHtml(secName)}
             </button>
           `;
@@ -834,12 +830,12 @@
         }
 
         return `
-          <div class="model-rule-row ${anyEnabled ? '' : 'model-rule-disabled'}" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
-            <label class="model-rule-name" title="${escapeHtml(modelIds)}">
-              <input type="checkbox" class="model-rule-enabled" ${allEnabled ? 'checked' : ''} ${anyEnabled && !allEnabled ? 'data-indeterminate="true"' : ''}>
-              <span class="model-label-text">${escapeHtml(item.baseName)}</span>
-            </label>
-            ${badgesHtml}
+          <div class="model-rule-row" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
+            <div class="model-rule-info" title="${escapeHtml(modelIds)}">
+              <span class="model-rule-bullet">▪</span>
+              <span class="model-rule-name">${escapeHtml(item.baseName)}</span>
+              ${badgesHtml}
+            </div>
             ${fallbackHtml}
           </div>
         `;
@@ -859,12 +855,7 @@
         <div class="bucket-models-section" data-group="${groupKey}">
           <div class="bucket-models-header">
             <span class="bucket-models-title">Models (${std.count})</span>
-            <div class="bucket-models-actions">
-              <button type="button" class="btn-group-toggle" data-action="all" data-group="${groupKey}">All</button>
-              <button type="button" class="btn-group-toggle" data-action="none" data-group="${groupKey}">None</button>
-            </div>
           </div>
-          <div class="bucket-models-subtext">Unchecked models skip this account.</div>
           <div class="bucket-models-rows">
             ${std.html}
           </div>
@@ -1039,66 +1030,12 @@
       });
     });
 
-    // Bind model rules toggles and fallbacks across the card
-    card.querySelectorAll('.model-rule-row').forEach(row => {
-      const cb = row.querySelector('.model-rule-enabled');
-      if (cb && cb.dataset.indeterminate === 'true') {
-        cb.indeterminate = true;
-      }
-
-      const modelIds = (row.dataset.modelIds || '').split(',').filter(Boolean);
-
-      cb.addEventListener('change', async e => {
-        cb.indeterminate = false;
-        row.classList.toggle('model-rule-disabled', !e.target.checked);
-        row.querySelectorAll('.model-tier-badge').forEach(b => {
-          b.classList.toggle('is-active', e.target.checked);
-        });
-        const promises = modelIds.map(mId => saveModelRule(acc.id, { model_id: mId, enabled: e.target.checked }, false));
-        await Promise.all(promises);
-        await fetchAccounts();
-      });
-
-      row.querySelectorAll('.model-tier-badge').forEach(badge => {
-        badge.addEventListener('click', async e => {
-          e.preventDefault();
-          e.stopPropagation();
-          const mId = badge.dataset.modelId;
-          const isCurrentlyActive = badge.classList.contains('is-active');
-          badge.classList.toggle('is-active', !isCurrentlyActive);
-          await saveModelRule(acc.id, { model_id: mId, enabled: !isCurrentlyActive }, false);
-          await fetchAccounts();
-        });
-      });
-
-      const fallbackBtn = row.querySelector('.model-fallback-btn');
-      if (fallbackBtn) {
-        fallbackBtn.addEventListener('click', e => {
-          e.preventDefault();
-          e.stopPropagation();
-          openFallbackPopover(fallbackBtn, fallbackBtn.dataset.modelIds, fallbackBtn.dataset.baseName, acc);
-        });
-      }
-    });
-
-    card.querySelectorAll('.btn-group-toggle').forEach(btn => {
-      btn.addEventListener('click', async e => {
+    // Bind fallback popovers across model rows
+    card.querySelectorAll('.model-fallback-btn').forEach(fallbackBtn => {
+      fallbackBtn.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
-        const action = btn.dataset.action;
-        const groupKey = btn.dataset.group;
-        const enabled = action === 'all';
-        const targetRules = groupedRules[groupKey] || [];
-        const promises = [];
-        for (const r of targetRules) {
-          if (r.enabled !== enabled) {
-            promises.push(saveModelRule(acc.id, { model_id: r.model_id, enabled }, false));
-          }
-        }
-        if (promises.length > 0) {
-          await Promise.all(promises);
-          await fetchAccounts();
-        }
+        openFallbackPopover(fallbackBtn, fallbackBtn.dataset.modelIds, fallbackBtn.dataset.baseName, acc);
       });
     });
 
@@ -1379,7 +1316,7 @@
         } else {
           explanationText.innerHTML = `When <strong>${escapeHtml(priName)}</strong> encounters HTTP 429, the switcher retries with <strong>${escapeHtml(secName)}</strong> on this account first before rotating accounts.`;
           const secId = selectSecondary.value;
-          const isEnabledOnThisAccount = (account?.model_rules || []).some(r => r.model_id === secId && r.enabled);
+          const isEnabledOnThisAccount = (account?.model_rules || []).some(r => r.model_id === secId);
           if (!isEnabledOnThisAccount && warningNote) {
             warningNote.style.display = 'block';
             warningNote.innerHTML = `⚠️ <strong>${escapeHtml(secName)}</strong> is only available on other accounts in the pool. When 429 occurs, failover will rotate to an account that supports it.`;
@@ -1402,11 +1339,11 @@
 
         allowed.forEach(m => {
           const rule = thisAccRules.find(r => r.model_id === m.id);
-          if (rule && rule.enabled) {
+          if (rule) {
             thisAccModels.push(m);
           } else {
             // Find which other account has it
-            const otherAcc = (rawAccountsData || []).find(a => a.id !== account?.id && (a.model_rules || []).some(r => r.model_id === m.id && r.enabled));
+            const otherAcc = (rawAccountsData || []).find(a => a.id !== account?.id && (a.model_rules || []).some(r => r.model_id === m.id));
             otherAccModels.push({ model: m, otherAccount: otherAcc });
           }
         });
