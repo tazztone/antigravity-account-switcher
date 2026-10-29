@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 	"unicode/utf8"
 
@@ -617,14 +619,6 @@ func extractCanonicalFamilyAndWindow(b *domain.QuotaBucket) (string, string) {
 	return name, strings.ToLower(window)
 }
 
-func padRight(s string, width int) string {
-	w := utf8.RuneCountInString(s)
-	if w >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-w)
-}
-
 func renderAccountsTable(w io.Writer, accounts []*domain.Account, allBuckets map[string][]*domain.QuotaBucket) {
 	accIDs := make(map[string]struct{}, len(accounts))
 	for _, acc := range accounts {
@@ -749,52 +743,27 @@ func renderAccountsTable(w io.Writer, accounts []*domain.Account, allBuckets map
 		})
 	}
 
-	emailWidth := 30
-	for _, r := range rows {
-		if w := utf8.RuneCountInString(r.email); w > emailWidth {
-			emailWidth = w
-		}
-	}
-
-	familyWidths := make(map[string]int, len(families))
-	for _, fam := range families {
-		w := utf8.RuneCountInString(fam)
-		for _, r := range rows {
-			if rw := utf8.RuneCountInString(r.familyCols[fam]); rw > w {
-				w = rw
-			}
-		}
-		familyWidths[fam] = w
-	}
-
-	headerParts := []string{
-		padRight("ID", 36),
-		padRight("EMAIL", emailWidth),
-		padRight("STATUS", 10),
-		padRight("ACTIVE", 8),
-	}
-	for _, fam := range families {
-		w := familyWidths[fam]
-		headerParts = append(headerParts, padRight(fam, w))
-	}
-	headerLine := strings.Join(headerParts, "  ")
-	separatorLine := strings.Repeat("-", utf8.RuneCountInString(headerLine))
-
-	fmt.Fprintln(w, headerLine)
-	fmt.Fprintln(w, separatorLine)
+	var buf bytes.Buffer
+	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	headerParts := append([]string{"ID", "EMAIL", "STATUS", "ACTIVE"}, families...)
+	fmt.Fprintln(tw, strings.Join(headerParts, "\t"))
 
 	for _, r := range rows {
-		rowParts := []string{
-			padRight(r.id, 36),
-			padRight(r.email, emailWidth),
-			padRight(r.status, 10),
-			padRight(r.active, 8),
-		}
+		rowParts := []string{r.id, r.email, r.status, r.active}
 		for _, fam := range families {
-			w := familyWidths[fam]
-			rowParts = append(rowParts, padRight(r.familyCols[fam], w))
+			rowParts = append(rowParts, r.familyCols[fam])
 		}
-		fmt.Fprintln(w, strings.Join(rowParts, "  "))
+		fmt.Fprintln(tw, strings.Join(rowParts, "\t"))
+	}
+	_ = tw.Flush()
+
+	outLines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(outLines) > 0 {
+		fmt.Fprintln(w, outLines[0])
+		fmt.Fprintln(w, strings.Repeat("-", utf8.RuneCountInString(outLines[0])))
+		for _, row := range outLines[1:] {
+			fmt.Fprintln(w, row)
+		}
 	}
 }
 
