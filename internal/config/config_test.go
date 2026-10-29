@@ -710,3 +710,41 @@ func TestFindAntigravityIcon(t *testing.T) {
 		t.Errorf("expected found icon %s, got %s", iconPath, found)
 	}
 }
+
+func TestCompareSemver(t *testing.T) {
+	cases := []struct {
+		v1       string
+		v2       string
+		expected int
+	}{
+		{"1.4.10", "1.4.10", 0},
+		{"1.10.0", "1.4.10", 1},
+		{"1.4.9", "1.4.10", -1},
+		{"1.5.0", "1.4.10", 1},
+		{"2.0.0", "1.4.10", 1},
+		{"0.9.9", "1.0.0", -1},
+		{"1.4.10.1", "1.4.10", 1},
+		{"1.4", "1.4.0", 0},
+	}
+
+	for _, tc := range cases {
+		got := compareSemver(tc.v1, tc.v2)
+		if got != tc.expected {
+			t.Errorf("compareSemver(%q, %q) = %d; want %d", tc.v1, tc.v2, got, tc.expected)
+		}
+	}
+}
+
+func TestDetectAntigravityCLIVersion_ScriptSemver(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBin := filepath.Join(tmpDir, "antigravity")
+	script := "#!/bin/sh\necho 'antigravity/cli/1.10.0 (linux-x64)'\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ver := DetectAntigravityCLIVersion(fakeBin)
+	if ver != "1.10.0" {
+		t.Errorf("expected detected version 1.10.0, got %s", ver)
+	}
+}
