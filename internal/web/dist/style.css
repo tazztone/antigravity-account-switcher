@@ -1888,10 +1888,6 @@ body.privacy-mode .blurred-email {
 
 
 /* Per-category routing & model rules */
-.category-pin-bar {
-  display: none;
-}
-
 .category-pin-pill {
   display: inline-flex;
   align-items: stretch;
@@ -2002,69 +1998,6 @@ body.privacy-mode .blurred-email {
 .category-pin-pill .pin-icon {
   font-size: 0.72rem;
   line-height: 1;
-}
-
-/* Live Header Routing Strip (Replaced by bucket-level borders) */
-.header-routing-strip {
-  display: none !important;
-}
-
-.header-routing-strip:empty {
-  display: none;
-}
-
-.header-routing-strip .strip-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.header-routing-strip .strip-cat {
-  font-weight: 700;
-  color: var(--color-text-primary);
-  letter-spacing: 0.03em;
-}
-
-.header-routing-strip .strip-acc {
-  color: var(--color-accent);
-  font-family: var(--font-mono, monospace);
-  font-weight: 500;
-}
-
-.header-routing-strip .strip-mode {
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  font-size: 0.65rem;
-  font-weight: 600;
-}
-
-.strip-mode-solo {
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.3);
-}
-
-.strip-mode-pool {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.header-routing-strip .strip-sep {
-  color: rgba(255, 255, 255, 0.2);
-  user-select: none;
-}
-
-.quota-group-standby {
-  border: 1px dashed rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  padding: 0.35rem 0.5rem;
-  margin-top: 0.35rem;
-}
-.quota-row-standby {
-  font-size: 0.7rem;
-  color: #6b7280;
-  margin-top: 0.2rem;
 }
 
 /* --------------------------------------------------------------------------
