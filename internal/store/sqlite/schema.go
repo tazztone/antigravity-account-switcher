@@ -130,6 +130,15 @@ ALTER TABLE active_category_accounts ADD COLUMN routing_mode TEXT NOT NULL DEFAU
 ALTER TABLE accounts ADD COLUMN disabled_categories TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		Version:     5,
+		Description: "account_model_rules_discovered",
+		SQL: `
+-- 9. Add discovered flag to distinguish discovered model catalog from explicit manual overrides
+ALTER TABLE account_model_rules ADD COLUMN discovered INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_account_model_rules_discovered ON account_model_rules(account_id, discovered);
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.

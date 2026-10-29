@@ -57,7 +57,7 @@ const argonEntitlementPredicate = `
 			  AND (
 			      (mr.category = 'gemini_argon' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
 			      OR (LOWER(mr.model_id) LIKE '%argon%' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
-			      OR LOWER(mr.model_id) LIKE '%5-5%'
+			      OR (mr.category = 'claude_gpt' AND LOWER(mr.model_id) LIKE '%5-5%')
 			  )
 			  AND mr.enabled = 1
 		)
@@ -359,17 +359,20 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	row := r.db.QueryRowContext(ctx, query, catStr)
 	acc, err := r.scanAccount(row)
 	if err == nil {
-		mode, _ := r.GetCategoryRoutingMode(ctx, category)
-		if mode == domain.RoutingModeSolo {
-			return acc, nil
+		if acc.IsCategoryDisabled(category) {
+			mode, _ := r.GetCategoryRoutingMode(ctx, category)
+			if mode != domain.RoutingModeSolo {
+				next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
+				if nErr == nil && next != nil {
+					_ = r.SetActiveForCategory(ctx, category, next.ID)
+					return next, nil
+				}
+			}
+			return nil, domain.ErrNoActiveAccount
 		}
 
-		if acc.IsCategoryDisabled(category) {
-			next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
-			if nErr == nil && next != nil {
-				_ = r.SetActiveForCategory(ctx, category, next.ID)
-				return next, nil
-			}
+		mode, _ := r.GetCategoryRoutingMode(ctx, category)
+		if mode == domain.RoutingModeSolo {
 			return acc, nil
 		}
 		if category == domain.CategoryGeminiArgon {
@@ -620,12 +623,13 @@ func (r *AccountRepository) UpsertAccountModels(ctx context.Context, accountID s
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at)
-		VALUES (?, ?, ?, ?, 1, '', ?)
+		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, fallback_account_id, updated_at, discovered)
+		VALUES (?, ?, ?, ?, 1, '', ?, 1)
 		ON CONFLICT(account_id, model_id) DO UPDATE SET
 			display_name = excluded.display_name,
 			category = excluded.category,
-			updated_at = excluded.updated_at
+			updated_at = excluded.updated_at,
+			discovered = 1
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare upsert: %w", err)
@@ -725,41 +729,60 @@ func (r *AccountRepository) UpdateAccountModelRule(ctx context.Context, rule *do
 }
 
 // IsAccountEligibleForModel reports whether an account may serve a model.
-// Fail-open: an account with no model rules at all is eligible for everything;
-// once rules exist, the model must be present with enabled = 1.
+// Fail-open: an account with no discovered model catalog is eligible for everything,
+// unless an explicit rule with enabled = 0 exists for the model. Once a catalog is
+// discovered (discovered = 1), only discovered and enabled models are served.
 // The lookup runs as a single statement because it sits on the per-request proxy dispatch path.
 func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accountID, modelID string) (bool, error) {
 	if accountID == "" {
 		return false, domain.ErrAccountNotFound
 	}
-	if modelID == "" || domain.IsInternalOrPreviewModel(modelID) {
+	if modelID == "" {
+		return true, nil
+	}
+
+	lower := strings.ToLower(modelID)
+	// Internal IDE completion / tab models are always eligible
+	if strings.HasPrefix(lower, "tab_") || strings.HasPrefix(lower, "chat_") {
 		return true, nil
 	}
 
 	query := `
 		SELECT
-			(SELECT COUNT(*) FROM account_model_rules WHERE account_id = ?),
+			(SELECT COUNT(*) FROM account_model_rules WHERE account_id = ? AND discovered = 1),
 			COALESCE((SELECT enabled FROM account_model_rules WHERE account_id = ? AND model_id = ?), -1)
 	`
-	var ruleCount, enabledInt int
+	var discoveredCount, enabledInt int
 	if err := r.db.QueryRowContext(ctx, query, accountID, accountID, modelID).
-		Scan(&ruleCount, &enabledInt); err != nil {
+		Scan(&discoveredCount, &enabledInt); err != nil {
 		return false, fmt.Errorf("failed to query model rule: %w", err)
 	}
 
-	if ruleCount == 0 {
+	// 1. Explicit user toggle takes absolute precedence
+	if enabledInt == 1 {
 		return true, nil
 	}
-	if enabledInt < 0 {
-		// Catalog populated but this model was never discovered on this account.
+	if enabledInt == 0 {
 		return false, nil
 	}
-	return enabledInt == 1, nil
+
+	// 2. No explicit rule for this model: internal or preview models bypass
+	if domain.IsInternalOrPreviewModel(modelID) {
+		return true, nil
+	}
+
+	// 3. No discovered catalog for this account: fail-open for unconfigured models
+	if discoveredCount == 0 {
+		return true, nil
+	}
+
+	// 4. Discovered catalog exists, but this model was never discovered on this account
+	return false, nil
 }
 
 // GetNextAvailableForModel selects the next account eligible for a specific model:
 // active status, not exhausted for the category, not excluded, and either without
-// model rules or with the model present and enabled.
+// discovered catalog (and not explicitly disabled) or with the model present and enabled.
 func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
 	if modelID == "" || domain.IsInternalOrPreviewModel(modelID) {
 		return r.GetNextAvailableForCategory(ctx, category, excludeID)
@@ -809,7 +832,10 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		  )
 	` + argonEntitlementPredicate + `
 		  AND (
-			NOT EXISTS (SELECT 1 FROM account_model_rules mr WHERE mr.account_id = a.id)
+			(
+				NOT EXISTS (SELECT 1 FROM account_model_rules mr WHERE mr.account_id = a.id AND mr.discovered = 1)
+				AND NOT EXISTS (SELECT 1 FROM account_model_rules mr WHERE mr.account_id = a.id AND mr.model_id = ? AND mr.enabled = 0)
+			)
 			OR EXISTS (
 				SELECT 1 FROM account_model_rules mr
 				WHERE mr.account_id = a.id AND mr.model_id = ? AND mr.enabled = 1
@@ -818,7 +844,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	args := []any{excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr, modelID}
+	args := []any{excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr, modelID, modelID}
 	row := r.db.QueryRowContext(ctx, query, args...)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
@@ -840,7 +866,7 @@ func (r *AccountRepository) HasArgonEntitlement(ctx context.Context, accountID s
 		  AND (
 		      (mr.category = 'gemini_argon' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
 		      OR (LOWER(mr.model_id) LIKE '%argon%' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
-		      OR LOWER(mr.model_id) LIKE '%5-5%'
+		      OR (mr.category = 'claude_gpt' AND LOWER(mr.model_id) LIKE '%5-5%')
 		  )
 		  AND mr.enabled = 1
 		LIMIT 1
@@ -963,17 +989,17 @@ func (r *AccountRepository) SetCategoryRoutingMode(ctx context.Context, category
 		return err
 	}
 	if affected == 0 {
-		var accountID string
-		err := r.db.QueryRowContext(ctx, "SELECT id FROM accounts ORDER BY is_active DESC, updated_at DESC LIMIT 1").Scan(&accountID)
-		if err == nil && accountID != "" {
-			_, err = r.db.ExecContext(ctx, `
-				INSERT INTO active_category_accounts (category, account_id, routing_mode)
-				VALUES (?, ?, ?)
-				ON CONFLICT(category) DO UPDATE SET routing_mode = excluded.routing_mode
-			`, catStr, accountID, mode)
-			if err != nil {
-				return fmt.Errorf("failed to insert category routing mode for %s: %w", catStr, err)
-			}
+		eligible, err := r.GetNextAvailableForCategory(ctx, category, "")
+		if err != nil || eligible == nil {
+			return domain.ErrNoAvailableAccount
+		}
+		_, err = r.db.ExecContext(ctx, `
+			INSERT INTO active_category_accounts (category, account_id, routing_mode)
+			VALUES (?, ?, ?)
+			ON CONFLICT(category) DO UPDATE SET routing_mode = excluded.routing_mode
+		`, catStr, eligible.ID, mode)
+		if err != nil {
+			return fmt.Errorf("failed to insert category routing mode for %s: %w", catStr, err)
 		}
 	}
 	return nil

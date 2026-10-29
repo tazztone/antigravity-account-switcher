@@ -527,3 +527,77 @@ func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
 		t.Fatalf("expected internal model tab_flash_lite_preview to always be eligible, got eligible=%v, err=%v", isEligible, err)
 	}
 }
+
+func TestModelEligibility_ManualOverrideWithoutDiscoveredCatalog(t *testing.T) {
+	ctx, _, repo := newEligibilityTestRepo(t)
+
+	createEligibilityAccount(t, repo, ctx, "acc-manual", "manual@example.com", true)
+
+	// User manually disables one model without running full catalog discovery
+	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
+		AccountID: "acc-manual",
+		ModelID:   "claude-3-5-haiku",
+		Enabled:   false,
+	}); err != nil {
+		t.Fatalf("UpdateAccountModelRule: %v", err)
+	}
+
+	// The explicitly disabled model must be ineligible
+	eligible, err := repo.IsAccountEligibleForModel(ctx, "acc-manual", "claude-3-5-haiku")
+	if err != nil {
+		t.Fatalf("IsAccountEligibleForModel: %v", err)
+	}
+	if eligible {
+		t.Errorf("expected claude-3-5-haiku to be ineligible when disabled")
+	}
+
+	// Other models must remain fail-open / eligible
+	eligibleOther, err := repo.IsAccountEligibleForModel(ctx, "acc-manual", "claude-3-7-sonnet")
+	if err != nil {
+		t.Fatalf("IsAccountEligibleForModel: %v", err)
+	}
+	if !eligibleOther {
+		t.Errorf("expected claude-3-7-sonnet to remain eligible when no discovered catalog exists")
+	}
+
+	// Explicit disable on a preview model (not tab/chat) must be respected
+	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
+		AccountID: "acc-manual",
+		ModelID:   "o1-preview",
+		Enabled:   false,
+	}); err != nil {
+		t.Fatalf("UpdateAccountModelRule: %v", err)
+	}
+	eligiblePreview, err := repo.IsAccountEligibleForModel(ctx, "acc-manual", "o1-preview")
+	if err != nil {
+		t.Fatalf("IsAccountEligibleForModel: %v", err)
+	}
+	if eligiblePreview {
+		t.Errorf("expected o1-preview to be ineligible when explicitly disabled")
+	}
+}
+
+func TestCategoryRouting_OptOutInSoloMode(t *testing.T) {
+	ctx, _, repo := newEligibilityTestRepo(t)
+
+	createEligibilityAccount(t, repo, ctx, "acc-solo-optout", "solo-optout@example.com", true)
+
+	// Pin account to claude_gpt in solo mode
+	if err := repo.SetActiveForCategory(ctx, domain.CategoryClaudeGPT, "acc-solo-optout"); err != nil {
+		t.Fatalf("SetActiveForCategory: %v", err)
+	}
+	if err := repo.SetCategoryRoutingMode(ctx, domain.CategoryClaudeGPT, domain.RoutingModeSolo); err != nil {
+		t.Fatalf("SetCategoryRoutingMode: %v", err)
+	}
+
+	// Disable claude_gpt on this account
+	if err := repo.SetAccountCategoryDisabled(ctx, "acc-solo-optout", domain.CategoryClaudeGPT, true); err != nil {
+		t.Fatalf("SetAccountCategoryDisabled: %v", err)
+	}
+
+	// GetActiveForCategory must return ErrNoActiveAccount, not the opted-out account
+	active, err := repo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
+	if err == nil || active != nil {
+		t.Errorf("expected ErrNoActiveAccount for disabled category in solo mode, got active=%v, err=%v", active, err)
+	}
+}
