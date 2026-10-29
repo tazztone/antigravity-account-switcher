@@ -392,6 +392,7 @@ func FindAntigravityIcon(resolvedBin string) string {
 var (
 	detectedVersionMu sync.RWMutex
 	detectedVersion   string
+	versionRegex      = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
 )
 
 // DetectAntigravityCLIVersion determines the Antigravity / AGY CLI semantic version.
@@ -417,8 +418,7 @@ func DetectAntigravityCLIVersion(overrideBin string) string {
 		cmd := exec.CommandContext(ctx, bin, "--version")
 		if out, cmdErr := cmd.Output(); cmdErr == nil {
 			trimmed := strings.TrimSpace(string(out))
-			re := regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
-			if m := re.FindString(trimmed); m != "" {
+			if m := versionRegex.FindString(trimmed); m != "" {
 				if m >= minSupportedVersion {
 					targetVersion = m
 				}

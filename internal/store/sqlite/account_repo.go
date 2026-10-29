@@ -373,7 +373,7 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 			return acc, nil
 		}
 		if category == domain.CategoryGeminiArgon {
-			entitled, eErr := r.hasArgonEntitlement(ctx, acc.ID)
+			entitled, eErr := r.HasArgonEntitlement(ctx, acc.ID)
 			if eErr == nil && !entitled {
 				next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
 				if nErr == nil && next != nil {
@@ -827,9 +827,9 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 	return acc, err
 }
 
-// hasArgonEntitlement reports whether the account has Argon entitlement, evidenced
+// HasArgonEntitlement reports whether the account has Argon entitlement, evidenced
 // by an Argon quota bucket, an enabled Argon model rule, or Pro-tier model rules (e.g. Claude 5.5).
-func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
+func (r *AccountRepository) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
 	query := `
 		SELECT 1 FROM quota_buckets qb
 		WHERE qb.account_id = ?
@@ -854,11 +854,6 @@ func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID s
 		return false, err
 	}
 	return true, nil
-}
-
-// HasArgonEntitlement reports whether the account has Argon entitlement.
-func (r *AccountRepository) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
-	return r.hasArgonEntitlement(ctx, accountID)
 }
 
 // IsAccountAvailableForCategory reports whether one specific account may serve
@@ -889,7 +884,7 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 	}
 
 	if category == domain.CategoryGeminiArgon {
-		entitled, err := r.hasArgonEntitlement(ctx, accountID)
+		entitled, err := r.HasArgonEntitlement(ctx, accountID)
 		if err != nil {
 			return false, err
 		}

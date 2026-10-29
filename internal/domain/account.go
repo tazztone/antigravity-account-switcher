@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -60,16 +61,7 @@ type Account struct {
 
 // IsCategoryDisabled reports whether the account has opted out of the specified category.
 func (a *Account) IsCategoryDisabled(cat ModelCategory) bool {
-	if a == nil || len(a.DisabledCategories) == 0 {
-		return false
-	}
-	target := cat.String()
-	for _, c := range a.DisabledCategories {
-		if c == target {
-			return true
-		}
-	}
-	return false
+	return a != nil && slices.Contains(a.DisabledCategories, string(cat))
 }
 
 // IsTokenExpired checks if the access token has expired or is within the safety margin.
