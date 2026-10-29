@@ -374,27 +374,6 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 			}
 			if existingArgon != nil && !existingArgon.ResetTime.IsZero() && existingArgon.ResetTime.After(now) && existingArgon.RemainingFraction <= 0.0 {
 				buckets = append(buckets, existingArgon)
-			} else {
-				var weeklyReset time.Time
-				for _, b := range buckets {
-					if strings.Contains(strings.ToLower(string(b.Window)), "weekly") && !b.ResetTime.IsZero() {
-						weeklyReset = b.ResetTime
-						break
-					}
-				}
-				remFrac := 1.0
-				if existingArgon != nil && existingArgon.RemainingFraction > 0 {
-					remFrac = existingArgon.RemainingFraction
-				}
-				buckets = append(buckets, &domain.QuotaBucket{
-					AccountID:         acc.ID,
-					BucketID:          "argon-weekly",
-					DisplayName:       "Gemini 4 Argon Weekly Limit",
-					Window:            domain.QuotaWindow("weekly"),
-					RemainingFraction: remFrac,
-					ResetTime:         weeklyReset,
-					UpdatedAt:         now,
-				})
 			}
 		}
 	}

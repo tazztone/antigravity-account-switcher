@@ -43,13 +43,16 @@ type lsQuotaResponse struct {
 	} `json:"response"`
 }
 
+type modelPayloadItem struct {
+	DisplayName      string `json:"displayName"`
+	Recommended      bool   `json:"recommended"`
+	SupportsThinking bool   `json:"supportsThinking"`
+	Disabled         bool   `json:"disabled"`
+}
+
 type modelsPayload struct {
-	Models map[string]struct {
-		DisplayName      string `json:"displayName"`
-		Recommended      bool   `json:"recommended"`
-		SupportsThinking bool   `json:"supportsThinking"`
-	} `json:"models"`
-	DefaultAgentModelID string `json:"defaultAgentModelId"`
+	Models              map[string]modelPayloadItem `json:"models"`
+	DefaultAgentModelID string                      `json:"defaultAgentModelId"`
 	AgentModelSorts     []struct {
 		DisplayName string `json:"displayName"`
 		Groups      []struct {
@@ -330,7 +333,10 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	}
 
 	nameCounts := make(map[string]int, len(p.Models))
-	for _, meta := range p.Models {
+	for mid, meta := range p.Models {
+		if meta.Disabled || strings.Contains(strings.ToLower(mid), "disabled") {
+			continue
+		}
 		if meta.DisplayName != "" {
 			nameCounts[strings.ToLower(strings.TrimSpace(meta.DisplayName))]++
 		}
@@ -349,7 +355,7 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 					continue
 				}
 				modelMeta, ok := p.Models[mid]
-				if !ok {
+				if !ok || modelMeta.Disabled || strings.Contains(strings.ToLower(mid), "disabled") {
 					continue
 				}
 				seen[mid] = true
@@ -378,6 +384,10 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	sort.Strings(remainingIDs)
 	for _, mid := range remainingIDs {
 		modelMeta := p.Models[mid]
+		if modelMeta.Disabled || strings.Contains(strings.ToLower(mid), "disabled") {
+			continue
+		}
+		seen[mid] = true
 		dName := modelMeta.DisplayName
 		if dName == "" {
 			dName = mid

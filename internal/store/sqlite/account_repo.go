@@ -54,7 +54,11 @@ const argonEntitlementPredicate = `
 		OR EXISTS (
 			SELECT 1 FROM account_model_rules mr
 			WHERE mr.account_id = a.id
-			  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%' OR LOWER(mr.model_id) LIKE '%5-5%')
+			  AND (
+			      (mr.category = 'gemini_argon' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
+			      OR (LOWER(mr.model_id) LIKE '%argon%' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
+			      OR LOWER(mr.model_id) LIKE '%5-5%'
+			  )
 			  AND mr.enabled = 1
 		)
 	)
@@ -833,7 +837,11 @@ func (r *AccountRepository) hasArgonEntitlement(ctx context.Context, accountID s
 		UNION
 		SELECT 1 FROM account_model_rules mr
 		WHERE mr.account_id = ?
-		  AND (mr.category = 'gemini_argon' OR LOWER(mr.model_id) LIKE '%argon%' OR LOWER(mr.model_id) LIKE '%5-5%')
+		  AND (
+		      (mr.category = 'gemini_argon' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
+		      OR (LOWER(mr.model_id) LIKE '%argon%' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
+		      OR LOWER(mr.model_id) LIKE '%5-5%'
+		  )
 		  AND mr.enabled = 1
 		LIMIT 1
 	`

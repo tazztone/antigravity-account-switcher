@@ -703,6 +703,9 @@
     function categorizeRule(r) {
       const mid = (r.model_id || '').toLowerCase();
       const cat = (r.category || '').toLowerCase();
+      if (mid.includes('disabled')) {
+        return null;
+      }
       if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
         return 'claude';
       }
@@ -787,7 +790,9 @@
     const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
     rules.forEach(r => {
       const g = categorizeRule(r);
-      groupedRules[g].push(r);
+      if (g && groupedRules[g]) {
+        groupedRules[g].push(r);
+      }
     });
 
     function buildModelGroupRows(ruleList, groupKey) {
@@ -894,7 +899,9 @@
     const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude, []);
     const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini, groupedRules.preview);
     const argonModelsHtml = renderBucketModels('argon', groupedRules.argon, []);
-    const hasArgonAccess = Boolean(argonWeekly) || (groupedRules.argon && groupedRules.argon.length > 0) || rules.some(r => /5-5|argon/i.test(r.model_id));
+    const hasArgonAccess = Boolean(argonWeekly) ||
+      (groupedRules.argon && groupedRules.argon.length > 0) ||
+      rules.some(r => /5-5/i.test(r.model_id) || (/argon/i.test(r.model_id) && !r.model_id.includes('disabled')));
 
     // Build Model Groups with Bucket-Level Borders
     let extraHtml = '';

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -106,11 +107,7 @@ func TestDoLSRequest_MockServer(t *testing.T) {
 
 func TestExtractModels_Disambiguation(t *testing.T) {
 	payload := &modelsPayload{
-		Models: map[string]struct {
-			DisplayName      string `json:"displayName"`
-			Recommended      bool   `json:"recommended"`
-			SupportsThinking bool   `json:"supportsThinking"`
-		}{
+		Models: map[string]modelPayloadItem{
 			"gemini-3.5-flash-lite": {
 				DisplayName: "Gemini 3.5 Flash Lite",
 			},
@@ -152,5 +149,39 @@ func TestExtractModels_Disambiguation(t *testing.T) {
 	}
 	if !names["Gemini 3.5 Flash Lite (Preview)"] {
 		t.Errorf("expected Gemini 3.5 Flash Lite (Preview), found: %+v", names)
+	}
+}
+
+func TestExtractModels_FiltersDisabledModels(t *testing.T) {
+	payload := &modelsPayload{
+		Models: map[string]modelPayloadItem{
+			"gemini-3.8-flash-high": {
+				DisplayName: "Gemini 3.8 Flash (High)",
+				Recommended: true,
+			},
+			"gemini-4-argon-disabled": {
+				DisplayName: "Gemini 4 Argon",
+				Disabled:    true,
+				Recommended: true,
+			},
+			"claude-opus-4.6": {
+				DisplayName: "Claude Opus 4.6",
+				Disabled:    false,
+			},
+		},
+	}
+
+	models, err := extractModels(payload)
+	if err != nil {
+		t.Fatalf("extractModels failed: %v", err)
+	}
+
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models after filtering disabled, got %d", len(models))
+	}
+	for _, m := range models {
+		if strings.Contains(m.ID, "argon") || strings.Contains(m.ID, "disabled") {
+			t.Errorf("expected disabled model to be filtered out, got: %+v", m)
+		}
 	}
 }
