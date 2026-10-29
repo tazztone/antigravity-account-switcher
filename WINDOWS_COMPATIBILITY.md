@@ -15,7 +15,7 @@ The application in its current state is **fully compatible and deployable on Win
 | **Proxy & Failover Engine** |  Supported | Standard Go `net/http` reverse proxy with 100MB body buffer and dynamic Bearer injection. |
 | **Web Dashboard** |  Supported | Embedded static assets (`embed.FS`) served over `http://127.0.0.1:<port>`. |
 | **OAuth Browser Flow** |  Supported | Explicitly implemented via `rundll32 url.dll,FileProtocolHandler <url>`. |
-| **OAuth Auto-Import** |  Supported | Inspects `%LOCALAPPDATA%\Programs\Antigravity` and `%ProgramFiles%\Antigravity`. |
+| **OAuth Auto-Import** |  Supported | Inspects `%USERPROFILE%\.gemini\antigravity-acp` and `antigravity-cli`. |
 | **Process Lifecycle** |  Supported | Uses `internal/launcher/lifecycle_other.go` safe stub for non-Linux platforms. |
 | **Quota Polling** |  Supported | Transparent fallback: when `/proc` is unavailable, queries Google Cloud Code PA directly. |
 

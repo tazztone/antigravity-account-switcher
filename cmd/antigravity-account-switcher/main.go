@@ -170,6 +170,7 @@ func addModelFlags(fs *flag.FlagSet, cfg *config.Config) (fallbackSecondary *boo
 	return
 }
 
+// runServe starts the proxy and web dashboard daemon in foreground mode.
 func runServe(args []string) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -358,6 +359,7 @@ func runServe(args []string) {
 	fmt.Println("Goodbye.")
 }
 
+// runWrap starts the switcher supervisor and wraps an existing command process.
 func runWrap(args []string) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -473,6 +475,7 @@ func runWrap(args []string) {
 	os.Exit(exitCode)
 }
 
+// runAddAccount initiates the OAuth2 browser flow to authenticate and add an account.
 func runAddAccount(args []string) {
 	fs := flag.NewFlagSet("add-account", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
@@ -516,12 +519,14 @@ func runAddAccount(args []string) {
 	fmt.Printf("Account ID: %s\n", acc.ID)
 }
 
+// runListAccounts displays registered accounts and current quota usage in a terminal table.
 func runListAccounts(args []string) {
 	if code := executeListAccounts(args, os.Stdout, os.Stderr); code != 0 {
 		os.Exit(code)
 	}
 }
 
+// executeListAccounts lists accounts and formatted quotas to the specified writers.
 func executeListAccounts(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("list-accounts", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -561,6 +566,7 @@ func executeListAccounts(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// extractCanonicalFamilyAndWindow parses quota bucket metadata into a display family and window name.
 func extractCanonicalFamilyAndWindow(b *domain.QuotaBucket) (string, string) {
 	if b == nil {
 		return "Default", "quota"
@@ -628,6 +634,7 @@ func extractCanonicalFamilyAndWindow(b *domain.QuotaBucket) (string, string) {
 	return name, strings.ToLower(window)
 }
 
+// renderAccountsTable formats and writes the dynamic ASCII quota table for accounts.
 func renderAccountsTable(w io.Writer, accounts []*domain.Account, allBuckets map[string][]*domain.QuotaBucket) {
 	accIDs := make(map[string]struct{}, len(accounts))
 	for _, acc := range accounts {
@@ -776,6 +783,7 @@ func renderAccountsTable(w io.Writer, accounts []*domain.Account, allBuckets map
 	}
 }
 
+// runStatus prints the current status of the supervisor and active account.
 func runStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
@@ -820,6 +828,7 @@ func runStatus(args []string) {
 	}
 }
 
+// runLaunch launches Antigravity 2.0 with transparent proxy supervisor attached.
 func runLaunch(args []string) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -950,12 +959,14 @@ func runLaunch(args []string) {
 	os.Exit(exitCode)
 }
 
+// runConfig handles the 'config' CLI subcommand.
 func runConfig(args []string) {
 	if code := executeConfig(args, os.Stdout, os.Stderr); code != 0 {
 		os.Exit(code)
 	}
 }
 
+// executeConfig executes config subcommands (list, get, set) writing to the specified streams.
 func executeConfig(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "list" {
 		cfg, err := config.Load()
@@ -1146,6 +1157,7 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// runInstallDesktop registers the desktop application launcher entry on Linux.
 func runInstallDesktop(args []string) {
 	fs := flag.NewFlagSet("install-desktop", flag.ExitOnError)
 	binFlag := fs.String("bin", "", "Path to Antigravity 2.0 binary (auto-detected if omitted)")
@@ -1175,6 +1187,7 @@ func runInstallDesktop(args []string) {
 	fmt.Println("\nAntigravity is now available in your GNOME / XDG application menu and dock!")
 }
 
+// runUninstallDesktop removes the desktop application launcher entry on Linux.
 func runUninstallDesktop(args []string) {
 	fmt.Println("Uninstalling GNOME/XDG desktop application entry...")
 	if err := launcher.UninstallDesktop(); err != nil {
@@ -1184,6 +1197,7 @@ func runUninstallDesktop(args []string) {
 	fmt.Println("Success! Antigravity desktop application entry removed.")
 }
 
+// runRefreshQuotas triggers immediate quota fetching for all accounts.
 func runRefreshQuotas(args []string) {
 	fs := flag.NewFlagSet("refresh-quotas", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")

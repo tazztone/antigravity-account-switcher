@@ -96,7 +96,22 @@ func TestTier4_LauncherScriptExecution(t *testing.T) {
 	tmpDir := t.TempDir()
 	cmd := exec.CommandContext(ctx, scriptPath, "--bin", echoBin, "launcher script test successful")
 	cmd.Dir = filepath.Dir(scriptPath)
-	cmd.Env = append(os.Environ(), "ANTIGRAVITY_PORT=0", "XDG_CONFIG_HOME="+tmpDir, "HOME="+tmpDir)
+	cmd.Env = append(os.Environ(),
+		"ANTIGRAVITY_PORT=0",
+		"XDG_CONFIG_HOME="+tmpDir,
+		"HOME="+tmpDir,
+		"ANTIGRAVITY_CONFIG_DIR="+filepath.Join(tmpDir, "config"),
+		"ANTIGRAVITY_DB_PATH="+filepath.Join(tmpDir, "test.db"),
+	)
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		cmd.Env = append(cmd.Env, "GOPATH="+gopath)
+	}
+	if gocache := os.Getenv("GOCACHE"); gocache != "" {
+		cmd.Env = append(cmd.Env, "GOCACHE="+gocache)
+	}
+	if gomodcache := os.Getenv("GOMODCACHE"); gomodcache != "" {
+		cmd.Env = append(cmd.Env, "GOMODCACHE="+gomodcache)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script execution failed: %v (output: %s)", err, string(out))

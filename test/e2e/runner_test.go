@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/metrics"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/oauth"
@@ -65,6 +66,7 @@ func setupE2EEnvironment(t *testing.T, pollInterval time.Duration) *TestEnvironm
 		eventRepo,
 		proxy.WithQuotaRepository(quotaRepo),
 		proxy.WithModelFallback("gemini-2.5-pro", "claude-3-5-sonnet", true),
+		proxy.WithFallbackStrategy(config.FallbackStrategyAccountFirst),
 	)
 
 	proxyHandler, err := proxy.NewProxyHandler(

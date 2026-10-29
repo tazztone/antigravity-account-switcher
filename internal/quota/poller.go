@@ -484,6 +484,7 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 	return p.parseQuotaResponse(acc.ID, resp.Body)
 }
 
+// generateConsumerQuotaBuckets creates synthesized quota buckets for accounts with consumer project IDs.
 func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.Account) []*domain.QuotaBucket {
 	now := time.Now().UTC()
 	var dailyResetTime time.Time
@@ -828,6 +829,7 @@ func parseResetTime(rawPrimary, rawAlt json.RawMessage) time.Time {
 	return time.Time{}
 }
 
+// isAccountQuotaRestored evaluates if all quota buckets for an account have restored quota.
 func (p *Poller) isAccountQuotaRestored(buckets []*domain.QuotaBucket, now time.Time) bool {
 	if len(buckets) == 0 {
 		return false
@@ -843,6 +845,7 @@ func (p *Poller) isAccountQuotaRestored(buckets []*domain.QuotaBucket, now time.
 	return true
 }
 
+// restoreExhaustedAccountsPastReset transitions accounts with passed reset times back to active status.
 func (p *Poller) restoreExhaustedAccountsPastReset(ctx context.Context, now time.Time) {
 	resetIDs, err := p.quotaRepo.GetExhaustedAccountsPastReset(ctx, now)
 	if err != nil || len(resetIDs) == 0 {

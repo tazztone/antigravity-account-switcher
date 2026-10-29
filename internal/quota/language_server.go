@@ -170,6 +170,7 @@ func FindLocalLanguageServer() (csrf string, ports []int, err error) {
 	return csrf, ports, nil
 }
 
+// doLSRequest makes an HTTP request to language_server trying all candidate ports.
 func doLSRequest(ctx context.Context, csrf string, ports []int, endpoint string, reqBody []byte) ([]byte, error) {
 	client := &http.Client{
 		Timeout: 2500 * time.Millisecond,
@@ -327,6 +328,7 @@ func QueryAvailableModels(ctx context.Context) ([]*domain.ModelInfo, error) {
 	return extractModels(payload)
 }
 
+// extractModels parses models from a language server or Cloud Code PA payload.
 func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	if p == nil || len(p.Models) == 0 {
 		return nil, fmt.Errorf("empty models map")
@@ -405,6 +407,7 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	return result, nil
 }
 
+// extractModelVariant extracts sub-variant tags (High, Medium, Low, Preview) from a model ID.
 func extractModelVariant(mid string) string {
 	lower := strings.ToLower(mid)
 	var parts []string
@@ -433,6 +436,7 @@ func extractModelVariant(mid string) string {
 	return ""
 }
 
+// disambiguateModelName appends variant tags to colliding model display names.
 func disambiguateModelName(mid, dName string, nameCounts map[string]int, usedNames map[string]bool) string {
 	cleanName := strings.TrimSpace(dName)
 	if cleanName == "" {
@@ -519,6 +523,7 @@ func DiscoverAvailableModels(ctx context.Context, token string) []*domain.ModelI
 	return DefaultModelCatalog()
 }
 
+// categorizeModelID maps a model identifier to its corresponding model category string.
 func categorizeModelID(id string) string {
 	lower := strings.ToLower(id)
 	if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") || strings.Contains(lower, "sonnet") || strings.Contains(lower, "opus") || strings.Contains(lower, "haiku") || strings.Contains(lower, "3p") {

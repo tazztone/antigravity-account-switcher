@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -325,21 +326,63 @@ func TestCLI_SubcommandFlags_PortAndTargetURL_ValidationErrors(t *testing.T) {
 	}
 }
 
+// TestCLI_SubprocessMainEntry is the child process hook used by runMainInSubprocess.
+func TestCLI_SubprocessMainEntry(t *testing.T) {
+	if os.Getenv("ANTIGRAVITY_TEST_MAIN_SUBPROCESS") != "1" {
+		return
+	}
+	args := []string{}
+	for i, arg := range os.Args {
+		if arg == "--" {
+			args = os.Args[i+1:]
+			break
+		}
+	}
+	os.Args = append([]string{"antigravity-account-switcher"}, args...)
+	main()
+}
+
+func runMainInSubprocess(t *testing.T, args ...string) (stdout string, stderr string, exitCode int) {
+	t.Helper()
+	cmdArgs := []string{"-test.run=TestCLI_SubprocessMainEntry", "--"}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := exec.Command(os.Args[0], cmdArgs...)
+	cmd.Env = append(os.Environ(),
+		"ANTIGRAVITY_TEST_MAIN_SUBPROCESS=1",
+		"ANTIGRAVITY_CONFIG_DIR="+t.TempDir(),
+	)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	exitCode = 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("unexpected error running main subprocess: %v", err)
+		}
+	}
+	return outBuf.String(), errBuf.String(), exitCode
+}
+
 // TestCLI_SubcommandFlags_MaxBodyMB_ValidationErrors tests that CLI flags
-// for --max-body-mb reject values <= 0 across serve, launch, and wrap.
+// for --max-body-mb reject values <= 0 across serve, launch, and wrap in real subprocess executions.
 func TestCLI_SubcommandFlags_MaxBodyMB_ValidationErrors(t *testing.T) {
 	subcommands := []string{"serve", "launch", "wrap"}
 	for _, sub := range subcommands {
-		for _, invalidMB := range []string{"0", "-5", "-100"} {
+		for _, invalidMB := range []string{"0", "-5"} {
 			t.Run(sub+"_invalid_max_body_mb_"+invalidMB, func(t *testing.T) {
-				fs := flag.NewFlagSet(sub, flag.ContinueOnError)
-				maxBodyMB := fs.Int("max-body-mb", config.DefaultMaxBodyMB, "")
-				args := []string{"--max-body-mb=" + invalidMB}
-				if err := fs.Parse(args); err != nil {
-					t.Fatalf("parse err: %v", err)
+				args := []string{sub, "--max-body-mb=" + invalidMB}
+				if sub == "wrap" {
+					args = append(args, "--", "echo", "test")
 				}
-				if *maxBodyMB > 0 {
-					t.Errorf("[%s] expected non-positive maxBodyMB, got %d", sub, *maxBodyMB)
+				_, stderr, exitCode := runMainInSubprocess(t, args...)
+				if exitCode != 1 {
+					t.Errorf("[%s] expected exit code 1 for --max-body-mb=%s, got %d (stderr: %s)", sub, invalidMB, exitCode, stderr)
+				}
+				if !strings.Contains(stderr, "invalid max-body-mb") {
+					t.Errorf("[%s] expected stderr to contain 'invalid max-body-mb', got: %s", sub, stderr)
 				}
 			})
 		}
