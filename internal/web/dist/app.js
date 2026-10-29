@@ -40,16 +40,10 @@
   const gridMaxLabel = document.getElementById('grid-max-label');
   const gridMidLabel = document.getElementById('grid-mid-label');
 
-  // Model Fallback DOM Elements
-  const fallbackToggle = document.getElementById('fallback-enabled-toggle');
-  const fallbackToggleStatus = document.getElementById('fallback-toggle-status');
-  const selectModelPrimary = document.getElementById('select-model-primary');
-  const selectModelSecondary = document.getElementById('select-model-secondary');
-  const btnSaveConfig = document.getElementById('btn-save-config');
+  // Discovery Controls DOM Elements
   const btnRefreshModels = document.getElementById('btn-refresh-models');
   const refreshModelsIcon = document.getElementById('refresh-models-icon');
   const modelsSourceBadge = document.getElementById('models-source-badge');
-  const configStatusMsg = document.getElementById('config-status-msg');
 
   // =========================================================================
   // Formatting & Utility Helpers
@@ -822,6 +816,41 @@
           `;
         }
 
+        let fallbackHtml = '';
+        const isFallbackActive = Boolean(currentAppConfig.fallback_secondary_enabled);
+        const isPrimary = isFallbackActive && item.rules.some(r => r.model_id === currentAppConfig.model_primary);
+        const isSecondary = isFallbackActive && item.rules.some(r => r.model_id === currentAppConfig.model_secondary);
+
+        if (isPrimary) {
+          const secModel = rawModelsData.find(m => m.id === currentAppConfig.model_secondary);
+          const secName = secModel?.display_name || currentAppConfig.model_secondary;
+          fallbackHtml = `
+            <button type="button" class="model-fallback-btn is-active"
+                    data-action="configure-fallback"
+                    data-model-ids="${escapeHtml(modelIds)}"
+                    data-base-name="${escapeHtml(item.baseName)}"
+                    title="Active 429 Fallback: Retries on ${escapeHtml(secName)} within same account first">
+              ↪ ${escapeHtml(secName)}
+            </button>
+          `;
+        } else if (isSecondary) {
+          fallbackHtml = `
+            <span class="model-fallback-badge" title="Target fallback model when primary hits 429">
+              fallback target
+            </span>
+          `;
+        } else {
+          fallbackHtml = `
+            <button type="button" class="model-fallback-btn"
+                    data-action="set-fallback"
+                    data-model-ids="${escapeHtml(modelIds)}"
+                    data-base-name="${escapeHtml(item.baseName)}"
+                    title="Set 429 fallback for ${escapeHtml(item.baseName)}">
+              ↪
+            </button>
+          `;
+        }
+
         return `
           <div class="model-rule-row ${anyEnabled ? '' : 'model-rule-disabled'}" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
             <label class="model-rule-name" title="${escapeHtml(modelIds)}">
@@ -829,6 +858,7 @@
               <span class="model-label-text">${escapeHtml(item.baseName)}</span>
             </label>
             ${badgesHtml}
+            ${fallbackHtml}
           </div>
         `;
       }).join('');
@@ -1058,6 +1088,15 @@
           await fetchAccounts();
         });
       });
+
+      const fallbackBtn = row.querySelector('.model-fallback-btn');
+      if (fallbackBtn) {
+        fallbackBtn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          openFallbackModal(fallbackBtn.dataset.modelIds, fallbackBtn.dataset.baseName);
+        });
+      }
     });
 
     card.querySelectorAll('.btn-group-toggle').forEach(btn => {
@@ -1146,32 +1185,9 @@
     try {
       const res = await fetch('/api/config');
       if (!res.ok) return;
-      const data = await res.json();
-      currentAppConfig = data;
-
-      if (fallbackToggle) {
-        fallbackToggle.checked = Boolean(data.fallback_secondary_enabled);
-        updateToggleStatusText(Boolean(data.fallback_secondary_enabled));
-      }
-      if (selectModelPrimary && data.model_primary) {
-        selectModelPrimary.value = data.model_primary;
-      }
-      if (selectModelSecondary && data.model_secondary) {
-        selectModelSecondary.value = data.model_secondary;
-      }
+      currentAppConfig = await res.json();
     } catch (err) {
       console.warn('Failed to fetch config:', err);
-    }
-  }
-
-  function updateToggleStatusText(isEnabled) {
-    if (!fallbackToggleStatus) return;
-    if (isEnabled) {
-      fallbackToggleStatus.textContent = 'Enabled';
-      fallbackToggleStatus.className = 'toggle-label-text is-enabled';
-    } else {
-      fallbackToggleStatus.textContent = 'Disabled';
-      fallbackToggleStatus.className = 'toggle-label-text';
     }
   }
 
@@ -1201,7 +1217,7 @@
         }
       }
 
-      populateModelSelects();
+      renderAccounts();
     } catch (err) {
       console.warn('Failed to fetch models:', err);
       if (modelsSourceBadge) {
@@ -1229,154 +1245,178 @@
     return 'gemini';
   }
 
-  function updateSecondaryOptions() {
-    if (!selectModelPrimary || !selectModelSecondary) return;
-    const primaryVal = selectModelPrimary.value;
-    const prevSecondary = selectModelSecondary.value || currentAppConfig.model_secondary;
+  function openFallbackModal(modelIdsStr, baseName) {
+    const modal = document.getElementById('fallback-modal');
+    if (!modal) return;
 
-    // Intra-family fallback allowed: any model distinct from primary.
-    const allowedModels = rawModelsData.filter(m => m.id !== primaryVal);
+    const primaryDisplay = document.getElementById('modal-primary-display');
+    const tierGroup = document.getElementById('modal-primary-tier-group');
+    const selectPrimary = document.getElementById('modal-select-primary');
+    const selectSecondary = document.getElementById('modal-select-secondary');
+    const btnDisable = document.getElementById('btn-disable-fallback');
 
-    let html = '<optgroup label="Standby Fallback Model">';
-    allowedModels.forEach(m => {
-      const isSelected = m.id === prevSecondary ? 'selected' : '';
-      const star = m.recommended ? ' ★' : '';
-      html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-    });
-    html += '</optgroup>';
+    if (primaryDisplay) primaryDisplay.textContent = baseName;
 
-    selectModelSecondary.innerHTML = html;
-
-    // Validate if previously selected model is still in the new option list
-    const stillValid = Array.from(selectModelSecondary.options).some(opt => opt.value === prevSecondary);
-    if (!stillValid && selectModelSecondary.options.length > 0) {
-      selectModelSecondary.selectedIndex = 0;
-    }
-  }
-
-  function populateModelSelects() {
-    if (!selectModelPrimary || !selectModelSecondary) return;
-
-    const currentPrimary = currentAppConfig.model_primary || selectModelPrimary.value;
-    const currentSecondary = currentAppConfig.model_secondary || selectModelSecondary.value;
-
-    const geminiModels = [];
-    const claudeGptModels = [];
-    const otherModels = [];
-
-    rawModelsData.forEach(m => {
-      if (m.category === 'gemini') {
-        geminiModels.push(m);
-      } else if (m.category === 'claude_gpt') {
-        claudeGptModels.push(m);
-      } else {
-        otherModels.push(m);
-      }
-    });
-
-    function buildOptionsHtml(selectedVal) {
-      let html = '';
-
-      if (geminiModels.length > 0) {
-        html += '<optgroup label="Google Gemini">';
-        geminiModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      if (claudeGptModels.length > 0) {
-        html += '<optgroup label="Claude & GPT (3P)">';
-        claudeGptModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      if (otherModels.length > 0) {
-        html += '<optgroup label="Other Models">';
-        otherModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      return html;
+    const ids = (modelIdsStr || '').split(',').filter(Boolean);
+    if (ids.length > 1 && tierGroup && selectPrimary) {
+      tierGroup.style.display = 'block';
+      selectPrimary.innerHTML = ids.map(id => {
+        const m = rawModelsData.find(rm => rm.id === id);
+        const label = m?.display_name || id;
+        const isSel = id === currentAppConfig.model_primary;
+        return `<option value="${escapeHtml(id)}" ${isSel ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+      }).join('');
+    } else if (selectPrimary) {
+      if (tierGroup) tierGroup.style.display = 'none';
+      const singleId = ids[0] || '';
+      const m = rawModelsData.find(rm => rm.id === singleId);
+      selectPrimary.innerHTML = `<option value="${escapeHtml(singleId)}" selected>${escapeHtml(m?.display_name || baseName)}</option>`;
     }
 
-    selectModelPrimary.innerHTML = buildOptionsHtml(currentPrimary);
+    function populateSecondarySelect() {
+      if (!selectSecondary || !selectPrimary) return;
+      const currentPri = selectPrimary.value;
+      const currentSec = currentAppConfig.model_secondary;
 
-    // If current selection wasn't in list, add explicit option
-    if (currentPrimary && !selectModelPrimary.value) {
-      const opt = new Option(currentPrimary, currentPrimary, true, true);
-      selectModelPrimary.add(opt);
-    }
+      const allowed = rawModelsData.filter(m => m.id !== currentPri && !categorizeRule(m)?.includes('preview'));
 
-    // Populate secondary options strictly scoped to cross-vendor models
-    updateSecondaryOptions();
-
-    if (currentSecondary && !selectModelSecondary.value) {
-      const opt = new Option(currentSecondary, currentSecondary, true, true);
-      selectModelSecondary.add(opt);
-    }
-  }
-
-  async function handleSaveConfig() {
-    const primaryVal = selectModelPrimary ? selectModelPrimary.value : currentAppConfig.model_primary;
-    const secondaryVal = selectModelSecondary ? selectModelSecondary.value : currentAppConfig.model_secondary;
-    const isFallbackEnabled = fallbackToggle ? fallbackToggle.checked : false;
-
-    // Client-side validation: models must be distinct (intra-family fallback allowed)
-    if (isFallbackEnabled && primaryVal && secondaryVal && primaryVal === secondaryVal) {
-      showToast('Primary and Secondary models must be different.', 'error', 5000);
-      return;
-    }
-
-    if (btnSaveConfig) {
-      btnSaveConfig.disabled = true;
-      btnSaveConfig.textContent = 'Saving...';
-    }
-
-    const payload = {
-      model_primary: primaryVal,
-      model_secondary: secondaryVal,
-      fallback_secondary_enabled: isFallbackEnabled
-    };
-
-    try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const groups = { claude_gpt: [], gemini: [], other: [] };
+      allowed.forEach(m => {
+        if (m.category === 'claude_gpt') groups.claude_gpt.push(m);
+        else if (m.category === 'gemini') groups.gemini.push(m);
+        else groups.other.push(m);
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `HTTP ${res.status}`);
+      let html = '';
+      if (groups.claude_gpt.length > 0) {
+        html += '<optgroup label="Claude & GPT (3P)">';
+        groups.claude_gpt.forEach(m => {
+          const sel = m.id === currentSec ? 'selected' : '';
+          const star = m.recommended ? ' ★' : '';
+          html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+        });
+        html += '</optgroup>';
+      }
+      if (groups.gemini.length > 0) {
+        html += '<optgroup label="Google Gemini">';
+        groups.gemini.forEach(m => {
+          const sel = m.id === currentSec ? 'selected' : '';
+          const star = m.recommended ? ' ★' : '';
+          html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+        });
+        html += '</optgroup>';
+      }
+      if (groups.other.length > 0) {
+        html += '<optgroup label="Other Models">';
+        groups.other.forEach(m => {
+          const sel = m.id === currentSec ? 'selected' : '';
+          html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}</option>`;
+        });
+        html += '</optgroup>';
       }
 
-      const updated = await res.json();
-      currentAppConfig = updated;
-      updateToggleStatusText(Boolean(updated.fallback_secondary_enabled));
-      showToast('Model fallback configuration saved', 'success', 2500);
-      if (configStatusMsg) {
-        configStatusMsg.textContent = `Saved at ${new Date().toLocaleTimeString()}`;
-        setTimeout(() => {
-          if (configStatusMsg) configStatusMsg.textContent = '';
-        }, 4000);
-      }
-    } catch (err) {
-      showToast(`Failed to save settings: ${err.message}`, 'error', 5000);
-    } finally {
-      if (btnSaveConfig) {
-        btnSaveConfig.disabled = false;
-        btnSaveConfig.textContent = 'Save Settings';
-      }
+      selectSecondary.innerHTML = html;
+    }
+
+    populateSecondarySelect();
+    if (selectPrimary) {
+      selectPrimary.onchange = populateSecondarySelect;
+    }
+
+    const isCurrentlyActivePrimary = currentAppConfig.fallback_secondary_enabled && ids.includes(currentAppConfig.model_primary);
+    if (btnDisable) {
+      btnDisable.style.display = isCurrentlyActivePrimary ? 'inline-block' : 'none';
+    }
+
+    modal.showModal();
+  }
+
+  async function saveFallbackPolicy(primaryId, secondaryId, enabled) {
+    const payload = {
+      model_primary: primaryId,
+      model_secondary: secondaryId,
+      fallback_secondary_enabled: enabled
+    };
+
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData?.error?.message || `HTTP ${res.status}`);
+    }
+
+    const updated = await res.json();
+    currentAppConfig = updated;
+    const priDisplay = rawModelsData.find(m => m.id === updated.model_primary)?.display_name || updated.model_primary;
+    const secDisplay = rawModelsData.find(m => m.id === updated.model_secondary)?.display_name || updated.model_secondary;
+    if (enabled) {
+      showToast(`Model fallback active: ${priDisplay} ↪ ${secDisplay}`, 'success', 3000);
+    } else {
+      showToast('Model fallback disabled', 'info', 2500);
+    }
+    renderAccounts();
+  }
+
+  function setupFallbackModalEvents() {
+    const modal = document.getElementById('fallback-modal');
+    if (!modal) return;
+
+    const btnClose = document.getElementById('btn-close-fallback-modal');
+    const btnCancel = document.getElementById('btn-cancel-fallback');
+    const btnSave = document.getElementById('btn-save-fallback');
+    const btnDisable = document.getElementById('btn-disable-fallback');
+    const selectPrimary = document.getElementById('modal-select-primary');
+    const selectSecondary = document.getElementById('modal-select-secondary');
+
+    const closeModal = () => modal.close();
+
+    if (btnClose) btnClose.onclick = closeModal;
+    if (btnCancel) btnCancel.onclick = closeModal;
+
+    modal.addEventListener('click', e => {
+      if (e.target === modal) modal.close();
+    });
+
+    if (btnSave) {
+      btnSave.onclick = async () => {
+        const pri = selectPrimary?.value;
+        const sec = selectSecondary?.value;
+        if (!pri || !sec) {
+          showToast('Please select both primary and fallback models', 'warning', 3000);
+          return;
+        }
+        if (pri === sec) {
+          showToast('Primary and fallback models must be distinct', 'warning', 3000);
+          return;
+        }
+        btnSave.disabled = true;
+        btnSave.textContent = 'Saving...';
+        try {
+          await saveFallbackPolicy(pri, sec, true);
+          modal.close();
+        } finally {
+          btnSave.disabled = false;
+          btnSave.textContent = 'Save Policy';
+        }
+      };
+    }
+
+    if (btnDisable) {
+      btnDisable.onclick = async () => {
+        btnDisable.disabled = true;
+        btnDisable.textContent = 'Removing...';
+        try {
+          await saveFallbackPolicy(currentAppConfig.model_primary, currentAppConfig.model_secondary, false);
+          modal.close();
+        } finally {
+          btnDisable.disabled = false;
+          btnDisable.textContent = 'Remove Fallback';
+        }
+      };
     }
   }
 
@@ -2015,32 +2055,8 @@
       requestAnimationFrame(() => drawPoolCircuits());
     });
 
-    // Model fallback toggle with instant auto-save
-    if (fallbackToggle) {
-      fallbackToggle.addEventListener('change', () => {
-        updateToggleStatusText(fallbackToggle.checked);
-        handleSaveConfig();
-      });
-    }
-
-    // Dynamic secondary model options on primary model change with instant auto-save
-    if (selectModelPrimary) {
-      selectModelPrimary.addEventListener('change', () => {
-        updateSecondaryOptions();
-        handleSaveConfig();
-      });
-    }
-
-    if (selectModelSecondary) {
-      selectModelSecondary.addEventListener('change', () => {
-        handleSaveConfig();
-      });
-    }
-
-    // Save model fallback settings (if explicit button exists)
-    if (btnSaveConfig) {
-      btnSaveConfig.addEventListener('click', handleSaveConfig);
-    }
+    // Fallback modal setup
+    setupFallbackModalEvents();
 
     // Refresh models button with account refetch
     if (btnRefreshModels) {

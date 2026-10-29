@@ -115,43 +115,24 @@
           <div id="header-routing-strip" class="header-routing-strip" aria-label="Live routing status"></div>
           <p class="panel-description">Live quota fractions polled every 60s from Google Cloud Code PA. Instant failover on HTTP 429.</p>
         </div>
-        <div class="text-xs text-muted" id="last-poll-time">
-          Auto-polling every 60s
+        <div class="panel-header-actions">
+          <div class="text-xs text-muted" id="last-poll-time">
+            Auto-polling every 60s
+          </div>
+          <div class="models-discovery-bar">
+            <span id="models-source-badge" class="badge badge-info mono" title="Model discovery source">Discovering models...</span>
+            <button id="btn-refresh-models" class="btn-icon-subtle" title="Fetch live models from Antigravity" aria-label="Refresh Models">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" id="refresh-models-icon" width="13" height="13">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- Consolidated Model Fallback Toolbar (All Accounts) -->
-      <div class="account-pool-toolbar" aria-label="Global Model Fallback Toolbar">
-        <div class="toolbar-fallback-group">
-          <span class="toolbar-icon" title="Pool-wide model fallback before account rotation">⚡</span>
-          <span class="toolbar-label" title="When enabled, if the actively routing account hits an HTTP 429 on Primary Model, it retries with Secondary Model within that same account before rotating to other accounts.">Model Fallback (All Accounts):</span>
-          <span class="badge badge-neutral mono" style="font-size: 10px; padding: 2px 6px; letter-spacing: 0.04em;" title="Global policy applied to whichever account is actively routing">POOL-WIDE POLICY</span>
-          <div class="toolbar-select-wrapper">
-            <select id="select-model-primary" class="form-select-mini" title="Primary model attempted first">
-              <option value="gemini-2.5-pro">Loading models...</option>
-            </select>
-          </div>
-          <span class="toolbar-arrow" aria-hidden="true">→</span>
-          <div class="toolbar-select-wrapper">
-            <select id="select-model-secondary" class="form-select-mini" title="Secondary model fallback on 429 before account switch">
-              <option value="gemini-2.5-flash">Loading models...</option>
-            </select>
-          </div>
-          <div class="switch-control-mini" title="Enable or disable secondary model retry within the same account on HTTP 429">
-            <input type="checkbox" id="fallback-enabled-toggle" class="toggle-checkbox" role="switch" aria-checked="false">
-            <label for="fallback-enabled-toggle" class="toggle-track" aria-hidden="true"></label>
-            <span id="fallback-toggle-status" class="toggle-label-text">Disabled</span>
-          </div>
-        </div>
-
-        <div class="toolbar-meta-group">
-          <span id="models-source-badge" class="badge badge-info mono" title="Model discovery source">Discovering models...</span>
-          <button id="btn-refresh-models" class="btn-icon-subtle" title="Fetch live models from Antigravity" aria-label="Refresh Models">
-            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" id="refresh-models-icon" width="13" height="13">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
+      <div class="section-legend">
+        <span class="legend-icon">⚡</span>
+        <span><strong>429 Failover:</strong> Quota exhausted accounts rotate automatically. Optional fallback (<strong>↪</strong>) retries a cheaper model on the same account first.</span>
       </div>
 
       <!-- Dynamic Accounts Grid -->
@@ -296,6 +277,35 @@
       Antigravity Account Switcher • High-reliability failover proxy for Google Antigravity 2.0 • Zero telemetry loss
     </div>
   </footer>
+
+  <!-- Modal: Configure Model Fallback Policy -->
+  <dialog id="fallback-modal" class="modal-dialog">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Model Fallback Policy</h3>
+        <button type="button" class="btn-close-modal" id="btn-close-fallback-modal" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">
+          When <strong id="modal-primary-display">Primary Model</strong> encounters an <code>HTTP 429 RESOURCE_EXHAUSTED</code>, the switcher retries the request with this fallback model within the same account before rotating to the next account.
+        </p>
+        <div class="form-group" id="modal-primary-tier-group" style="display: none;">
+          <label for="modal-select-primary" class="form-label">Primary Tier / Variant</label>
+          <select id="modal-select-primary" class="form-select"></select>
+        </div>
+        <div class="form-group">
+          <label for="modal-select-secondary" class="form-label">Fallback Model Target</label>
+          <select id="modal-select-secondary" class="form-select"></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btn-disable-fallback" class="btn btn-danger-subtle">Remove Fallback</button>
+        <div style="flex: 1;"></div>
+        <button type="button" id="btn-cancel-fallback" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="btn-save-fallback" class="btn btn-primary">Save Policy</button>
+      </div>
+    </div>
+  </dialog>
 
   <script src="/dist/app.js"></script>
 </body>
