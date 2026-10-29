@@ -30,7 +30,7 @@ func IsInternalOrPreviewModel(modelID string) bool {
 	// Internal task, tool, command, and non-agent models
 	if lower == "gemini-3-flash" || strings.Contains(lower, "flash-image") ||
 		strings.HasPrefix(lower, "gemini-3.5-flash") || strings.HasPrefix(lower, "gemini-3.1-flash") ||
-		strings.HasPrefix(lower, "gemini-2.5") || strings.HasSuffix(lower, "-tiered") {
+		strings.HasSuffix(lower, "-tiered") {
 		return true
 	}
 	return false
