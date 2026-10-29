@@ -19,7 +19,6 @@
   let currentLogFilter = 'all';
   let isUserScrolledUp = false;
   let selectedColumnIndex = -1;
-  const openInternalDrawers = new Set();
 
   // Privacy Mode State (Persistent in localStorage)
   const PRIVACY_STORAGE_KEY = 'antigravity_privacy_mode';
@@ -846,7 +845,7 @@
               <span class="model-label-text">${escapeHtml(item.baseName)}</span>
             </label>
             ${badgesHtml}
-            <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when 429 occurs">${fallbackOptions(selectedFallback)}</select>
+            <select class="model-rule-fallback" aria-label="Fallback target account" title="Target account when disabled on this account">${fallbackOptions(selectedFallback)}</select>
           </div>
         `;
       }).join('');
@@ -854,28 +853,10 @@
       return { count: baseModelMap.size, html: rowsHtml };
     }
 
-    function renderBucketModels(groupKey, rulesForGroup, previewRulesForGroup) {
+    function renderBucketModels(groupKey, rulesForGroup) {
       const std = buildModelGroupRows(rulesForGroup, groupKey);
-      let previewHtml = '';
-      let previewCount = 0;
-      if (previewRulesForGroup && previewRulesForGroup.length > 0) {
-        const prev = buildModelGroupRows(previewRulesForGroup, 'preview');
-        previewCount = prev.count;
-        if (previewCount > 0) {
-          const drawerKey = `${acc.id}:${groupKey}`;
-          const isOpen = openInternalDrawers.has(drawerKey);
-          previewHtml = `
-            <details class="internal-models-drawer" data-drawer-key="${escapeHtml(drawerKey)}" ${isOpen ? 'open' : ''}>
-              <summary class="internal-models-summary">▸ +${previewCount} internal & tab models</summary>
-              <div class="internal-models-rows">
-                ${prev.html}
-              </div>
-            </details>
-          `;
-        }
-      }
 
-      if (std.count === 0 && previewCount === 0) {
+      if (std.count === 0) {
         return '';
       }
 
@@ -888,17 +869,17 @@
               <button type="button" class="btn-group-toggle" data-action="none" data-group="${groupKey}">None</button>
             </div>
           </div>
+          <div class="bucket-models-subtext">Unchecked models skip this account.</div>
           <div class="bucket-models-rows">
             ${std.html}
           </div>
-          ${previewHtml}
         </div>
       `;
     }
 
-    const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude, []);
-    const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini, groupedRules.preview);
-    const argonModelsHtml = renderBucketModels('argon', groupedRules.argon, []);
+    const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude);
+    const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini);
+    const argonModelsHtml = renderBucketModels('argon', groupedRules.argon);
     const hasArgonAccess = Boolean(argonWeekly) ||
       (groupedRules.argon && groupedRules.argon.length > 0) ||
       rules.some(r => /5-5/i.test(r.model_id) || (/argon/i.test(r.model_id) && !r.model_id.includes('disabled')));
@@ -1123,16 +1104,6 @@
           await Promise.all(promises);
           await fetchAccounts();
         }
-      });
-    });
-
-    card.querySelectorAll('.internal-models-drawer').forEach(d => {
-      d.addEventListener('toggle', () => {
-        const key = d.dataset.drawerKey;
-        if (key) {
-          if (d.open) openInternalDrawers.add(key); else openInternalDrawers.delete(key);
-        }
-        requestAnimationFrame(() => drawPoolCircuits());
       });
     });
 

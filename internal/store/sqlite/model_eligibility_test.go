@@ -514,4 +514,18 @@ func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
 	if err != nil || !available {
 		t.Fatalf("expected acc-pro available for gemini_argon via 5.5 model rule, got %v err=%v", available, err)
 	}
+
+	// Internal/tab/preview models are always eligible, even when disabled in DB rules
+	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
+		AccountID:         "acc-pro",
+		ModelID:           "tab_flash_lite_preview",
+		Enabled:           false,
+		FallbackAccountID: domain.FallbackAccountAuto,
+	}); err != nil {
+		t.Fatalf("UpdateAccountModelRule: %v", err)
+	}
+	isEligible, _, err := repo.IsAccountEligibleForModel(ctx, "acc-pro", "tab_flash_lite_preview")
+	if err != nil || !isEligible {
+		t.Fatalf("expected internal model tab_flash_lite_preview to always be eligible, got eligible=%v, err=%v", isEligible, err)
+	}
 }

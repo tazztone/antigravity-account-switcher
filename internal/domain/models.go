@@ -36,15 +36,6 @@ func IsInternalOrPreviewModel(modelID string) bool {
 	return false
 }
 
-func containsSubstr(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 // FallbackAccountID sentinel values for AccountModelRule.
 const (
 	// FallbackAccountAuto lets the proxy pick the next eligible account in the pool.

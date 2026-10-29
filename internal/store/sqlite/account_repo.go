@@ -734,7 +734,7 @@ func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accou
 	if accountID == "" {
 		return false, domain.FallbackAccountAuto, domain.ErrAccountNotFound
 	}
-	if modelID == "" {
+	if modelID == "" || domain.IsInternalOrPreviewModel(modelID) {
 		return true, domain.FallbackAccountAuto, nil
 	}
 
@@ -765,6 +765,10 @@ func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accou
 // active status, not exhausted for the category, not excluded, and either without
 // model rules or with the model present and enabled.
 func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, category domain.ModelCategory, modelID, excludeID string) (*domain.Account, error) {
+	if modelID == "" || domain.IsInternalOrPreviewModel(modelID) {
+		return r.GetNextAvailableForCategory(ctx, category, excludeID)
+	}
+
 	// Base candidate query mirrors GetNextAvailableForCategory (category quota +
 	// status), then adds the per-account model eligibility constraint.
 	next, err := r.GetNextAvailableForCategory(ctx, category, excludeID)

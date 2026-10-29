@@ -311,4 +311,3 @@ func TestArgonQuota_PollAccount_FreshUpstreamOverridesOldPositiveFraction(t *tes
 		t.Errorf("expected fresh reset time %v from upstream, got %v", upstreamReset, argonPolled.ResetTime)
 	}
 }
-
