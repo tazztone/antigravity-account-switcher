@@ -194,13 +194,13 @@ Quando a cota do modelo principal se esgota (ex.: `gemini-2.5-pro` ou `claude-3-
 
 ### 2. Configuração pelo Dashboard Web
 Você pode gerenciar as preferências de modelos diretamente pelo navegador (`http://127.0.0.1:8080` ou `launch --open`):
-- **Toggle em Tempo Real**: Ative ou desative o fallback intra-conta instantaneamente.
-- **Descoberta de Modelos**: Clique em **Buscar Modelos** para inspecionar os endpoints do `language_server` / Cloud Code PA e listar todos os modelos disponíveis.
-- **Elegibilidade de Modelos por Conta**: O botão **Buscar Modelos** consulta todas as contas do pool. Cada cartão de conta exibe uma gaveta *Elegibilidade de Modelos & Fallbacks*: defina se a conta pode atender a um modelo e escolha o alvo de fallback (`Automático`, `Bloquear Fallback (None)`, ou uma conta específica). Requisições são roteadas para uma conta elegível antes do envio, e em 429 apenas contas elegíveis são tentadas.
+- **Fallback Unificado por Linha**: Clique em **↪** em qualquer linha de modelo para defini-lo como Primário e selecionar seu modelo Secundário de contingência. Quando ativo, erros 429 no modelo primário tentam o secundário na mesma conta antes de alternar de conta. O modelo alvo exibe um badge `fallback target`.
+- **Descoberta de Modelos**: Clique no botão de atualização no cabeçalho para consultar os endpoints do `language_server` / Cloud Code PA. Endpoints internos (`tab_*`, `chat_*`) são filtrados da interface automaticamente.
+- **Elegibilidade de Modelos por Conta**: Cada cartão exibe os modelos suportados pelo bucket. As caixas de seleção definem a elegibilidade—modelos desmarcados ignoram a conta e roteiam para outra conta do pool.
 - **Fixação por Categoria & Roteamento por Bordas de Bucket**: Fixe contas separadamente para Claude/GPT, Gemini ou Gemini 4 Argon (`POST /api/accounts/{id}/select` com `{"category": "..."}`). Cada grupo de modelos conta com bordas visuais diretas e controles integrados indicando o estado de roteamento: `🔄 Pool` (failover automático) vs `🔒 Solo` (bloqueia rotação na conta, devolvendo 429 para proteger as outras contas). Contas também podem desativar categorias inteiras (`🚫 Off / Excluído`) com um clique (`PUT /api/accounts/{id}/categories`).
 - **Rastreamento de Cota Semanal do Gemini 4 Argon**: A cota semanal do Argon é monitorada de forma independente com barra de progresso, porcentagem e contador de cooldown em tempo real, lado a lado com as cotas padrão do Claude e Gemini.
-- **Regras de Modelos Consolidadas**: A gaveta *Regras Avançadas de Modelos* unifica variantes repetitivas de raciocínio (`High`, `Med`, `Low`, `Think`) em linhas únicas por modelo base, com badges de seleção rápida e atualizações em lote.
-- **Recarregamento Sem Reiniciar**: Ao salvar as configurações, o `config.json` é atualizado e o motor de proxy aplica as mudanças imediatamente sem necessidade de reiniciar o Antigravity 2.0 ou o daemon.
+- **Regras de Modelos Consolidadas**: Variantes de esforço de raciocínio (`High`, `Med`, `Low`, `Think`) são unificadas em linhas únicas por modelo base, com badges de seleção rápida e atualizações em lote.
+- **Recarregamento Sem Reiniciar**: Salvar as configurações atualiza o `config.json` e o motor de proxy aplica as mudanças imediatamente sem necessidade de reiniciar o Antigravity 2.0 ou o daemon.
 
 ### 3. Recuperação Automática de Assinatura de Pensamento (HTTP 400)
 Ao alternar entre provedores de modelos (ex.: Claude <-> Gemini) ou em sessões de múltiplos turnos, o Google Cloud Code PA valida blocos criptográficos HMAC de raciocínio (`thought_signature` ou blocos de `thinking` do Claude). Assinaturas incompatíveis ou corrompidas causam erro `HTTP 400 ("Corrupted thought signature" ou "Invalid signature in thinking block")`.

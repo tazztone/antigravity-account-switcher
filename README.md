@@ -194,13 +194,13 @@ When your active account runs out of quota on a heavy model tier (e.g. `gemini-2
 
 ### 2. Dashboard Web UI Configuration
 You can configure model fallback directly from the browser dashboard (`http://127.0.0.1:8080` or `launch --open`):
-- **Live Toggle**: Enable or disable intra-account secondary fallback on the fly.
-- **Model Discovery**: Click **Fetch Models** to query active `language_server` / Cloud Code PA endpoints and populate model selectors with currently supported models.
-- **Per-Account Model Eligibility**: **Fetch Models** queries every account in the pool. Each account card has a *Model Eligibility & Fallbacks* drawer: toggle whether the account may serve a model and pick its fallback target (`Auto`, `Block Fallback (None)`, or a specific account). Requests for a model are routed to an eligible account before dispatch, and on 429 only eligible accounts are tried.
+- **Unified Model Fallback**: Click **↪** on any model row to set it as Primary and pick its standby Secondary model. When enabled, 429 errors on the primary model retry the secondary model on the same account first before rotating. The target row displays a distinct `fallback target` badge.
+- **Model Discovery**: Click the refresh button in the header to query active `language_server` / Cloud Code PA endpoints and populate model catalogs. Internal endpoints (`tab_*`, `chat_*`) are automatically filtered from the UI.
+- **Per-Account Model Eligibility**: Each account card shows models supported by that bucket. Checkboxes control eligibility—unchecked models skip this account and route to an eligible pool account.
 - **Per-Category Pins & Bucket-Level Routing**: Pin accounts separately for Claude/GPT, Gemini, or Gemini 4 Argon (`POST /api/accounts/{id}/select` with `{"category": "..."}`). Each model group features direct bucket-level borders and inline controls showing active routing state: `🔄 Pool` (auto-failover) vs `🔒 Solo` (locks category to account, returning 429 on exhaustion to protect other accounts). Accounts can also opt out of entire model categories (`🚫 Off / Excluded`) with a single click (`PUT /api/accounts/{id}/categories`).
 - **Gemini 4 Argon Weekly Quota Tracking**: Argon weekly sliding quota is tracked independently with live progress bars, percentages, and reset cooldown timers alongside standard Claude and Gemini quotas.
-- **Consolidated Model Rules**: The *Advanced Model Rules* drawer combines repetitive reasoning effort variants (`High`, `Med`, `Low`, `Think`) into single base-model rows with clickable tier badges and batch updates.
-- **Instant Hot-Reload**: Clicking **Save Settings** persists changes to `config.json` and immediately applies them to the running proxy engine without restarting Antigravity 2.0 or the daemon.
+- **Consolidated Model Rules**: Repetitive reasoning effort variants (`High`, `Med`, `Low`, `Think`) are combined into single base-model rows with clickable tier badges and batch updates.
+- **Instant Hot-Reload**: Persisting fallback settings updates `config.json` and immediately applies changes to the running proxy engine without restarting Antigravity 2.0 or the daemon.
 
 ### 3. Automatic 400 Thought Signature Recovery
 When switching between model providers (e.g. Claude <-> Gemini) or continuing multi-turn agent sessions, Google Cloud Code PA validates cryptographic HMAC thought signatures (`thought_signature` or Claude `thinking` blocks). Incompatible or stale thought blocks trigger `HTTP 400 ("Corrupted thought signature" or "Invalid signature in thinking block")`.
