@@ -678,24 +678,6 @@
     // Model rules categorized by bucket
     const rules = acc.model_rules || [];
 
-    function categorizeRule(r) {
-      const mid = (r.model_id || '').toLowerCase();
-      const cat = (r.category || '').toLowerCase();
-      if (mid.includes('disabled')) {
-        return null;
-      }
-      if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
-        return 'claude';
-      }
-      if (cat === 'gemini_argon' || /argon/i.test(mid)) {
-        return 'argon';
-      }
-      if (/^chat_|^tab_|preview|flash-image|-tiered|gemini-3-flash$|gemini-3\.5-flash|gemini-3\.1-flash|gemini-2\.5/i.test(mid)) {
-        return 'preview';
-      }
-      return 'gemini';
-    }
-
     function parseModelTierInfo(r) {
       const rawMid = (r.model_id || '').trim();
       let dName = (r.display_name || rawMid).trim();
@@ -767,7 +749,7 @@
 
     const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
     rules.forEach(r => {
-      const g = categorizeRule(r);
+      const g = getModelRuleCategory(r);
       if (g && groupedRules[g]) {
         groupedRules[g].push(r);
       }
@@ -1234,101 +1216,159 @@
     }
   }
 
-  function getModelCategory(modelId) {
-    const found = rawModelsData.find(m => m.id === modelId);
-    if (found && found.category) return found.category;
-    const lower = (modelId || '').toLowerCase();
-    if (lower.includes('claude') || lower.includes('gpt') || lower.includes('sonnet') || lower.includes('opus') || lower.includes('haiku') || lower.includes('3p')) {
-      return 'claude_gpt';
+  function isInternalOrPreviewModel(modelId) {
+    const mid = (modelId || '').toLowerCase();
+    if (mid.startsWith('chat_') || mid.startsWith('tab_') || mid.includes('preview')) {
+      return true;
     }
-    if (lower.includes('argon')) return 'gemini_argon';
+    if (mid === 'gemini-3-flash' || mid.includes('flash-image') ||
+        mid.startsWith('gemini-3.5-flash') || mid.startsWith('gemini-3.1-flash') ||
+        mid.startsWith('gemini-2.5') || mid.endsWith('-tiered')) {
+      return true;
+    }
+    return false;
+  }
+
+  function getModelRuleCategory(r) {
+    if (!r) return 'unknown';
+    const mid = (r.model_id || r.id || '').toLowerCase();
+    const cat = (r.category || '').toLowerCase();
+    if (mid.includes('disabled')) {
+      return null;
+    }
+    if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
+      return 'claude';
+    }
+    if (cat === 'gemini_argon' || /argon/i.test(mid)) {
+      return 'argon';
+    }
+    if (isInternalOrPreviewModel(mid)) {
+      return 'preview';
+    }
     return 'gemini';
+  }
+
+  function getCandidateModels() {
+    const map = new Map();
+    (rawModelsData || []).forEach(m => {
+      if (m && m.id && !map.has(m.id)) {
+        map.set(m.id, m);
+      }
+    });
+    (rawAccountsData || []).forEach(acc => {
+      (acc.model_rules || []).forEach(r => {
+        if (r && r.model_id && !map.has(r.model_id)) {
+          map.set(r.model_id, {
+            id: r.model_id,
+            display_name: r.display_name || r.model_id,
+            category: r.category || 'unknown',
+            recommended: false
+          });
+        }
+      });
+    });
+    return Array.from(map.values());
   }
 
   function openFallbackModal(modelIdsStr, baseName) {
     const modal = document.getElementById('fallback-modal');
-    if (!modal) return;
-
-    const primaryDisplay = document.getElementById('modal-primary-display');
-    const tierGroup = document.getElementById('modal-primary-tier-group');
-    const selectPrimary = document.getElementById('modal-select-primary');
-    const selectSecondary = document.getElementById('modal-select-secondary');
-    const btnDisable = document.getElementById('btn-disable-fallback');
-
-    if (primaryDisplay) primaryDisplay.textContent = baseName;
-
-    const ids = (modelIdsStr || '').split(',').filter(Boolean);
-    if (ids.length > 1 && tierGroup && selectPrimary) {
-      tierGroup.style.display = 'block';
-      selectPrimary.innerHTML = ids.map(id => {
-        const m = rawModelsData.find(rm => rm.id === id);
-        const label = m?.display_name || id;
-        const isSel = id === currentAppConfig.model_primary;
-        return `<option value="${escapeHtml(id)}" ${isSel ? 'selected' : ''}>${escapeHtml(label)}</option>`;
-      }).join('');
-    } else if (selectPrimary) {
-      if (tierGroup) tierGroup.style.display = 'none';
-      const singleId = ids[0] || '';
-      const m = rawModelsData.find(rm => rm.id === singleId);
-      selectPrimary.innerHTML = `<option value="${escapeHtml(singleId)}" selected>${escapeHtml(m?.display_name || baseName)}</option>`;
+    if (!modal) {
+      console.error('fallback-modal element not found in DOM');
+      return;
     }
 
-    function populateSecondarySelect() {
-      if (!selectSecondary || !selectPrimary) return;
-      const currentPri = selectPrimary.value;
-      const currentSec = currentAppConfig.model_secondary;
+    try {
+      const primaryDisplay = document.getElementById('modal-primary-display');
+      const tierGroup = document.getElementById('modal-primary-tier-group');
+      const selectPrimary = document.getElementById('modal-select-primary');
+      const selectSecondary = document.getElementById('modal-select-secondary');
+      const btnDisable = document.getElementById('btn-disable-fallback');
 
-      const allowed = rawModelsData.filter(m => m.id !== currentPri && !categorizeRule(m)?.includes('preview'));
+      if (primaryDisplay) primaryDisplay.textContent = baseName || 'Model';
 
-      const groups = { claude_gpt: [], gemini: [], other: [] };
-      allowed.forEach(m => {
-        if (m.category === 'claude_gpt') groups.claude_gpt.push(m);
-        else if (m.category === 'gemini') groups.gemini.push(m);
-        else groups.other.push(m);
-      });
+      const allCandidates = getCandidateModels();
+      const ids = (modelIdsStr || '').split(',').filter(Boolean);
 
-      let html = '';
-      if (groups.claude_gpt.length > 0) {
-        html += '<optgroup label="Claude & GPT (3P)">';
-        groups.claude_gpt.forEach(m => {
-          const sel = m.id === currentSec ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-      if (groups.gemini.length > 0) {
-        html += '<optgroup label="Google Gemini">';
-        groups.gemini.forEach(m => {
-          const sel = m.id === currentSec ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-      if (groups.other.length > 0) {
-        html += '<optgroup label="Other Models">';
-        groups.other.forEach(m => {
-          const sel = m.id === currentSec ? 'selected' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}</option>`;
-        });
-        html += '</optgroup>';
+      if (ids.length > 1 && tierGroup && selectPrimary) {
+        tierGroup.style.display = 'block';
+        selectPrimary.innerHTML = ids.map(id => {
+          const m = allCandidates.find(rm => rm.id === id);
+          const label = m?.display_name || id;
+          const isSel = id === currentAppConfig.model_primary;
+          return `<option value="${escapeHtml(id)}" ${isSel ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        }).join('');
+      } else if (selectPrimary) {
+        if (tierGroup) tierGroup.style.display = 'none';
+        const singleId = ids[0] || '';
+        const m = allCandidates.find(rm => rm.id === singleId);
+        selectPrimary.innerHTML = `<option value="${escapeHtml(singleId)}" selected>${escapeHtml(m?.display_name || baseName || singleId)}</option>`;
       }
 
-      selectSecondary.innerHTML = html;
-    }
+      function populateSecondarySelect() {
+        if (!selectSecondary || !selectPrimary) return;
+        const currentPri = selectPrimary.value;
+        const currentSec = currentAppConfig.model_secondary;
 
-    populateSecondarySelect();
-    if (selectPrimary) {
-      selectPrimary.onchange = populateSecondarySelect;
-    }
+        const allowed = allCandidates.filter(m => m.id !== currentPri && !isInternalOrPreviewModel(m.id));
 
-    const isCurrentlyActivePrimary = currentAppConfig.fallback_secondary_enabled && ids.includes(currentAppConfig.model_primary);
-    if (btnDisable) {
-      btnDisable.style.display = isCurrentlyActivePrimary ? 'inline-block' : 'none';
-    }
+        const groups = { claude_gpt: [], gemini: [], other: [] };
+        allowed.forEach(m => {
+          const cat = getModelRuleCategory(m);
+          if (cat === 'claude') groups.claude_gpt.push(m);
+          else if (cat === 'gemini') groups.gemini.push(m);
+          else groups.other.push(m);
+        });
 
-    modal.showModal();
+        let html = '';
+        if (groups.claude_gpt.length > 0) {
+          html += '<optgroup label="Claude & GPT (3P)">';
+          groups.claude_gpt.forEach(m => {
+            const sel = m.id === currentSec ? 'selected' : '';
+            const star = m.recommended ? ' ★' : '';
+            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+          });
+          html += '</optgroup>';
+        }
+        if (groups.gemini.length > 0) {
+          html += '<optgroup label="Google Gemini">';
+          groups.gemini.forEach(m => {
+            const sel = m.id === currentSec ? 'selected' : '';
+            const star = m.recommended ? ' ★' : '';
+            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+          });
+          html += '</optgroup>';
+        }
+        if (groups.other.length > 0) {
+          html += '<optgroup label="Other Models">';
+          groups.other.forEach(m => {
+            const sel = m.id === currentSec ? 'selected' : '';
+            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}</option>`;
+          });
+          html += '</optgroup>';
+        }
+
+        selectSecondary.innerHTML = html;
+      }
+
+      populateSecondarySelect();
+      if (selectPrimary) {
+        selectPrimary.onchange = populateSecondarySelect;
+      }
+
+      const isCurrentlyActivePrimary = currentAppConfig.fallback_secondary_enabled && ids.includes(currentAppConfig.model_primary);
+      if (btnDisable) {
+        btnDisable.style.display = isCurrentlyActivePrimary ? 'inline-block' : 'none';
+      }
+
+      if (typeof modal.showModal === 'function') {
+        modal.showModal();
+      } else {
+        modal.setAttribute('open', '');
+      }
+    } catch (err) {
+      console.error('Error opening fallback modal:', err);
+      showToast(`Error opening modal: ${err.message}`, 'error', 4000);
+    }
   }
 
   async function saveFallbackPolicy(primaryId, secondaryId, enabled) {
@@ -1351,8 +1391,9 @@
 
     const updated = await res.json();
     currentAppConfig = updated;
-    const priDisplay = rawModelsData.find(m => m.id === updated.model_primary)?.display_name || updated.model_primary;
-    const secDisplay = rawModelsData.find(m => m.id === updated.model_secondary)?.display_name || updated.model_secondary;
+    const candidates = getCandidateModels();
+    const priDisplay = candidates.find(m => m.id === updated.model_primary)?.display_name || updated.model_primary;
+    const secDisplay = candidates.find(m => m.id === updated.model_secondary)?.display_name || updated.model_secondary;
     if (enabled) {
       showToast(`Model fallback active: ${priDisplay} ↪ ${secDisplay}`, 'success', 3000);
     } else {
@@ -1372,13 +1413,19 @@
     const selectPrimary = document.getElementById('modal-select-primary');
     const selectSecondary = document.getElementById('modal-select-secondary');
 
-    const closeModal = () => modal.close();
+    const closeModal = () => {
+      if (typeof modal.close === 'function') {
+        modal.close();
+      } else {
+        modal.removeAttribute('open');
+      }
+    };
 
     if (btnClose) btnClose.onclick = closeModal;
     if (btnCancel) btnCancel.onclick = closeModal;
 
     modal.addEventListener('click', e => {
-      if (e.target === modal) modal.close();
+      if (e.target === modal) closeModal();
     });
 
     if (btnSave) {
@@ -1397,7 +1444,7 @@
         btnSave.textContent = 'Saving...';
         try {
           await saveFallbackPolicy(pri, sec, true);
-          modal.close();
+          closeModal();
         } finally {
           btnSave.disabled = false;
           btnSave.textContent = 'Save Policy';
@@ -1411,7 +1458,7 @@
         btnDisable.textContent = 'Removing...';
         try {
           await saveFallbackPolicy(currentAppConfig.model_primary, currentAppConfig.model_secondary, false);
-          modal.close();
+          closeModal();
         } finally {
           btnDisable.disabled = false;
           btnDisable.textContent = 'Remove Fallback';

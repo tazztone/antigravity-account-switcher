@@ -1563,12 +1563,22 @@ body {
 }
 
 /* Native Modal Dialog */
-.modal-dialog {
+dialog.modal-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
   padding: 0;
   border: none;
   background: transparent;
   max-width: 90vw;
   width: 480px;
+  z-index: 1000;
+}
+
+dialog.modal-dialog:not([open]) {
+  display: none;
 }
 
 .modal-dialog::backdrop {
@@ -1622,6 +1632,39 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.modal-body .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.modal-body .form-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.modal-body .form-select {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  width: 100%;
+}
+
+.modal-body .form-select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.modal-body .form-select option {
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
 }
 
 .modal-description {
