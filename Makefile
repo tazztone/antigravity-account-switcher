@@ -14,7 +14,7 @@ LDFLAGS := -s -w \
 	-X main.Commit=$(COMMIT) \
 	-X main.Date=$(DATE)
 
-.PHONY: all build build-static test test-race test-cover fmt lint tidy clean run wrap help
+.PHONY: all build build-static test test-race test-cover fmt lint tidy clean run wrap help reinstall-serve
 
 all: build
 
@@ -77,6 +77,10 @@ uninstall:
 ## run: Runs the switcher CLI directly
 run:
 	go run $(CMD_PKG) serve
+
+## reinstall-serve: Uninstalls, builds, installs, and runs serve
+reinstall-serve:
+	./scripts/reinstall-and-serve.sh
 
 ## wrap: Executes wrapped command under switcher supervisor (e.g. make wrap CMD=agy)
 wrap:
