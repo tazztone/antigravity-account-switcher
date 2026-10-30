@@ -96,10 +96,10 @@ func waitForRecords(t *testing.T, metricsRepo domain.MetricsRepository, accountI
 	return summary
 }
 
-// TestChallenger2_ClientDisconnect_DetachedContext_RealSQLite tests that when a client
+// TestSSE_Stress_ClientDisconnect_DetachedContext_RealSQLite tests that when a client
 // drops the connection mid-stream (context cancel or broken pipe), token metrics parsed
 // before the drop are safely persisted to real SQLite via the detached context goroutine.
-func TestChallenger2_ClientDisconnect_DetachedContext_RealSQLite(t *testing.T) {
+func TestSSE_Stress_ClientDisconnect_DetachedContext_RealSQLite(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "client_disconnect_test.db")
 	db, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -332,10 +332,10 @@ func TestChallenger2_ClientDisconnect_DetachedContext_RealSQLite(t *testing.T) {
 	})
 }
 
-// TestChallenger2_OversizedSSEPayloads_NoErrTooLong verifies that SSE payloads with line
+// TestSSE_Stress_OversizedSSEPayloads_NoErrTooLong verifies that SSE payloads with line
 // lengths exceeding bufio.Scanner's default 64KB limit (up to 4MB) are processed cleanly
 // without bufio.ErrTooLong or data truncation, and metrics are accurately persisted.
-func TestChallenger2_OversizedSSEPayloads_NoErrTooLong(t *testing.T) {
+func TestSSE_Stress_OversizedSSEPayloads_NoErrTooLong(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "oversized_payload_test.db")
 	db, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -421,10 +421,10 @@ func TestChallenger2_OversizedSSEPayloads_NoErrTooLong(t *testing.T) {
 	}
 }
 
-// TestChallenger2_RealtimeFlushing_EveryLine verifies that http.Flusher.Flush() is triggered
+// TestSSE_Stress_RealtimeFlushing_EveryLine verifies that http.Flusher.Flush() is triggered
 // on every non-empty line received, ensuring zero latency for client real-time streaming,
 // and confirms graceful behavior when ResponseWriter does not implement Flusher.
-func TestChallenger2_RealtimeFlushing_EveryLine(t *testing.T) {
+func TestSSE_Stress_RealtimeFlushing_EveryLine(t *testing.T) {
 	broadcaster := proxy.NewBroadcaster(10)
 
 	t.Run("Exact flush count oracle per line", func(t *testing.T) {
@@ -562,10 +562,10 @@ func TestChallenger2_RealtimeFlushing_EveryLine(t *testing.T) {
 	})
 }
 
-// TestChallenger2_ConcurrentStreams_RaceAndStress spins up 40 concurrent SSE streams
+// TestSSE_Stress_ConcurrentStreams_RaceAndStress spins up 40 concurrent SSE streams
 // of diverse varieties (normal, broken pipe, canceled context, oversized payloads, multi-chunk cumulative)
 // targeting the same SQLite database and Broadcaster, running under -race.
-func TestChallenger2_ConcurrentStreams_RaceAndStress(t *testing.T) {
+func TestSSE_Stress_ConcurrentStreams_RaceAndStress(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "concurrent_race_stress.db")
 	db, err := sqlite.Open(dbPath)
 	if err != nil {

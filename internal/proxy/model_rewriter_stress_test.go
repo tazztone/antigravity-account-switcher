@@ -13,11 +13,11 @@ import (
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/proxy"
 )
 
-// buildAdversarial10MBPayload constructs a 10MB JSON payload containing hundreds of
+// buildLarge10MBPayload constructs a 10MB JSON payload containing hundreds of
 // occurrences of `"model": "claude-3-opus"` across user prompts, code blocks, escaped JSON,
 // nested objects, arrays, emojis, RTL Unicode, and backslashes, with the true root model
 // placed at rootModelPos ("start", "middle", or "end").
-func buildAdversarial10MBPayload(rootModelPos string, rootModel string) []byte {
+func buildLarge10MBPayload(rootModelPos string, rootModel string) []byte {
 	var sb strings.Builder
 	// Pre-grow to ~10.5 MB to avoid re-allocations during build
 	sb.Grow(10500000)
@@ -103,7 +103,7 @@ func TestModelRewriter_Stress_ExtractModelFromJSON_10MB(t *testing.T) {
 
 	for _, pos := range positions {
 		t.Run("RootModelAt_"+pos, func(t *testing.T) {
-			payload := buildAdversarial10MBPayload(pos, expectedModel)
+			payload := buildLarge10MBPayload(pos, expectedModel)
 			t.Logf("Generated adversarial payload for pos=%s: %d bytes (%.2f MB)", pos, len(payload), float64(len(payload))/(1024*1024))
 
 			// Verify payload contains hundreds of "claude-3-opus"
@@ -154,7 +154,7 @@ func TestModelRewriter_Stress_RewriteModelInBody_10MB(t *testing.T) {
 
 	for _, pos := range positions {
 		t.Run("Rewrite_RootModelAt_"+pos, func(t *testing.T) {
-			payload := buildAdversarial10MBPayload(pos, origModel)
+			payload := buildLarge10MBPayload(pos, origModel)
 			origLen := len(payload)
 
 			// Compute SHA256 of original input before rewriting
@@ -351,8 +351,8 @@ func TestModelRewriter_Stress_ConcurrencySafety_Race(t *testing.T) {
 	const goroutines = 100
 	const iterations = 50
 
-	// Use a 1MB adversarial payload shared across all goroutines
-	payload := buildAdversarial10MBPayload("middle", "gemini-2.5-pro")[:1024*1024]
+	// Use a 1MB payload shared across all goroutines
+	payload := buildLarge10MBPayload("middle", "gemini-2.5-pro")[:1024*1024]
 	origHash := sha256.Sum256(payload)
 
 	var wg sync.WaitGroup

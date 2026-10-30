@@ -28,9 +28,9 @@ func assertActiveCount(t *testing.T, db *sqlite.DB, expected int) {
 	}
 }
 
-// TestChallenge_ConcurrentSetActive_SingleActiveInvariant stress-tests the single-active
+// TestRepo_Stress_ConcurrentSetActive_SingleActiveInvariant stress-tests the single-active
 // constraint under high concurrency with mixed readers and writers.
-func TestChallenge_ConcurrentSetActive_SingleActiveInvariant(t *testing.T) {
+func TestRepo_Stress_ConcurrentSetActive_SingleActiveInvariant(t *testing.T) {
 	db, accRepo, _, _, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -167,9 +167,9 @@ func TestChallenge_ConcurrentSetActive_SingleActiveInvariant(t *testing.T) {
 	t.Logf("PASS: Invariant held across %d successful reader checks and %d writer operations", activeCountsOK, numWriters*opsPerWriter)
 }
 
-// TestChallenge_PartialUniqueIndex_DirectBypassConstraint tests that the database engine
+// TestRepo_Stress_PartialUniqueIndex_DirectBypassConstraint tests that the database engine
 // rejects any attempt to violate the single-active constraint through raw SQL operations.
-func TestChallenge_PartialUniqueIndex_DirectBypassConstraint(t *testing.T) {
+func TestRepo_Stress_PartialUniqueIndex_DirectBypassConstraint(t *testing.T) {
 	db, accRepo, _, _, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -233,14 +233,14 @@ func TestChallenge_PartialUniqueIndex_DirectBypassConstraint(t *testing.T) {
 	}
 }
 
-// TestChallenge_GetNextAvailable_RoundRobinLRU_AndExclusions thoroughly checks:
+// TestRepo_Stress_GetNextAvailable_RoundRobinLRU_AndExclusions thoroughly checks:
 // - Round-robin LRU cycling across multiple active accounts
 // - Exclusion of the current active account
 // - Exclusion of exhausted accounts
 // - Exclusion of accounts with status error or disabled
 // - Handling when all alternative accounts are exhausted
 // - Dynamic reintegration of accounts once their status resets to active
-func TestChallenge_GetNextAvailable_RoundRobinLRU_AndExclusions(t *testing.T) {
+func TestRepo_Stress_GetNextAvailable_RoundRobinLRU_AndExclusions(t *testing.T) {
 	_, accRepo, _, _, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -416,9 +416,9 @@ func TestChallenge_GetNextAvailable_RoundRobinLRU_AndExclusions(t *testing.T) {
 	}
 }
 
-// TestChallenge_MetricsAggregations_EmptyTables tests boundary behavior on an empty database:
+// TestRepo_Stress_MetricsAggregations_EmptyTables tests boundary behavior on an empty database:
 // zero counts, no nil pointers, no scan errors.
-func TestChallenge_MetricsAggregations_EmptyTables(t *testing.T) {
+func TestRepo_Stress_MetricsAggregations_EmptyTables(t *testing.T) {
 	_, _, _, metricsRepo, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -482,11 +482,11 @@ func TestChallenge_MetricsAggregations_EmptyTables(t *testing.T) {
 	}
 }
 
-// TestChallenge_MetricsAggregations_LeapYearAndEdgeDates tests aggregation behavior across:
+// TestRepo_Stress_MetricsAggregations_LeapYearAndEdgeDates tests aggregation behavior across:
 // - Leap year day (2024-02-29)
 // - Year boundary (2025-12-31 to 2026-01-01)
 // - Timestamp grouping by day via SQLite's strftime
-func TestChallenge_MetricsAggregations_LeapYearAndEdgeDates(t *testing.T) {
+func TestRepo_Stress_MetricsAggregations_LeapYearAndEdgeDates(t *testing.T) {
 	db, accRepo, _, metricsRepo, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -651,12 +651,12 @@ func TestChallenge_MetricsAggregations_LeapYearAndEdgeDates(t *testing.T) {
 	}
 }
 
-// TestChallenge_MetricsAggregations_LargeNumbersAndBounds stress-tests:
+// TestRepo_Stress_MetricsAggregations_LargeNumbersAndBounds stress-tests:
 // - Values larger than 32-bit integer (> 2^31 - 1 = 2,147,483,647)
 // - High volume of large records (sums in trillions of tokens)
 // - Multi-quintillion values near int64 limit (up to 8 * 10^18)
 // - Zero/default value behavior and auto-calculation of TotalTokens
-func TestChallenge_MetricsAggregations_LargeNumbersAndBounds(t *testing.T) {
+func TestRepo_Stress_MetricsAggregations_LargeNumbersAndBounds(t *testing.T) {
 	_, accRepo, _, metricsRepo, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -799,9 +799,9 @@ func TestChallenge_MetricsAggregations_LargeNumbersAndBounds(t *testing.T) {
 	}
 }
 
-// TestChallenge_TimezoneHandling_InMetrics tests how metrics recording and aggregation
+// TestRepo_Stress_TimezoneHandling_InMetrics tests how metrics recording and aggregation
 // handle non-UTC timestamps (e.g. timestamps produced by local machines with non-UTC zones).
-func TestChallenge_TimezoneHandling_InMetrics(t *testing.T) {
+func TestRepo_Stress_TimezoneHandling_InMetrics(t *testing.T) {
 	_, accRepo, _, metricsRepo, _ := setupTestStore(t)
 	ctx := context.Background()
 
@@ -866,10 +866,10 @@ func TestChallenge_TimezoneHandling_InMetrics(t *testing.T) {
 	}
 }
 
-// TestChallenge_ConcurrentMixedWorkload_RaceDetector runs a sustained, high-intensity
+// TestRepo_Stress_ConcurrentMixedWorkload_RaceDetector runs a sustained, high-intensity
 // concurrent workload across accounts, quota buckets, metrics, and events while being
 // checked by Go's ThreadSanitizer (-race).
-func TestChallenge_ConcurrentMixedWorkload_RaceDetector(t *testing.T) {
+func TestRepo_Stress_ConcurrentMixedWorkload_RaceDetector(t *testing.T) {
 	_, accRepo, quotaRepo, metricsRepo, eventRepo := setupTestStore(t)
 	ctx := context.Background()
 

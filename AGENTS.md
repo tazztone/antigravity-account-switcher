@@ -26,12 +26,13 @@ Understanding the internal design of Google Antigravity 2.0 is crucial when diag
   - The switcher discovers running `language_server` instances by inspecting `/proc/<pid>/cmdline`, socket inodes in `/proc/<pid>/fd`, and listening ports in `/proc/net/tcp` (see `internal/quota/language_server.go`).
 - **Binary Resolution Priority**:
   When locating the Antigravity 2.0 binary to launch or supervise, inspect paths in this exact order:
-  1. Saved configuration: `~/.config/antigravity-account-switcher/config.json` (`antigravity_bin` key).
+  1. CLI flag: `--antigravity-bin` (or `overrideBin` parameter).
   2. Environment variable: `ANTIGRAVITY_BIN`.
-  3. User XDG directories: `~/.local/bin/antigravity`, `~/.local/share/antigravity/antigravity`.
-  4. User tools directory: `~/tools/Antigravity/Antigravity-x64/antigravity`.
-  5. System FHS paths: `/opt/antigravity/antigravity`, `/usr/local/bin/antigravity`.
-  6. System `$PATH`: `antigravity`, `agy`.
+  3. Saved configuration: `~/.config/antigravity-account-switcher/config.json` (`antigravity_bin` key).
+  4. User XDG directories: `~/.local/bin/antigravity`, `~/.local/share/antigravity/antigravity`.
+  5. User tools directory: `~/tools/Antigravity/Antigravity-x64/antigravity`.
+  6. System FHS paths: `/opt/antigravity/antigravity`, `/usr/local/bin/antigravity`.
+  7. System `$PATH`: `antigravity`, `agy`.
 - **Existing Credentials (Auto-Import)**:
   - Antigravity stores active Google OAuth credentials in `~/.gemini/antigravity-acp/acp_token.json` or `~/.gemini/antigravity-cli/acp_token.json`.
   - The switcher automatically imports these credentials if the account pool is empty on first boot (`internal/oauth/auto_import.go`).

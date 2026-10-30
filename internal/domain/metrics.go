@@ -118,7 +118,7 @@ type MetricsService interface {
 	// GetDailyUsageInLocation returns daily time-series usage for charting over the past N days in a specific timezone location.
 	GetDailyUsageInLocation(ctx context.Context, accountID string, days int, zeroFill bool, loc *time.Location) ([]*DailyTokenUsage, error)
 
-	// GetDashboardPayload returns the comprehensive dataset required by M4 UI.
+	// GetDashboardPayload returns the comprehensive dataset required by the UI dashboard.
 	GetDashboardPayload(ctx context.Context, timelineDays int) (*MetricsDashboardPayload, error)
 
 	// GetDashboardPayloadWithLocation returns the comprehensive dataset adjusted for a specific timezone location.

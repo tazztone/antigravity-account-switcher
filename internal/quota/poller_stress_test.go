@@ -16,9 +16,9 @@ import (
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/test/mocks"
 )
 
-// TestChallenger_Poller_Lifecycle_Sequential verifies that sequential Start/Stop
+// TestPoller_Stress_Lifecycle_Sequential verifies that sequential Start/Stop
 // cycles properly terminate tickers and clean up goroutines without leakage.
-func TestChallenger_Poller_Lifecycle_Sequential(t *testing.T) {
+func TestPoller_Stress_Lifecycle_Sequential(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	ctx := context.Background()
 
@@ -81,9 +81,9 @@ func TestChallenger_Poller_Lifecycle_Sequential(t *testing.T) {
 	}
 }
 
-// TestChallenger_Poller_Lifecycle_ConcurrentStartStop_ExposesRace stresses
+// TestPoller_Stress_Lifecycle_ConcurrentStartStop stresses
 // concurrent calls to Start and Stop, demonstrating whether race conditions or channel panics occur.
-func TestChallenger_Poller_Lifecycle_ConcurrentStartStop_ExposesRace(t *testing.T) {
+func TestPoller_Stress_Lifecycle_ConcurrentStartStop(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	ctx := context.Background()
 
@@ -117,10 +117,10 @@ func TestChallenger_Poller_Lifecycle_ConcurrentStartStop_ExposesRace(t *testing.
 	_ = poller.Stop()
 }
 
-// TestChallenger_Poller_RapidQuotaReset_Prong1AndProng2 stresses auto-restore:
+// TestPoller_Stress_RapidQuotaReset_Prong1AndProng2 stresses auto-restore:
 // Prong 1 (DB-level reset_time elapsed) and Prong 2 (API poll non-zero remaining fraction),
 // along with multi-bucket gating and rapid state cycling.
-func TestChallenger_Poller_RapidQuotaReset_Prong1AndProng2(t *testing.T) {
+func TestPoller_Stress_RapidQuotaReset_Prong1AndProng2(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	ctx := context.Background()
 	broadcaster := &mockBroadcaster{}
@@ -312,12 +312,12 @@ func TestChallenger_Poller_RapidQuotaReset_Prong1AndProng2(t *testing.T) {
 	}
 }
 
-// TestChallenger_Poller_TokenRefresh_And_401Retry stresses:
+// TestPoller_Stress_TokenRefresh_And_401Retry stresses:
 // 1. Automatic refresh for expired tokens.
 // 2. 401 retry on unexpected token invalidation.
 // 3. 401 retry failure transitions to AccountStatusError.
 // 4. Concurrent execution under race detector.
-func TestChallenger_Poller_TokenRefresh_And_401Retry(t *testing.T) {
+func TestPoller_Stress_TokenRefresh_And_401Retry(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	ctx := context.Background()
 
@@ -477,9 +477,9 @@ func TestChallenger_Poller_TokenRefresh_And_401Retry(t *testing.T) {
 	wg.Wait()
 }
 
-// TestChallenger_Poller_Lifecycle_ExternalContextCancellation verifies whether
+// TestPoller_Stress_Lifecycle_ExternalContextCancellation verifies whether
 // the poller accurately updates its running status when the parent context is cancelled.
-func TestChallenger_Poller_Lifecycle_ExternalContextCancellation(t *testing.T) {
+func TestPoller_Stress_Lifecycle_ExternalContextCancellation(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

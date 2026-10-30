@@ -596,8 +596,8 @@ func TestCLI_SubprocessBinaryExecution(t *testing.T) {
 	})
 }
 
-// TestCLI_AdversarialEdgeCases tests edge cases, whitespace handling, and flag delimiters
-func TestCLI_AdversarialEdgeCases(t *testing.T) {
+// TestCLI_EdgeCases tests edge cases, whitespace handling, and flag delimiters
+func TestCLI_EdgeCases(t *testing.T) {
 	t.Run("EnvVar_WhitespaceHandling", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("ANTIGRAVITY_CONFIG_DIR", dir)

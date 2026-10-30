@@ -38,7 +38,7 @@ func setupTestStore(t *testing.T) (*sqlite.DB, *sqlite.AccountRepository) {
 // -----------------------------------------------------------------------------
 // 1. Concurrent authorization flows on multiple ephemeral ports
 // -----------------------------------------------------------------------------
-func TestChallenger2_ConcurrentLoopbackFlows(t *testing.T) {
+func TestOAuth_Stress_ConcurrentLoopbackFlows(t *testing.T) {
 	// Custom mock server that generates unique emails per token
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -181,7 +181,7 @@ func TestChallenger2_ConcurrentLoopbackFlows(t *testing.T) {
 // -----------------------------------------------------------------------------
 // 2. State parameter tampering, missing, expiration, and replay protection
 // -----------------------------------------------------------------------------
-func TestChallenger2_StateTamperingAndExpiration(t *testing.T) {
+func TestOAuth_Stress_StateTamperingAndExpiration(t *testing.T) {
 	server := mocks.NewMockGoogleServer()
 	defer server.Close()
 
@@ -322,7 +322,7 @@ func TestChallenger2_StateTamperingAndExpiration(t *testing.T) {
 // -----------------------------------------------------------------------------
 // 3. PKCE code verifier mismatches (RFC 7636 & RFC 8252)
 // -----------------------------------------------------------------------------
-func TestChallenger2_PKCEMismatchRejection(t *testing.T) {
+func TestOAuth_Stress_PKCEMismatchRejection(t *testing.T) {
 	_, accRepo := setupTestStore(t)
 	ctx := context.Background()
 
@@ -499,7 +499,7 @@ func TestChallenger2_PKCEMismatchRejection(t *testing.T) {
 // -----------------------------------------------------------------------------
 // 4. Invariant idx_accounts_single_active in SQLite under heavy concurrency
 // -----------------------------------------------------------------------------
-func TestChallenger2_SingleActiveInvariant_Stress(t *testing.T) {
+func TestOAuth_Stress_SingleActiveInvariant(t *testing.T) {
 	db, accRepo := setupTestStore(t)
 	ctx := context.Background()
 
@@ -611,9 +611,9 @@ func TestChallenger2_SingleActiveInvariant_Stress(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// 5. Empirical Challenge: Multiple/Duplicate Requests to the Ephemeral Callback Listener
+// 5. Multiple/Duplicate Requests to the Ephemeral Callback Listener
 // -----------------------------------------------------------------------------
-func TestChallenger2_DuplicateCallbacks_ChannelSendVulnerability(t *testing.T) {
+func TestOAuth_Stress_DuplicateCallbacks(t *testing.T) {
 	server := mocks.NewMockGoogleServer()
 	defer server.Close()
 
