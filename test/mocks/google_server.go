@@ -93,6 +93,44 @@ type AccountBehavior struct {
 	QuotaBuckets      []QuotaSummaryBucket
 	StreamDelay       time.Duration
 	CustomHandler     func(w http.ResponseWriter, r *http.Request) bool
+
+	// AvailableModels is the model catalog returned by :fetchAvailableModels for
+	// this token, together with its ordering and default agent model.
+	AvailableModels     map[string]ModelPayloadItem
+	DefaultAgentModelID string
+	AgentModelSorts     []AgentModelSort
+}
+
+// ModelPayloadItem mirrors one entry of a fetchAvailableModels models map.
+type ModelPayloadItem struct {
+	DisplayName      string `json:"displayName,omitempty"`
+	Recommended      bool   `json:"recommended,omitempty"`
+	SupportsThinking bool   `json:"supportsThinking,omitempty"`
+	Disabled         bool   `json:"disabled"`
+}
+
+// AgentModelSort mirrors one agentModelSorts entry of a fetchAvailableModels response.
+type AgentModelSort struct {
+	DisplayName string `json:"displayName"`
+	Groups      []struct {
+		ModelIDs []string `json:"modelIds"`
+	} `json:"groups"`
+}
+
+// NewAgentModelSort builds an ordering entry from a flat list of model IDs.
+func NewAgentModelSort(displayName string, modelIDs ...string) AgentModelSort {
+	sort := AgentModelSort{DisplayName: displayName}
+	sort.Groups = append(sort.Groups, struct {
+		ModelIDs []string `json:"modelIds"`
+	}{ModelIDs: modelIDs})
+	return sort
+}
+
+// FetchAvailableModelsResponse is the payload returned by :fetchAvailableModels.
+type FetchAvailableModelsResponse struct {
+	Models              map[string]ModelPayloadItem `json:"models"`
+	DefaultAgentModelID string                      `json:"defaultAgentModelId,omitempty"`
+	AgentModelSorts     []AgentModelSort            `json:"agentModelSorts,omitempty"`
 }
 
 // MockGoogleServer simulates Google Cloud Code PA (daily-cloudcode-pa.googleapis.com)
@@ -134,6 +172,14 @@ func NewMockGoogleServer() *MockGoogleServer {
 					ResetTime:         time.Now().Add(48 * time.Hour),
 				},
 			},
+			DefaultAgentModelID: "gemini-2.5-pro",
+			AvailableModels: map[string]ModelPayloadItem{
+				"gemini-2.5-pro":   {DisplayName: "Gemini 2.5 Pro", Recommended: true, SupportsThinking: true},
+				"gemini-2.5-flash": {DisplayName: "Gemini 2.5 Flash", Recommended: true},
+			},
+			AgentModelSorts: []AgentModelSort{
+				NewAgentModelSort("Recommended", "gemini-2.5-pro", "gemini-2.5-flash"),
+			},
 		},
 	}
 
@@ -143,6 +189,7 @@ func NewMockGoogleServer() *MockGoogleServer {
 	mux.HandleFunc("/v1internal/models/", m.handleStreamGenerateContent)
 	mux.HandleFunc("/v1internal:retrieveUserQuotaSummary", m.handleRetrieveUserQuotaSummary)
 	mux.HandleFunc("/v1internal:retrieveUserQuota", m.handleRetrieveUserQuota)
+	mux.HandleFunc("/v1internal:fetchAvailableModels", m.handleFetchAvailableModels)
 	mux.HandleFunc("/token", m.handleOAuthToken)
 	mux.HandleFunc("/oauth2/v4/token", m.handleOAuthToken)
 	mux.HandleFunc("/oauth2/v3/userinfo", m.handleOAuthUserInfo)
@@ -215,6 +262,33 @@ func (m *MockGoogleServer) GetRecordedRequests() []RecordedRequest {
 	defer m.mu.RUnlock()
 	out := make([]RecordedRequest, len(m.requests))
 	copy(out, m.requests)
+	return out
+}
+
+// SetAccountModels configures the model catalog returned for a specific Bearer token.
+func (m *MockGoogleServer) SetAccountModels(token, defaultModelID string, models map[string]ModelPayloadItem, sorts ...AgentModelSort) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.accounts[token]
+	if !ok {
+		b = &AccountBehavior{}
+		m.accounts[token] = b
+	}
+	b.AvailableModels = models
+	b.DefaultAgentModelID = defaultModelID
+	b.AgentModelSorts = sorts
+}
+
+// RequestsForPath returns recorded requests whose path matches exactly.
+func (m *MockGoogleServer) RequestsForPath(path string) []RecordedRequest {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []RecordedRequest
+	for _, req := range m.requests {
+		if req.Path == path {
+			out = append(out, req)
+		}
+	}
 	return out
 }
 
@@ -392,6 +466,54 @@ func (m *MockGoogleServer) writeResourceExhausted(w http.ResponseWriter) {
 		},
 	}
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (m *MockGoogleServer) handleFetchAvailableModels(w http.ResponseWriter, r *http.Request) {
+	_, bearer := m.record(r)
+
+	m.mu.RLock()
+	b, ok := m.accounts[bearer]
+	if !ok {
+		b = m.defaultB
+	}
+	models := b.AvailableModels
+	defaultModelID := b.DefaultAgentModelID
+	sorts := b.AgentModelSorts
+	customHandler := b.CustomHandler
+	forceStatus := b.ForceStatusCode
+	forceError := b.ForceErrorCode
+	m.mu.RUnlock()
+
+	if len(models) == 0 {
+		models = m.defaultB.AvailableModels
+		defaultModelID = m.defaultB.DefaultAgentModelID
+		sorts = m.defaultB.AgentModelSorts
+	}
+
+	if customHandler != nil && customHandler(w, r) {
+		return
+	}
+
+	if forceStatus > 0 && forceStatus != http.StatusOK {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		w.WriteHeader(forceStatus)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"code":    forceStatus,
+				"message": "Forced mock error",
+				"status":  forceError,
+			},
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(FetchAvailableModelsResponse{
+		Models:              models,
+		DefaultAgentModelID: defaultModelID,
+		AgentModelSorts:     sorts,
+	})
 }
 
 func (m *MockGoogleServer) handleRetrieveUserQuotaSummary(w http.ResponseWriter, r *http.Request) {
