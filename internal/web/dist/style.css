@@ -886,6 +886,25 @@ body {
   background: var(--color-success);
 }
 
+.quota-refresh-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  margin-top: 0.15rem;
+  font-family: var(--font-mono);
+  opacity: 0.85;
+}
+
+.quota-refresh-status.quota-status-available {
+  opacity: 0.7;
+}
+
+.quota-refresh-timer {
+  font-weight: 600;
+}
+
 .account-actions {
   display: flex;
   align-items: center;

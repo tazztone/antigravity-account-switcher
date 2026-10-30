@@ -195,6 +195,17 @@
     return `${s}s`;
   }
 
+  function formatRefreshDuration(totalSeconds) {
+    if (totalSeconds <= 0) return 'Quota available';
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
   // =========================================================================
   // Non-Blocking Toast Notification System
   // =========================================================================
@@ -550,15 +561,37 @@
         textClass = 'text-warning';
       }
 
-      let cooldownHtml = '';
+      let statusHtml = '';
       if (isDepleted && bucket.reset_time) {
         const remainingSec = getRemainingSeconds(bucket.reset_time);
         const cooldownStr = formatRemainingDuration(remainingSec);
         const isReady = remainingSec <= 0;
-        cooldownHtml = `
+        statusHtml = `
           <div class="cooldown-alert" data-reset-time="${escapeHtml(bucket.reset_time)}" style="${isReady ? 'color: var(--color-success);' : ''}">
             <span class="cooldown-dot ${isReady ? 'ready' : ''}"></span>
             <span>Cooldown: <span class="cooldown-timer tabular-nums">${escapeHtml(cooldownStr)}</span></span>
+          </div>
+        `;
+      } else if (pct < 100 && bucket.reset_time) {
+        const remainingSec = getRemainingSeconds(bucket.reset_time);
+        if (remainingSec > 0) {
+          const refreshStr = formatRefreshDuration(remainingSec);
+          statusHtml = `
+            <div class="quota-refresh-status ${textClass}" data-reset-time="${escapeHtml(bucket.reset_time)}">
+              <span>Refreshes in <span class="quota-refresh-timer tabular-nums">${escapeHtml(refreshStr)}</span></span>
+            </div>
+          `;
+        } else {
+          statusHtml = `
+            <div class="quota-refresh-status text-success quota-status-available">
+              <span>Quota available</span>
+            </div>
+          `;
+        }
+      } else {
+        statusHtml = `
+          <div class="quota-refresh-status text-success quota-status-available">
+            <span>Quota available</span>
           </div>
         `;
       }
@@ -572,7 +605,7 @@
           <div class="quota-bar-track">
             <div class="quota-bar-fill ${barClass}" style="width: ${pct}%;"></div>
           </div>
-          ${cooldownHtml}
+          ${statusHtml}
         </div>
       `;
     }
@@ -1065,7 +1098,7 @@
     return card;
   }
 
-  // Live real-time cooldown ticker (ticks every 1s without HTTP requests)
+  // Live real-time cooldown and refresh ticker (ticks every 1s without HTTP requests)
   function updateCooldownTimers() {
     const alerts = document.querySelectorAll('.cooldown-alert[data-reset-time]');
     alerts.forEach(alertEl => {
@@ -1081,6 +1114,22 @@
         } else {
           timerSpan.textContent = formatRemainingDuration(remainingSec);
           if (dot) dot.classList.remove('ready');
+        }
+      }
+    });
+
+    const refreshStatuses = document.querySelectorAll('.quota-refresh-status[data-reset-time]');
+    refreshStatuses.forEach(el => {
+      const resetTimeStr = el.getAttribute('data-reset-time');
+      const timerSpan = el.querySelector('.quota-refresh-timer');
+      if (timerSpan && resetTimeStr) {
+        const remainingSec = getRemainingSeconds(resetTimeStr);
+        if (remainingSec <= 0) {
+          el.className = 'quota-refresh-status text-success quota-status-available';
+          el.innerHTML = '<span>Quota available</span>';
+          el.removeAttribute('data-reset-time');
+        } else {
+          timerSpan.textContent = formatRefreshDuration(remainingSec);
         }
       }
     });
