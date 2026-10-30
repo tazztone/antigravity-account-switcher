@@ -25,6 +25,7 @@ import (
 type FallbackConfigSetter interface {
 	SetFallbackConfig(primary, secondary string, enabled bool)
 	SetFallbackStrategy(strategy string)
+	ResetAccountState(accountID string)
 }
 
 // APIHandler implements the REST endpoints and SSE real-time streaming for the switcher.
@@ -410,6 +411,10 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		}()
 	}
 
+	if a.fallbackConfigSetter != nil {
+		a.fallbackConfigSetter.ResetAccountState(id)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":    true,
 		"account_id": id,
@@ -474,6 +479,9 @@ func (a *APIHandler) updateAccountCategory(w http.ResponseWriter, r *http.Reques
 	if a.eventRepo != nil {
 		_ = a.eventRepo.Record(ctx, evt)
 	}
+	if a.fallbackConfigSetter != nil {
+		a.fallbackConfigSetter.ResetAccountState(id)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":    true,
@@ -527,6 +535,9 @@ func (a *APIHandler) updateAccountModelRule(w http.ResponseWriter, r *http.Reque
 	if err := a.accountRepo.UpdateAccountModelRule(ctx, rule); err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "failed to update model rule", err)
 		return
+	}
+	if a.fallbackConfigSetter != nil {
+		a.fallbackConfigSetter.ResetAccountState(id)
 	}
 	writeJSON(w, http.StatusOK, rule)
 }

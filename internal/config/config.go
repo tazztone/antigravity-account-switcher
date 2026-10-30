@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -467,5 +468,5 @@ func compareSemver(v1, v2 string) int {
 // with at least version 1.4.10, ensuring Google Cloud Code PA exposes the Gemini 4 Argon tier.
 func AntigravityUserAgent(overrideBin string) string {
 	ver := DetectAntigravityCLIVersion(overrideBin)
-	return fmt.Sprintf("antigravity/cli/%s (aidev_client; os_type=linux; arch=amd64; cl=976013059; auth_method=consumer)", ver)
+	return fmt.Sprintf("antigravity/cli/%s (aidev_client; os_type=%s; arch=%s; cl=976013059; auth_method=consumer)", ver, runtime.GOOS, runtime.GOARCH)
 }

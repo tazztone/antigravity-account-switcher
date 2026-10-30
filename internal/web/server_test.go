@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -723,12 +724,13 @@ func TestServer_ConcurrentWorkload_RaceDetector(t *testing.T) {
 }
 
 type mockFallbackSetter struct {
-	mu        sync.Mutex
-	primary   string
-	secondary string
-	enabled   bool
-	strategy  string
-	calls     int
+	mu         sync.Mutex
+	primary    string
+	secondary  string
+	enabled    bool
+	strategy   string
+	calls      int
+	resetCalls []string
 }
 
 func (m *mockFallbackSetter) SetFallbackConfig(p, s string, e bool) {
@@ -744,6 +746,12 @@ func (m *mockFallbackSetter) SetFallbackStrategy(s string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.strategy = s
+}
+
+func (m *mockFallbackSetter) ResetAccountState(accountID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetCalls = append(m.resetCalls, accountID)
 }
 
 func TestServer_ConfigAPI(t *testing.T) {
@@ -916,5 +924,93 @@ func TestServer_ModelsAPI(t *testing.T) {
 	defer respPost.Body.Close()
 	if respPost.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405 Method Not Allowed for POST /api/models, got %d", respPost.StatusCode)
+	}
+}
+
+func TestServer_AccountMutations_ResetFallbackState(t *testing.T) {
+	_, accRepo, quotaRepo, _, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
+	setter := &mockFallbackSetter{}
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	acc1 := &domain.Account{
+		ID:          "acc-1",
+		Email:       "user1@gmail.com",
+		AccessToken: "tok-1",
+		IsActive:    true,
+		Status:      domain.AccountStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := accRepo.Create(ctx, acc1); err != nil {
+		t.Fatalf("create acc1: %v", err)
+	}
+
+	server, err := NewServer(
+		accRepo,
+		quotaRepo,
+		metricsSvc,
+		broadcaster,
+		eventRepo,
+		nil,
+		WithFallbackConfigSetter(setter),
+	)
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	// 1. POST /api/accounts/acc-1/select
+	selectBody := bytes.NewBufferString(`{"category":"gemini"}`)
+	resp, err := http.Post(ts.URL+"/api/accounts/acc-1/select", "application/json", selectBody)
+	if err != nil {
+		t.Fatalf("POST /api/accounts/acc-1/select failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	// 2. PUT /api/accounts/acc-1/categories
+	catBody := bytes.NewBufferString(`{"category":"gemini","enabled":false}`)
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/accounts/acc-1/categories", catBody)
+	req.Header.Set("Content-Type", "application/json")
+	respCat, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/accounts/acc-1/categories failed: %v", err)
+	}
+	respCat.Body.Close()
+	if respCat.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respCat.StatusCode)
+	}
+
+	// 3. PUT /api/accounts/acc-1/models
+	enabled := false
+	modelBody, _ := json.Marshal(map[string]any{
+		"model_id": "gemini-2.5-pro",
+		"enabled":  &enabled,
+	})
+	reqModel, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/accounts/acc-1/models", bytes.NewReader(modelBody))
+	reqModel.Header.Set("Content-Type", "application/json")
+	respModel, err := http.DefaultClient.Do(reqModel)
+	if err != nil {
+		t.Fatalf("PUT /api/accounts/acc-1/models failed: %v", err)
+	}
+	respModel.Body.Close()
+	if respModel.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respModel.StatusCode)
+	}
+
+	setter.mu.Lock()
+	defer setter.mu.Unlock()
+	if len(setter.resetCalls) < 3 {
+		t.Fatalf("expected at least 3 ResetAccountState calls, got %d: %v", len(setter.resetCalls), setter.resetCalls)
+	}
+	for _, id := range setter.resetCalls {
+		if id != "acc-1" {
+			t.Errorf("expected reset call for acc-1, got %s", id)
+		}
 	}
 }

@@ -32,7 +32,7 @@ func BuildDSN(dbPath string) string {
 func Open(dbPath string) (*DB, error) {
 	if dbPath != ":memory:" && !strings.HasPrefix(dbPath, "file::memory:") {
 		if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return nil, fmt.Errorf("failed to create db directory: %w", err)
 			}
 		}
@@ -56,6 +56,10 @@ func Open(dbPath string) (*DB, error) {
 	if err := rawDB.PingContext(ctx); err != nil {
 		rawDB.Close()
 		return nil, fmt.Errorf("failed to ping sqlite database: %w", err)
+	}
+
+	if dbPath != ":memory:" && !strings.HasPrefix(dbPath, "file::memory:") && !strings.Contains(dbPath, "mode=memory") {
+		_ = os.Chmod(dbPath, 0o600)
 	}
 
 	db := &DB{DB: rawDB}

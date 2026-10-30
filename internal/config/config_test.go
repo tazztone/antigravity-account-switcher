@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -746,5 +747,17 @@ func TestDetectAntigravityCLIVersion_ScriptSemver(t *testing.T) {
 	ver := DetectAntigravityCLIVersion(fakeBin)
 	if ver != "1.10.0" {
 		t.Errorf("expected detected version 1.10.0, got %s", ver)
+	}
+}
+
+func TestAntigravityUserAgent(t *testing.T) {
+	ua := AntigravityUserAgent("")
+	expectedOS := "os_type=" + runtime.GOOS
+	expectedArch := "arch=" + runtime.GOARCH
+	if !strings.Contains(ua, expectedOS) {
+		t.Errorf("expected User-Agent to contain %q, got: %s", expectedOS, ua)
+	}
+	if !strings.Contains(ua, expectedArch) {
+		t.Errorf("expected User-Agent to contain %q, got: %s", expectedArch, ua)
 	}
 }

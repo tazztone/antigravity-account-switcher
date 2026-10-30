@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -88,5 +89,31 @@ func TestOpenDB_Adapter(t *testing.T) {
 
 	if err := rawDB.Ping(); err != nil {
 		t.Fatalf("ping failed: %v", err)
+	}
+}
+
+func TestOpen_Permissions(t *testing.T) {
+	tempDir := filepath.Join(t.TempDir(), "subdir")
+	dbPath := filepath.Join(tempDir, "perm.db")
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open failed: %v", err)
+	}
+	defer db.Close()
+
+	dirInfo, err := os.Stat(tempDir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf("expected dir perm 0700, got %o", perm)
+	}
+
+	fileInfo, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat db file: %v", err)
+	}
+	if perm := fileInfo.Mode().Perm(); perm != 0o600 {
+		t.Errorf("expected file perm 0600, got %o", perm)
 	}
 }

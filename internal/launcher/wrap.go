@@ -424,20 +424,11 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 	// Ensure APPIMAGE is defined for Electron auto-updater (AppImageUpdater) to work seamlessly.
 	// When Antigravity 2.0 is extracted from tar.gz or AppImage, electron-updater requires
 	// process.env.APPIMAGE to check for updates and download new versions.
-	hasAppImage := false
-	for _, envVar := range scopedEnv {
-		if strings.HasPrefix(envVar, "APPIMAGE=") {
-			hasAppImage = true
-			break
-		}
+	targetExe := targetBin
+	if abs, err := filepath.Abs(targetExe); err == nil {
+		targetExe = abs
 	}
-	if !hasAppImage {
-		targetExe := targetBin
-		if abs, err := filepath.Abs(targetExe); err == nil {
-			targetExe = abs
-		}
-		scopedEnv = append(scopedEnv, "APPIMAGE="+targetExe)
-	}
+	scopedEnv = append(scopedEnv, "APPIMAGE="+targetExe)
 
 	childCmd.Env = scopedEnv
 	childCmd.Stdin = cfg.Stdin
