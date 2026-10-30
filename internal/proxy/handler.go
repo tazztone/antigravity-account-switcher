@@ -569,7 +569,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	origBody := buffered.Bytes()
 
 	currentModel := origModel
-	currentCategory := origCategory
 	currentPath := origPath
 	currentQuery := origQuery
 	currentBody := origBody
@@ -640,7 +639,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if rewritten {
 			buffered = newBuffered
 			currentModel = targetModel
-			currentCategory = CategorizeModel(targetModel)
 			currentPath = r.URL.Path
 			currentQuery = r.URL.RawQuery
 			currentBody = buffered.Bytes()
@@ -902,7 +900,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							targetToUse = targetModel
 						}
 						currentModel = targetToUse
-						currentCategory = CategorizeModel(targetToUse)
+						currentCategory := CategorizeModel(targetToUse)
 						currentPath = RewriteModelInPath(origPath, targetToUse)
 						if origQuery != "" {
 							currentQuery = RewriteModelInQuery(origQuery, targetToUse)

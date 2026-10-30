@@ -713,3 +713,62 @@ func TestCLI_RunListAccounts_UTF8Alignment(t *testing.T) {
 		t.Errorf("expected row to contain 'üser-tëst@example.com', got: %s", rowLine)
 	}
 }
+
+func TestCLI_RunListAccounts_RefreshCountdown(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "refresh_countdown_test.db")
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	accRepo := sqlite.NewAccountRepository(db)
+	quotaRepo := sqlite.NewQuotaRepository(db)
+
+	acc := &domain.Account{
+		ID:        "acc-refresh",
+		Email:     "refresh@example.com",
+		Status:    domain.AccountStatusActive,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := accRepo.Create(ctx, acc); err != nil {
+		t.Fatalf("accRepo.Create failed: %v", err)
+	}
+
+	buckets := []*domain.QuotaBucket{
+		{
+			AccountID:         acc.ID,
+			BucketID:          "claude-weekly",
+			DisplayName:       "Claude and GPT models (weekly)",
+			Window:            "weekly",
+			RemainingFraction: 0.79,
+			ResetTime:         time.Now().UTC().Add(9*time.Hour + 4*time.Minute),
+			UpdatedAt:         time.Now().UTC(),
+		},
+		{
+			AccountID:         acc.ID,
+			BucketID:          "claude-5h",
+			DisplayName:       "Claude and GPT models (5h)",
+			Window:            "5h",
+			RemainingFraction: 1.0,
+			ResetTime:         time.Now().UTC().Add(5 * time.Hour),
+			UpdatedAt:         time.Now().UTC(),
+		},
+	}
+	if err := quotaRepo.UpsertBuckets(ctx, buckets); err != nil {
+		t.Fatalf("quotaRepo.UpsertBuckets failed: %v", err)
+	}
+
+	out := captureStdout(func() {
+		runListAccounts([]string{"-db", dbPath})
+	})
+
+	if !strings.Contains(out, "weekly: 79% (in 9h 4m)") {
+		t.Errorf("expected weekly quota to include refresh duration '(in 9h 4m)', got:\n%s", out)
+	}
+	if !strings.Contains(out, "5h: 100%") {
+		t.Errorf("expected 100%% quota to omit countdown, got:\n%s", out)
+	}
+}

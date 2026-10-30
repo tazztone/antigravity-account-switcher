@@ -737,10 +737,24 @@ func renderAccountsTable(w io.Writer, accounts []*domain.Account, allBuckets map
 			sort.Strings(windows)
 
 			parts := make([]string, 0, len(windows))
+			now := time.Now().UTC()
 			for _, win := range windows {
 				b := winMap[win]
 				pct := b.RemainingFraction * 100
-				parts = append(parts, fmt.Sprintf("%s: %.0f%%", win, pct))
+				part := fmt.Sprintf("%s: %.0f%%", win, pct)
+				if !b.ResetTime.IsZero() && b.RemainingFraction < 1.0 && b.ResetTime.After(now) {
+					dur := b.ResetTime.Sub(now).Round(time.Minute)
+					h := int(dur.Hours())
+					m := int(dur.Minutes()) % 60
+					if h > 0 {
+						part += fmt.Sprintf(" (in %dh %dm)", h, m)
+					} else if m > 0 {
+						part += fmt.Sprintf(" (in %dm)", m)
+					} else {
+						part += fmt.Sprintf(" (in %ds)", int(b.ResetTime.Sub(now).Seconds())%60)
+					}
+				}
+				parts = append(parts, part)
 			}
 
 			if len(parts) == 0 {
