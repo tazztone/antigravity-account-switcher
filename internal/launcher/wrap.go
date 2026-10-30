@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -205,7 +204,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		} else {
 			dbPath := cfg.DBPath
 			if dbPath == "" {
-				dbPath = defaultDBPath()
+				dbPath = config.DefaultDBPath()
 			}
 			db, err = sqlite.Open(dbPath)
 			if err != nil {
@@ -403,7 +402,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 	if cfg.OpenBrowser {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
-			_ = openInBrowser(dashboardURL)
+			_ = oauth.DefaultBrowserOpener(dashboardURL)
 		}()
 	}
 
@@ -489,28 +488,4 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 	}
 
 	return exitCode, waitErr
-}
-
-func defaultDBPath() string {
-	if envPath := os.Getenv("ANTIGRAVITY_DB_PATH"); envPath != "" {
-		return envPath
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "antigravity-accounts.db"
-	}
-	return fmt.Sprintf("%s/.config/antigravity-account-switcher/accounts.db", home)
-}
-
-func openInBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	return cmd.Start()
 }

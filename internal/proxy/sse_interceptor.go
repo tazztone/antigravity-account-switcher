@@ -37,32 +37,6 @@ type SSEChunk struct {
 	ModelVersion  string            `json:"modelVersion,omitempty"`
 }
 
-// SSEInterceptor intercepts and streams Server-Sent Events (SSE) in real-time,
-// parsing token usage metadata and recording metrics asynchronously.
-type SSEInterceptor struct {
-	metricsRepo      domain.MetricsRepository
-	eventBroadcaster domain.EventBroadcaster
-}
-
-// NewSSEInterceptor constructs a new SSEInterceptor.
-func NewSSEInterceptor(metricsRepo domain.MetricsRepository, broadcaster domain.EventBroadcaster) *SSEInterceptor {
-	return &SSEInterceptor{
-		metricsRepo:      metricsRepo,
-		eventBroadcaster: broadcaster,
-	}
-}
-
-// Intercept streams the SSE body to the client while capturing token usage.
-func (s *SSEInterceptor) Intercept(
-	ctx context.Context,
-	w http.ResponseWriter,
-	upstreamBody io.Reader,
-	accountID string,
-	requestPath string,
-) error {
-	return StreamAndInterceptSSE(ctx, w, upstreamBody, accountID, requestPath, s.metricsRepo, s.eventBroadcaster)
-}
-
 // StreamAndInterceptSSE streams bytes from upstream to downstream line-by-line
 // using http.Flusher in real-time for zero streaming latency, and inspects SSE data lines
 // to extract usageMetadata. Asynchronously records metrics in a defer block using
@@ -183,18 +157,6 @@ func StreamAndInterceptSSE(
 	}
 
 	return nil
-}
-
-// StreamAndIntercept provides backward compatibility without explicit context.
-func StreamAndIntercept(
-	w http.ResponseWriter,
-	upstreamBody io.Reader,
-	accountID string,
-	requestPath string,
-	metricsRepo domain.MetricsRepository,
-	eventBroadcaster domain.EventBroadcaster,
-) error {
-	return StreamAndInterceptSSE(context.Background(), w, upstreamBody, accountID, requestPath, metricsRepo, eventBroadcaster)
 }
 
 func parseSSEData(data []byte) (*RawUsageMetadata, string) {

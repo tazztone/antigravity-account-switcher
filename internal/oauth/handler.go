@@ -15,10 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -104,11 +101,6 @@ func ResolveCredentials() (string, string) {
 		return defID, defSec
 	}
 
-	// 5. Installed Antigravity 2.0 binary bundle inspection (fallback)
-	if bundleID, bundleSec := discoverFromIDEBundle(); bundleID != "" && bundleSec != "" {
-		return bundleID, bundleSec
-	}
-
 	return "", ""
 }
 
@@ -124,164 +116,6 @@ func discoverFromTokenFile() (string, string) {
 	var f ACPTokenFile
 	if err := json.Unmarshal(data, &f); err == nil && f.ClientID != "" && f.ClientSecret != "" {
 		return f.ClientID, f.ClientSecret
-	}
-	return "", ""
-}
-
-func discoverFromIDEBundle() (string, string) {
-	home, err := os.UserHomeDir()
-	var candidates []string
-
-	// 1. Check path configured in config.json
-	if cfg, err := config.Load(); err == nil && cfg != nil && cfg.AntigravityBin != "" {
-		binDir := filepath.Dir(cfg.AntigravityBin)
-		candidates = append(candidates,
-			filepath.Join(binDir, "resources", "bin", "language_server"),
-			filepath.Join(binDir, "resources", "app", "out", "main.js"),
-			filepath.Join(binDir, "..", "resources", "bin", "language_server"),
-			filepath.Join(binDir, "..", "resources", "app", "out", "main.js"),
-		)
-	}
-
-	// 2. Check ANTIGRAVITY_BIN environment variable
-	if envBin := os.Getenv("ANTIGRAVITY_BIN"); envBin != "" {
-		binDir := filepath.Dir(envBin)
-		candidates = append(candidates,
-			filepath.Join(binDir, "resources", "bin", "language_server"),
-			filepath.Join(binDir, "resources", "app", "out", "main.js"),
-			filepath.Join(binDir, "..", "resources", "bin", "language_server"),
-			filepath.Join(binDir, "..", "resources", "app", "out", "main.js"),
-		)
-	}
-
-	// 3. Check system PATH lookups (resolving symlinks)
-	for _, binName := range []string{"antigravity", "agy", "antigravity-ide"} {
-		if lp, err := exec.LookPath(binName); err == nil {
-			if resolved, err := filepath.EvalSymlinks(lp); err == nil {
-				lp = resolved
-			}
-			binDir := filepath.Dir(lp)
-			candidates = append(candidates,
-				filepath.Join(binDir, "resources", "bin", "language_server"),
-				filepath.Join(binDir, "resources", "app", "out", "main.js"),
-				filepath.Join(binDir, "..", "resources", "bin", "language_server"),
-				filepath.Join(binDir, "..", "resources", "app", "out", "main.js"),
-			)
-		}
-	}
-
-	// 4. Linux /proc live process introspection (if Antigravity or language_server is running)
-	if entries, err := os.ReadDir("/proc"); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			pid := entry.Name()
-			if _, convErr := strconv.Atoi(pid); convErr != nil {
-				continue
-			}
-			cmdlinePath := filepath.Join("/proc", pid, "cmdline")
-			if cmdBytes, err := os.ReadFile(cmdlinePath); err == nil {
-				cmdStr := string(cmdBytes)
-				if strings.Contains(cmdStr, "language_server") || strings.Contains(cmdStr, "antigravity") {
-					if exePath, err := os.Readlink(filepath.Join("/proc", pid, "exe")); err == nil && exePath != "" {
-						binDir := filepath.Dir(exePath)
-						candidates = append(candidates,
-							exePath,
-							filepath.Join(binDir, "resources", "bin", "language_server"),
-							filepath.Join(binDir, "resources", "app", "out", "main.js"),
-							filepath.Join(binDir, "..", "resources", "bin", "language_server"),
-							filepath.Join(binDir, "..", "resources", "app", "out", "main.js"),
-						)
-					}
-				}
-			}
-		}
-	}
-
-	// 5. User home directory candidates (Linux/macOS)
-	if home != "" && err == nil {
-		candidates = append(candidates,
-			// Antigravity 2.0 language_server binary paths
-			filepath.Join(home, ".local", "share", "antigravity", "resources", "bin", "language_server"),
-			filepath.Join(home, ".local", "share", "antigravity", "Antigravity-x64", "resources", "bin", "language_server"),
-			filepath.Join(home, ".local", "share", "antigravity-ide", "resources", "bin", "language_server"),
-			filepath.Join(home, "tools", "Antigravity", "Antigravity-x64", "resources", "bin", "language_server"),
-			filepath.Join(home, "tools", "Antigravity", "resources", "bin", "language_server"),
-			filepath.Join(home, "tools", "antigravity", "Antigravity-x64", "resources", "bin", "language_server"),
-			filepath.Join(home, "tools", "antigravity", "resources", "bin", "language_server"),
-			// Preview bundle main.js paths
-			filepath.Join(home, ".local", "share", "antigravity", "resources", "app", "out", "main.js"),
-			filepath.Join(home, ".local", "share", "antigravity-ide", "resources", "app", "out", "main.js"),
-			// macOS User Library
-			filepath.Join(home, "Applications", "Antigravity.app", "Contents", "Resources", "app", "out", "main.js"),
-			filepath.Join(home, "Applications", "Google Antigravity.app", "Contents", "Resources", "app", "out", "main.js"),
-		)
-	}
-
-	// 6. System-wide FHS locations (Linux standard packages .deb, .rpm, /opt, /usr)
-	candidates = append(candidates,
-		"/usr/share/antigravity/resources/app/out/main.js",
-		"/usr/share/antigravity/resources/bin/language_server",
-		"/usr/lib/antigravity/resources/app/out/main.js",
-		"/usr/lib/antigravity/resources/bin/language_server",
-		"/usr/share/antigravity-ide/resources/app/out/main.js",
-		"/opt/antigravity/resources/bin/language_server",
-		"/opt/antigravity/resources/app/out/main.js",
-		"/opt/antigravity/Antigravity-x64/resources/bin/language_server",
-		"/opt/Antigravity/resources/bin/language_server",
-		"/opt/Antigravity/resources/app/out/main.js",
-		"/opt/Antigravity/Antigravity-x64/resources/bin/language_server",
-		// macOS System Applications
-		"/Applications/Antigravity.app/Contents/Resources/app/out/main.js",
-		"/Applications/Google Antigravity.app/Contents/Resources/app/out/main.js",
-	)
-
-	// 7. Windows locations (if running on Windows)
-	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
-		candidates = append(candidates,
-			filepath.Join(localAppData, "Programs", "antigravity", "resources", "app", "out", "main.js"),
-			filepath.Join(localAppData, "Programs", "Antigravity", "resources", "app", "out", "main.js"),
-			filepath.Join(localAppData, "Programs", "antigravity", "resources", "bin", "language_server.exe"),
-			filepath.Join(localAppData, "Programs", "Antigravity", "resources", "bin", "language_server.exe"),
-		)
-	}
-	if progFiles := os.Getenv("ProgramFiles"); progFiles != "" {
-		candidates = append(candidates,
-			filepath.Join(progFiles, "Antigravity", "resources", "app", "out", "main.js"),
-			filepath.Join(progFiles, "antigravity", "resources", "app", "out", "main.js"),
-		)
-	}
-
-	// 8. Mounted AppImages in /tmp
-	if matches, err := filepath.Glob("/tmp/.mount_antigr*/resources/bin/language_server"); err == nil {
-		candidates = append(candidates, matches...)
-	}
-	if matches, err := filepath.Glob("/tmp/.mount_antigr*/resources/app/out/main.js"); err == nil {
-		candidates = append(candidates, matches...)
-	}
-
-	reID := regexp.MustCompile(`(\d+-[a-z0-9_]+\.apps\.googleusercontent\.com)`)
-	prefix := string([]byte{0x47, 0x4f, 0x43, 0x53, 0x50, 0x58, 0x2d}) // native client secret prefix bytes
-	reSec := regexp.MustCompile(regexp.QuoteMeta(prefix) + `[A-Za-z0-9_-]{28}`)
-
-	seen := make(map[string]bool)
-	for _, c := range candidates {
-		if c == "" || seen[c] {
-			continue
-		}
-		seen[c] = true
-		fi, err := os.Stat(c)
-		if err != nil || fi.IsDir() || fi.Size() > 10*1024*1024 {
-			continue // skip directories, missing files, or binaries larger than 10MB
-		}
-		if data, err := os.ReadFile(c); err == nil {
-			mID := reID.Find(data)
-			mSec := reSec.Find(data)
-			if len(mID) > 0 && len(mSec) > 0 {
-				return string(mID), string(mSec)
-			}
-		}
 	}
 	return "", ""
 }

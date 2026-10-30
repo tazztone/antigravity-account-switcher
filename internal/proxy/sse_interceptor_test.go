@@ -336,26 +336,6 @@ func TestSSEInterceptor_EventBroadcasting(t *testing.T) {
 	}
 }
 
-func TestSSEInterceptor_StructWrapper(t *testing.T) {
-	metricsRepo := &mockMetricsRepo{}
-	broadcaster := NewBroadcaster(10)
-	interceptor := NewSSEInterceptor(metricsRepo, broadcaster)
-
-	w := newMockResponseWriter()
-	payload := `data: {"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20,"totalTokenCount":30}}
-`
-	err := interceptor.Intercept(context.Background(), w, strings.NewReader(payload), "acc-wrap", "/path")
-	if err != nil {
-		t.Fatalf("interceptor.Intercept failed: %v", err)
-	}
-
-	// Also test backward-compatible StreamAndIntercept
-	err2 := StreamAndIntercept(w, strings.NewReader(payload), "acc-wrap2", "/path", metricsRepo, broadcaster)
-	if err2 != nil {
-		t.Fatalf("StreamAndIntercept failed: %v", err2)
-	}
-}
-
 func TestSSEInterceptor_GzipStream(t *testing.T) {
 	rawPayload := `data: {"response":{"usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":80,"totalTokenCount":280}}}` + "\n\n"
 

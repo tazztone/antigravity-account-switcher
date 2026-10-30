@@ -105,16 +105,6 @@ func WithModelFallback(primary, secondary string, enabled bool) FailoverOption {
 	}
 }
 
-// WithModelFallbackConfig is an alias for WithModelFallback.
-func WithModelFallbackConfig(primary, secondary string, enabled bool) FailoverOption {
-	return WithModelFallback(primary, secondary, enabled)
-}
-
-// WithFallbackConfig is an alias for WithModelFallback.
-func WithFallbackConfig(primary, secondary string, enabled bool) FailoverOption {
-	return WithModelFallback(primary, secondary, enabled)
-}
-
 // WithFallbackStrategy sets the initial failover strategy.
 func WithFallbackStrategy(strategy string) FailoverOption {
 	return func(f *FailoverEngine) {
@@ -245,11 +235,6 @@ func (f *FailoverEngine) ResetAccountState(accountID string) {
 	delete(f.quotaCache, accountID)
 }
 
-// ResetAccountFallback is an alias for ResetAccountState.
-func (f *FailoverEngine) ResetAccountFallback(accountID string) {
-	f.ResetAccountState(accountID)
-}
-
 // ResetAllStates clears all cached account fallback and exhaustion states.
 func (f *FailoverEngine) ResetAllStates() {
 	f.mu.Lock()
@@ -350,11 +335,6 @@ func (f *FailoverEngine) UpdateQuotaCache(accountID string, buckets any) {
 		}
 	}
 	f.mu.Unlock()
-}
-
-// UpdateQuotaBuckets populates or updates in-memory quota buckets from a slice of values.
-func (f *FailoverEngine) UpdateQuotaBuckets(accountID string, buckets []domain.QuotaBucket) {
-	f.UpdateQuotaCache(accountID, buckets)
 }
 
 // ClearQuotaCache empties the in-memory quota cache.

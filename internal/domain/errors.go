@@ -15,9 +15,6 @@ var (
 	// ErrNoAvailableAccount indicates all accounts in the pool are exhausted or in error state.
 	ErrNoAvailableAccount = errors.New("no available account with remaining quota in pool")
 
-	// ErrNoAvailableAccounts is an alias for ErrNoAvailableAccount.
-	ErrNoAvailableAccounts = ErrNoAvailableAccount
-
 	// ErrAccountExhausted indicates the requested account has depleted its quota.
 	ErrAccountExhausted = errors.New("account quota is exhausted")
 

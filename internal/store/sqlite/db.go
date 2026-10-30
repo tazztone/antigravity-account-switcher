@@ -73,15 +73,6 @@ func Open(dbPath string) (*DB, error) {
 	return db, nil
 }
 
-// OpenDB is an adapter that returns the standard *sql.DB handle.
-func OpenDB(dbPath string) (*sql.DB, error) {
-	db, err := Open(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	return db.DB, nil
-}
-
 // parseDBTime parses timestamps from SQLite which may be formatted in various standard layouts.
 func parseDBTime(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)

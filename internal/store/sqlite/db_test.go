@@ -79,19 +79,6 @@ func TestOpen_MemoryDB(t *testing.T) {
 	}
 }
 
-func TestOpenDB_Adapter(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "adapter.db")
-	rawDB, err := sqlite.OpenDB(dbPath)
-	if err != nil {
-		t.Fatalf("sqlite.OpenDB failed: %v", err)
-	}
-	defer rawDB.Close()
-
-	if err := rawDB.Ping(); err != nil {
-		t.Fatalf("ping failed: %v", err)
-	}
-}
-
 func TestOpen_Permissions(t *testing.T) {
 	tempDir := filepath.Join(t.TempDir(), "subdir")
 	dbPath := filepath.Join(tempDir, "perm.db")

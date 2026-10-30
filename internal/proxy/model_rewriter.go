@@ -59,66 +59,7 @@ func NormalizeModelName(model string) string {
 // CategorizeModel identifies the model category based on standard prefixes,
 // substrings, and model family tokens. It performs 0 heap allocations.
 func CategorizeModel(model string) ModelCategory {
-	m := strings.TrimSpace(model)
-	if m == "" {
-		return CategoryUnknown
-	}
-	m = strings.TrimPrefix(m, "models/")
-
-	// Fast stack-allocated ASCII lowercase (0 heap allocs)
-	var buf [64]byte
-	var lower string
-	if len(m) <= len(buf) {
-		hasUpper := false
-		for i := 0; i < len(m); i++ {
-			c := m[i]
-			if c >= 'A' && c <= 'Z' {
-				buf[i] = c + ('a' - 'A')
-				hasUpper = true
-			} else {
-				buf[i] = c
-			}
-		}
-		if hasUpper {
-			lower = unsafe.String(&buf[0], len(m))
-		} else {
-			lower = m
-		}
-	} else {
-		lower = strings.ToLower(m)
-	}
-
-	// 1. Claude & GPT Family Check (evaluated first to prevent "pro" collision)
-	if strings.Contains(lower, "claude") ||
-		strings.Contains(lower, "gpt") ||
-		strings.Contains(lower, "sonnet") ||
-		strings.Contains(lower, "opus") ||
-		strings.Contains(lower, "haiku") ||
-		strings.Contains(lower, "anthropic") ||
-		strings.Contains(lower, "openai") ||
-		strings.Contains(lower, "chatgpt") ||
-		strings.Contains(lower, "3p") ||
-		lower == "o1" || lower == "o3" || lower == "o4" ||
-		strings.HasPrefix(lower, "o1-") || strings.HasPrefix(lower, "o3-") || strings.HasPrefix(lower, "o4-") ||
-		strings.HasPrefix(lower, "o1_") || strings.HasPrefix(lower, "o3_") || strings.HasPrefix(lower, "o4_") {
-		return CategoryClaudeGPT
-	}
-
-	// 2. Gemini 4 Argon Check (before generic gemini to avoid bucket collision)
-	if strings.Contains(lower, "argon") {
-		return CategoryGeminiArgon
-	}
-
-	// 3. Gemini Family Check
-	if strings.Contains(lower, "gemini") ||
-		strings.Contains(lower, "gemma") ||
-		strings.Contains(lower, "flash") ||
-		strings.Contains(lower, "pro") ||
-		strings.Contains(lower, "ultra") {
-		return CategoryGemini
-	}
-
-	return CategoryUnknown
+	return domain.CategorizeModelID(model)
 }
 
 // CategorizeModelWithDefault categorizes a model, returning defaultCategory if unknown.
@@ -297,11 +238,6 @@ func FindModelValueBounds(body []byte) (modelBytes []byte, startValIdx, endValId
 	}
 
 	return nil, -1, -1, ErrModelNotFound
-}
-
-// FindModelOffsets is an alias for FindModelValueBounds.
-func FindModelOffsets(body []byte) (modelBytes []byte, startValIdx, endValIdx int, err error) {
-	return FindModelValueBounds(body)
 }
 
 // ExtractModelFromJSON scans body for the root-level "model" property and returns its value as a string.

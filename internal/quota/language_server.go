@@ -525,17 +525,7 @@ func DiscoverAvailableModels(ctx context.Context, token string) []*domain.ModelI
 
 // categorizeModelID maps a model identifier to its corresponding model category string.
 func categorizeModelID(id string) string {
-	lower := strings.ToLower(id)
-	if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") || strings.Contains(lower, "sonnet") || strings.Contains(lower, "opus") || strings.Contains(lower, "haiku") || strings.Contains(lower, "3p") {
-		return "claude_gpt"
-	}
-	if strings.Contains(lower, "argon") {
-		return "gemini_argon"
-	}
-	if strings.Contains(lower, "gemini") || strings.Contains(lower, "gemma") || strings.Contains(lower, "flash") || strings.Contains(lower, "pro") {
-		return "gemini"
-	}
-	return "unknown"
+	return string(domain.CategorizeModelID(id))
 }
 
 // DefaultModelCatalog provides the standard catalog of Antigravity 2.0 models.
