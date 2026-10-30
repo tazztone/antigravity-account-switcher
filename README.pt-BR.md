@@ -173,6 +173,11 @@ A CLI disponibiliza comandos para supervisão, troca manual e configuração:
   ```bash
   antigravity-account-switcher launch --port 1831
   ```
+- **Limite Customizado do Buffer de Requisições (MB):**
+  ```bash
+  antigravity-account-switcher launch --max-body-mb 150
+  ```
+  *(Pré-aloca capacidade em memória para replays rápidos; também disponível em `serve` e `wrap`)*
 - **Fallback Multi-Modelo no Momento da Execução:**
   ```bash
   antigravity-account-switcher launch --fallback-secondary --model-primary gemini-2.5-pro --model-secondary claude-3-7-sonnet
@@ -209,6 +214,20 @@ Ao alternar entre provedores de modelos (ex.: Claude <-> Gemini) ou em sessões 
 - O proxy intercepta a resposta HTTP 400 antes que ela chegue ao cliente.
 - Aplica sanitização transparente no payload (injetando `skip_thought_signature_validator` ou limpando blocos de HMAC incompatíveis) preservando todo o histórico de conversação do usuário.
 - Reenvia a requisição imediatamente em memória para o Google Cloud Code PA, garantindo que o agente continue pensando sem travar o editor ou interromper a sessão de código.
+
+### 4. Referência da API REST
+
+O servidor web embutido expõe endpoints locais de gerenciamento JSON e SSE (`http://127.0.0.1:8080`):
+
+| Endpoint | Método | Descrição |
+| :--- | :--- | :--- |
+| `/api/accounts` | `GET` | Lista todas as contas cadastradas, baldes de cota e ponteiros de roteamento ativo. |
+| `/api/accounts/{id}/select` | `POST` | Fixa uma conta globalmente ou para uma categoria específica (`claude_gpt`, `gemini`, `gemini_argon`). |
+| `/api/accounts/{id}/categories` | `PUT` | Atualiza exclusões de categorias (`disabled_categories`). |
+| `/api/accounts/{id}/models` | `PUT` | Atualiza regras de ativação por modelo na conta. |
+| `/api/quota/refresh` | `POST` | Dispara atualização forçada e imediata de cota junto ao Google para todas as contas (timeout de 10s). |
+| `/api/metrics` | `GET` | Métricas de tokens e agregados diários; suporta histórico localizado via `?tz=America/Sao_Paulo` ou `?tz_offset=-180`. |
+| `/api/events` | `GET` | Transmissão de eventos em tempo real via Server-Sent Events (SSE) para roteamento, failover e cotas. |
 
 ---
 

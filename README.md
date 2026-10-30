@@ -173,6 +173,11 @@ The CLI provides commands for launch supervision, manual switching, and configur
   ```bash
   antigravity-account-switcher launch --port 1831
   ```
+- **Custom Request Buffer Limit (MB):**
+  ```bash
+  antigravity-account-switcher launch --max-body-mb 150
+  ```
+  *(Pre-allocates buffers for fast in-memory replay; also supported on `serve` and `wrap`)*
 - **Multi-Tier Model Fallback on Launch:**
   ```bash
   antigravity-account-switcher launch --fallback-secondary --model-primary gemini-2.5-pro --model-secondary claude-3-7-sonnet
@@ -209,6 +214,20 @@ When switching between model providers (e.g. Claude <-> Gemini) or continuing mu
 - The proxy intercepts the HTTP 400 response before it reaches the client.
 - It applies payload sanitization via structural visitors (`skip_thought_signature_validator` injection or HMAC thought block pruning) while preserving complete user chat history.
 - The request is instantly replayed in memory to Google Cloud Code PA, ensuring agent thinking continues seamlessly without crashing the editor or losing conversation context.
+
+### 4. REST API Reference
+
+The embedded web server exposes local JSON and SSE endpoints (`http://127.0.0.1:8080`):
+
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/accounts` | `GET` | Lists all registered accounts, quota buckets, and active routing pointers. |
+| `/api/accounts/{id}/select` | `POST` | Pins an account globally or for a specific category (`claude_gpt`, `gemini`, `gemini_argon`). |
+| `/api/accounts/{id}/categories` | `PUT` | Updates category opt-out exclusions (`disabled_categories`). |
+| `/api/accounts/{id}/models` | `PUT` | Toggles model enablement rules per account. |
+| `/api/quota/refresh` | `POST` | Triggers immediate live quota polling pass across all accounts (10s deadline). |
+| `/api/metrics` | `GET` | Token telemetry & daily aggregates; supports localized queries via `?tz=Europe/Rome` or `?tz_offset=-120`. |
+| `/api/events` | `GET` | Server-Sent Events (SSE) realtime feed of proxy routing, failover, and quota events. |
 
 ---
 
