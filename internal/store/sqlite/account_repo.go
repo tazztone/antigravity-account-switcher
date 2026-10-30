@@ -491,10 +491,12 @@ func (r *AccountRepository) SetActiveForCategory(ctx context.Context, category d
 //   - Accounts with the category in disabled_categories are excluded.
 //   - 'active' accounts are eligible unless a recorded bucket for the category
 //     is exhausted and not yet past reset.
-//   - 'exhausted' accounts are eligible only when quota rows positively show a
-//     healthy bucket for this category: a 429 in one category must not lock the
-//     account out of the other, but a bare 'exhausted' status without fresh
-//     quota evidence keeps the account excluded.
+//   - 'exhausted' accounts are eligible when quota rows positively show a
+//     healthy or reset-elapsed bucket for this category (remaining_fraction > 0.0
+//     or reset_time <= now): a 429 in one category must not lock the account
+//     out of the other, and an account whose reset window has passed recovers
+//     immediately without waiting for the next background poller cycle.
+//     A bare 'exhausted' status without quota evidence keeps the account excluded.
 //   - 'error' and 'disabled' accounts are never eligible.
 func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, category domain.ModelCategory, excludeID string) (*domain.Account, error) {
 	catStr := category.String()
@@ -515,7 +517,10 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 				AND EXISTS (
 					SELECT 1 FROM quota_buckets qb
 					WHERE qb.account_id = a.id
-					  AND qb.remaining_fraction > 0.0
+					  AND (
+						qb.remaining_fraction > 0.0
+						OR (qb.reset_time != '' AND qb.reset_time <= ?)
+					  )
 	` + bucketCategoryPredicate + `
 				)
 			)
@@ -531,7 +536,7 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr)
+	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, nowStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
 		return nil, domain.ErrNoAvailableAccount
@@ -818,7 +823,10 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 				AND EXISTS (
 					SELECT 1 FROM quota_buckets qb
 					WHERE qb.account_id = a.id
-					  AND qb.remaining_fraction > 0.0
+					  AND (
+						qb.remaining_fraction > 0.0
+						OR (qb.reset_time != '' AND qb.reset_time <= ?)
+					  )
 	` + bucketCategoryPredicate + `
 				)
 			)
@@ -844,7 +852,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	args := []any{excludeID, excludeID, catStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr, modelID, modelID}
+	args := []any{excludeID, excludeID, catStr, nowStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr, modelID, modelID}
 	row := r.db.QueryRowContext(ctx, query, args...)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {

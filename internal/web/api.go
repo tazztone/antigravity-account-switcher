@@ -76,7 +76,9 @@ func (a *APIHandler) HandleQuotaRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if a.poller != nil {
-		_ = a.poller.PollOnce(r.Context())
+		pollCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		_ = a.poller.PollOnce(pollCtx)
 	}
 
 	a.listAccounts(w, r)

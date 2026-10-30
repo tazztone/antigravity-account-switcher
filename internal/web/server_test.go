@@ -1014,3 +1014,57 @@ func TestServer_AccountMutations_ResetFallbackState(t *testing.T) {
 		}
 	}
 }
+
+type testQuotaPoller struct {
+	called     bool
+	hasTimeout bool
+}
+
+func (p *testQuotaPoller) PollOnce(ctx context.Context) error {
+	p.called = true
+	_, ok := ctx.Deadline()
+	p.hasTimeout = ok
+	return nil
+}
+
+func TestAPI_QuotaRefresh_EnforcesTimeout(t *testing.T) {
+	_, accRepo, quotaRepo, _, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
+
+	poller := &testQuotaPoller{}
+	server, err := NewServer(accRepo, quotaRepo, metricsSvc, broadcaster, eventRepo, nil, WithPoller(poller))
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	// 1. Method Not Allowed for GET
+	reqGet, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/quota/refresh", nil)
+	respGet, err := http.DefaultClient.Do(reqGet)
+	if err != nil {
+		t.Fatalf("GET /api/quota/refresh failed: %v", err)
+	}
+	respGet.Body.Close()
+	if respGet.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 Method Not Allowed, got %d", respGet.StatusCode)
+	}
+
+	// 2. Successful POST triggers poller with timeout deadline
+	reqPost, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/quota/refresh", nil)
+	respPost, err := http.DefaultClient.Do(reqPost)
+	if err != nil {
+		t.Fatalf("POST /api/quota/refresh failed: %v", err)
+	}
+	respPost.Body.Close()
+	if respPost.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", respPost.StatusCode)
+	}
+
+	if !poller.called {
+		t.Errorf("expected poller to be called")
+	}
+	if !poller.hasTimeout {
+		t.Errorf("expected PollOnce context to have a timeout deadline")
+	}
+}

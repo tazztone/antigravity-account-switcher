@@ -195,3 +195,43 @@ func TestGetActiveForCategory_KeepsPinWhenExhaustedBucketPastReset(t *testing.T)
 		t.Errorf("expected pin to remain acc-pinned (bucket past reset), got %s", got.ID)
 	}
 }
+
+func TestGetNextAvailableForCategory_SelectsExhaustedStatusAccountWhenBucketPastReset(t *testing.T) {
+	_, accRepo, quotaRepo, _, _ := setupTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	acc := &domain.Account{
+		ID:           "acc-restored-by-time",
+		Email:        "restored@example.com",
+		RefreshToken: "rt",
+		Status:       domain.AccountStatusExhausted,
+	}
+	if err := accRepo.Create(ctx, acc); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Bucket remaining fraction is 0.0, but reset_time is 1 hour in the past:
+	// Should be immediately selectable without waiting for background poller.
+	if err := quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{
+		weeklyBucket("acc-restored-by-time", "gemini-weekly", "Gemini Models (weekly)", 0.0, now.Add(-1*time.Hour)),
+	}); err != nil {
+		t.Fatalf("UpsertBuckets: %v", err)
+	}
+
+	next, err := accRepo.GetNextAvailableForCategory(ctx, domain.CategoryGemini, "")
+	if err != nil {
+		t.Fatalf("GetNextAvailableForCategory: %v", err)
+	}
+	if next.ID != "acc-restored-by-time" {
+		t.Errorf("expected acc-restored-by-time, got %s", next.ID)
+	}
+
+	nextModel, err := accRepo.GetNextAvailableForModel(ctx, domain.CategoryGemini, "gemini-2.5-pro", "")
+	if err != nil {
+		t.Fatalf("GetNextAvailableForModel: %v", err)
+	}
+	if nextModel.ID != "acc-restored-by-time" {
+		t.Errorf("expected acc-restored-by-time for model, got %s", nextModel.ID)
+	}
+}

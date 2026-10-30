@@ -39,10 +39,21 @@ func NewBufferedRequestWithLimit(req *http.Request, maxBytes int64) (*BufferedRe
 
 	// Read up to maxBytes + 1 to detect whether the payload overflowed the cap
 	limitReader := io.LimitReader(req.Body, maxBytes+1)
-	body, err := io.ReadAll(limitReader)
-	if err != nil {
-		_ = req.Body.Close()
-		return nil, err
+	var body []byte
+	if req.ContentLength > 0 && req.ContentLength <= maxBytes {
+		buf := bytes.NewBuffer(make([]byte, 0, req.ContentLength))
+		if _, err := buf.ReadFrom(limitReader); err != nil {
+			_ = req.Body.Close()
+			return nil, err
+		}
+		body = buf.Bytes()
+	} else {
+		var err error
+		body, err = io.ReadAll(limitReader)
+		if err != nil {
+			_ = req.Body.Close()
+			return nil, err
+		}
 	}
 	_ = req.Body.Close()
 
