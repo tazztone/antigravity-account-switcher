@@ -54,6 +54,7 @@ type Config struct {
 	EventBroadcaster  domain.EventBroadcaster
 	EventRepo         domain.EventRepository
 	FailoverEngine    *FailoverEngine
+	ModelListTimeout  time.Duration
 }
 
 // Option configures ProxyHandler behavior.
@@ -117,6 +118,11 @@ func WithEventRepository(repo domain.EventRepository) Option {
 // WithFailoverEngine injects a pre-configured FailoverEngine.
 func WithFailoverEngine(engine *FailoverEngine) Option {
 	return func(c *Config) { c.FailoverEngine = engine }
+}
+
+// WithModelListTimeout sets the per-account timeout of the union model list fan-out.
+func WithModelListTimeout(d time.Duration) Option {
+	return func(c *Config) { c.ModelListTimeout = d }
 }
 
 // Broadcaster implements domain.EventBroadcaster in memory for real-time subscribers.
@@ -183,6 +189,7 @@ type ProxyHandler struct {
 	failoverEngine   *FailoverEngine
 	tokenRefresher   TokenRefresher
 	client           *http.Client
+	modelListCache   modelListCache
 }
 
 // NewProxyHandler creates an initialized ProxyHandler.
@@ -196,6 +203,7 @@ func NewProxyHandler(accountRepo domain.AccountRepository, opts ...Option) (*Pro
 		MaxRetries:        DefaultMaxRetries,
 		MaxBodyBytes:      DefaultMaxBodyBytes,
 		TokenExpiryMargin: DefaultTokenMargin,
+		ModelListTimeout:  DefaultModelListTimeout,
 	}
 
 	for _, opt := range opts {
@@ -204,6 +212,9 @@ func NewProxyHandler(accountRepo domain.AccountRepository, opts ...Option) (*Pro
 
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+	if cfg.ModelListTimeout <= 0 {
+		cfg.ModelListTimeout = DefaultModelListTimeout
 	}
 
 	parsedURL, err := url.Parse(cfg.TargetURL)
@@ -259,6 +270,22 @@ func (h *ProxyHandler) FailoverEngine() *FailoverEngine {
 // Broadcaster returns the event broadcaster.
 func (h *ProxyHandler) Broadcaster() domain.EventBroadcaster {
 	return h.eventBroadcaster
+}
+
+// upstreamURL resolves the Cloud Code PA destination for a request, appending the
+// original path to any configured base path and preserving raw path and query.
+func (h *ProxyHandler) upstreamURL(r *http.Request, path, query string) url.URL {
+	destURL := *h.targetURL
+	if destURL.Path == "" || destURL.Path == "/" {
+		destURL.Path = path
+	} else {
+		destURL.Path = strings.TrimRight(destURL.Path, "/") + "/" + strings.TrimLeft(path, "/")
+	}
+	if r != nil && r.URL != nil {
+		destURL.RawPath = r.URL.RawPath
+	}
+	destURL.RawQuery = query
+	return destURL
 }
 
 var hopByHopHeaders = map[string]bool{
@@ -559,6 +586,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	isCloudCode := !isExplicitForwardToOther
 
+	// Model catalog requests describe the editor's model picker. Answer them with the
+	// union of every pool account's entitlements instead of a single account's.
+	if isCloudCode && isModelListRequest(r.URL.Path) && h.serveMergedModelList(w, r, buffered) {
+		return
+	}
+
 	// 2. Capture original request baseline and model category
 	origModel, origCategory, _ := ExtractModelFromRequest(r, buffered.Bytes())
 	if origCategory == CategoryUnknown && origModel != "" {
@@ -682,26 +715,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Proactively refresh access token if expired or near expiration window
-		if !isPassThrough && currentAcc != nil && currentAcc.IsTokenExpired(h.cfg.TokenExpiryMargin) && h.tokenRefresher != nil && currentAcc.RefreshToken != "" {
-			newAccess, newExpiry, refErr := h.tokenRefresher.RefreshToken(ctx, currentAcc.RefreshToken)
-			if refErr == nil {
-				_ = h.accountRepo.UpdateToken(ctx, currentAcc.ID, newAccess, newExpiry)
-				currentAcc.AccessToken = newAccess
-				currentAcc.TokenExpiry = newExpiry
-			}
+		if !isPassThrough && currentAcc != nil {
+			currentAcc = h.ensureFreshToken(ctx, currentAcc)
 		}
 
 		// Rebuild target URL
 		var destURL url.URL
 		if isCloudCode {
-			destURL = *h.targetURL
-			if destURL.Path == "" || destURL.Path == "/" {
-				destURL.Path = currentPath
-			} else {
-				destURL.Path = strings.TrimRight(destURL.Path, "/") + "/" + strings.TrimLeft(currentPath, "/")
-			}
-			destURL.RawPath = r.URL.RawPath
-			destURL.RawQuery = currentQuery
+			destURL = h.upstreamURL(r, currentPath, currentQuery)
 		} else {
 			destURL = *r.URL
 			if destURL.Scheme == "" {

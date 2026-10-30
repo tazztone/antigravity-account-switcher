@@ -315,8 +315,15 @@ func QueryAvailableModels(ctx context.Context) ([]*domain.ModelInfo, error) {
 		return nil, err
 	}
 
+	return ParseAvailableModelsResponse(rawResp)
+}
+
+// ParseAvailableModelsResponse parses a raw fetchAvailableModels / GetAvailableModels
+// response body into the models an account is entitled to. Both the top-level and the
+// {"response": {...}} language_server envelope are accepted.
+func ParseAvailableModelsResponse(body []byte) ([]*domain.ModelInfo, error) {
 	var parsed lsAvailableModelsResponse
-	if unmarshalErr := json.Unmarshal(rawResp, &parsed); unmarshalErr != nil {
+	if unmarshalErr := json.Unmarshal(body, &parsed); unmarshalErr != nil {
 		return nil, fmt.Errorf("failed to parse available models response: %w", unmarshalErr)
 	}
 
@@ -494,17 +501,7 @@ func FetchAvailableModelsFromCloudCode(ctx context.Context, token string) ([]*do
 		return nil, err
 	}
 
-	var parsed lsAvailableModelsResponse
-	if unmarshalErr := json.Unmarshal(body, &parsed); unmarshalErr != nil {
-		return nil, fmt.Errorf("failed to parse available models response: %w", unmarshalErr)
-	}
-
-	payload := &parsed.modelsPayload
-	if parsed.Response != nil && len(parsed.Response.Models) > 0 {
-		payload = parsed.Response
-	}
-
-	return extractModels(payload)
+	return ParseAvailableModelsResponse(body)
 }
 
 // DiscoverAvailableModels attempts to query available models in priority order:
