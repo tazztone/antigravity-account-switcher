@@ -92,7 +92,7 @@ The codebase adheres strictly to **Clean Architecture / Hexagonal Principles**:
 2. **Layer Separation**:
    - `internal/domain/`: Enterprise business rules, core entities (`Account`, `QuotaBucket`, `TokenMetric`, `ProxyEvent`), and interfaces (repository and service contracts). No external dependencies.
    - `internal/store/sqlite/`: Thread-safe persistence adapter in WAL mode (`journal_mode=WAL`, `busy_timeout=5000`).
-   - `internal/proxy/`: In-memory reverse and forward proxy, 100MB request buffer (`NewBufferedRequestWithLimit`), dynamic Bearer token replacement, failover engine, and SSE stream parsing.
+   - `internal/proxy/`: In-memory reverse and forward proxy, 100MB request buffer (`NewBufferedRequestWithLimit`), dynamic Bearer token replacement, failover engine, union model list fan-out, and SSE stream parsing.
    - `internal/launcher/`: Process supervisor. Couples process lifecycles via Linux `PR_SET_PDEATHSIG` (if switcher dies, child dies; if child exits, switcher terminates cleanly).
    - `internal/quota/`: Background daemon querying Google Cloud Code PA API endpoints and probing local `language_server` sockets.
    - `internal/oauth/`: RFC 8252 loopback OAuth2 server for account onboarding.
@@ -106,6 +106,12 @@ The codebase adheres strictly to **Clean Architecture / Hexagonal Principles**:
    - Browser launching handles platform-specific tools (`open` on macOS, `rundll32` on Windows, `xdg-open` on Linux).
    - Local `language_server` discovery via `/proc` on Linux automatically and transparently falls back to direct Google Cloud Code PA endpoint polling on Windows and macOS.
    - For full deployment steps, architecture, and native parity requirements on Windows, see `WINDOWS_COMPATIBILITY.md`.
+5. **Union Model List Merging**:
+   - `language_server`'s model picker calls `POST /v1internal:fetchAvailableModels` with no model in the payload, so the proxy intercepts it (`isModelListRequest` → `serveMergedModelList`) instead of resolving a single account.
+   - The request is fanned out to every enabled account (bounded concurrency, `DefaultModelListTimeout` per account, expired tokens refreshed first). Responses are merged by `MergeModelListResponses`: union of the `models` map (enabled entry wins), merged `agentModelSorts` by `displayName`, and the active account's `defaultAgentModelId`.
+   - The merge works on raw JSON (`map[string]json.RawMessage`), so upstream fields this codebase does not model survive byte-for-byte. Never re-marshal through a reduced typed struct.
+   - The merged catalog is cached for `DefaultModelListCacheTTL` and invalidated by a change in the sorted account-ID set. Each merge also persists discovered models via `UpsertAccountModels` so per-model eligibility routing stays fresh.
+   - Exhausted accounts still contribute entitlements; only `AccountStatusDisabled` accounts are excluded from the fan-out.
 
 ---
 

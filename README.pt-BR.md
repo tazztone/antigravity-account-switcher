@@ -215,7 +215,18 @@ Ao alternar entre provedores de modelos (ex.: Claude <-> Gemini) ou em sessões 
 - Aplica sanitização transparente no payload (injetando `skip_thought_signature_validator` ou limpando blocos de HMAC incompatíveis) preservando todo o histórico de conversação do usuário.
 - Reenvia a requisição imediatamente em memória para o Google Cloud Code PA, garantindo que o agente continue pensando sem travar o editor ou interromper a sessão de código.
 
-### 4. Referência da API REST
+### 4. Lista Unificada de Modelos do Pool
+O `language_server` consulta o proxy para montar o seletor de modelos (`POST /v1internal:fetchAvailableModels`). Como essa requisição não informa modelo, um proxy ingênuo responderia apenas com os modelos da conta ativa, ocultando modelos que outra conta do pool pode atender.
+
+**O switcher responde com a união de todo o pool:**
+- A requisição é distribuída simultaneamente para todas as contas habilitadas (concorrência limitada, timeout de 5s por conta), cada uma com seu próprio token Bearer.
+- As respostas são mescladas em um único catálogo: união do mapa `models`, ordenação `agentModelSorts` combinada e `defaultAgentModelId` da conta ativa. Campos desconhecidos do upstream são preservados exatamente como vieram.
+- O catálogo mesclado é mantido em cache por 60 segundos e invalidado assim que a composição do pool muda.
+- Cada mesclagem também atualiza `account_model_rules`, para que o roteamento por elegibilidade saiba imediatamente qual conta pode atender cada modelo.
+
+Contas esgotadas continuam contribuindo com seus modelos: falta de cota é temporária, portanto o modelo permanece visível no seletor e é roteado para uma conta com cota disponível quando selecionado.
+
+### 5. Referência da API REST
 
 O servidor web embutido expõe endpoints locais de gerenciamento JSON e SSE (`http://127.0.0.1:8080`):
 

@@ -215,7 +215,18 @@ When switching between model providers (e.g. Claude <-> Gemini) or continuing mu
 - It applies payload sanitization via structural visitors (`skip_thought_signature_validator` injection or HMAC thought block pruning) while preserving complete user chat history.
 - The request is instantly replayed in memory to Google Cloud Code PA, ensuring agent thinking continues seamlessly without crashing the editor or losing conversation context.
 
-### 4. REST API Reference
+### 4. Union Model List Across the Pool
+`language_server` asks the proxy for its model picker contents (`POST /v1internal:fetchAvailableModels`). Since that request names no model, a naive proxy would answer with the active account's entitlements only, hiding models that another pooled account can serve.
+
+**The switcher answers it with the union of the whole pool:**
+- The request is fanned out concurrently to every enabled account (bounded concurrency, 5s per-account timeout), each with its own bearer token.
+- Responses are merged into a single catalog: union of the `models` map, merged `agentModelSorts` ordering, and the active account's `defaultAgentModelId`. Unknown upstream fields are preserved verbatim.
+- The merged catalog is cached for 60 seconds and invalidated as soon as the pool composition changes.
+- Each merge also refreshes `account_model_rules`, so per-model eligibility routing immediately knows which account can serve which model.
+
+Exhausted accounts still contribute their entitlements: running out of quota is transient, so the model stays visible in the picker and is routed to an account that still has quota when selected.
+
+### 5. REST API Reference
 
 The embedded web server exposes local JSON and SSE endpoints (`http://127.0.0.1:8080`):
 
