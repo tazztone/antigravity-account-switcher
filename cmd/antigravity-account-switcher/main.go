@@ -1203,9 +1203,9 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 // runInstallDesktop registers the desktop application launcher entry on Linux.
 func runInstallDesktop(args []string) {
 	fs := flag.NewFlagSet("install-desktop", flag.ExitOnError)
-	binFlag := fs.String("bin", "", "Path to Antigravity 2.0 binary (auto-detected if omitted)")
+	binFlag := fs.String("bin", "", "Path to Antigravity binary (auto-detected if omitted)")
 	iconFlag := fs.String("icon", "", "Path to Antigravity icon (auto-detected if omitted)")
-	nameFlag := fs.String("name", "Antigravity 2.0", "Desktop application name")
+	nameFlag := fs.String("name", "", "Desktop application name (defaults based on resolved binary)")
 	_ = fs.Parse(args)
 
 	fmt.Println("Installing GNOME/XDG desktop application entry...")
