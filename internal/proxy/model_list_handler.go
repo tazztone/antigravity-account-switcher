@@ -147,7 +147,11 @@ func (h *ProxyHandler) serveMergedModelList(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	h.modelListCache.put(accountHash, merged, time.Now(), DefaultModelListCacheTTL)
+	// Only cache when every candidate account responded successfully. If any account
+	// had a transient timeout or failure, do not cache the degraded subset.
+	if len(bodies) == len(candidates) {
+		h.modelListCache.put(accountHash, merged, time.Now(), DefaultModelListCacheTTL)
+	}
 	writeModelListResponse(w, merged)
 	return true
 }
@@ -173,14 +177,20 @@ func enabledModelListAccounts(accounts []*domain.Account) []*domain.Account {
 	return enabled
 }
 
-// accountSetHash identifies a pool composition by its sorted account IDs.
+// accountSetHash identifies a pool composition by its sorted account IDs and the
+// active account ID, so switching the active account immediately refreshes the base.
 func accountSetHash(accounts []*domain.Account) string {
 	ids := make([]string, 0, len(accounts))
+	activeID := ""
+	if len(accounts) > 0 && accounts[0] != nil && accounts[0].IsActive {
+		activeID = accounts[0].ID
+	}
 	for _, acc := range accounts {
 		ids = append(ids, acc.ID)
 	}
 	sort.Strings(ids)
-	sum := sha256.Sum256([]byte(strings.Join(ids, "\x00")))
+	payload := activeID + ":" + strings.Join(ids, "\x00")
+	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -243,6 +253,40 @@ func (h *ProxyHandler) fetchModelListForAccount(
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized && h.tokenRefresher != nil && acc.RefreshToken != "" {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		newAccess, newExpiry, refErr := h.tokenRefresher.RefreshToken(ctx, acc.RefreshToken)
+		if refErr == nil && newAccess != "" {
+			_ = h.accountRepo.UpdateToken(ctx, acc.ID, newAccess, newExpiry)
+			acc.AccessToken = newAccess
+			acc.TokenExpiry = newExpiry
+
+			retryReq, rErr := http.NewRequestWithContext(ctx, r.Method, destURL.String(), bytes.NewReader(body))
+			if rErr == nil {
+				retryReq.ContentLength = int64(len(body))
+				copyRequestHeaders(retryReq.Header, r.Header)
+				if len(body) > 0 {
+					retryReq.Header.Set("Content-Length", strconv.Itoa(len(body)))
+				}
+				retryReq.Host = h.targetURL.Host
+				setForwardingHeaders(retryReq, r)
+				retryReq.Header.Set("Authorization", "Bearer "+newAccess)
+				retryReq.Header.Set("Accept-Encoding", "identity")
+
+				retryResp, doErr := h.client.Do(retryReq)
+				if doErr == nil {
+					defer retryResp.Body.Close()
+					if retryResp.StatusCode == http.StatusOK {
+						return decodeModelListBody(retryResp)
+					}
+					_, _ = io.Copy(io.Discard, io.LimitReader(retryResp.Body, 64*1024))
+					return nil, fmt.Errorf("model list request for account %s returned status %d after refresh", acc.ID, retryResp.StatusCode)
+				}
+			}
+		}
+		return nil, fmt.Errorf("model list request for account %s returned status 401", acc.ID)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))

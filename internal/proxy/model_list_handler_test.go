@@ -295,6 +295,85 @@ func TestModelListHandler_ToleratesFailingAccount(t *testing.T) {
 	if got := modelIDs(payload.Models); !equalStrings(got, []string{"claude-sonnet-4-6"}) {
 		t.Errorf("merged models = %v, want only the healthy account's models", got)
 	}
+
+	// Partial responses must not be cached: once the failing account recovers, the next
+	// request must fan out again and include all models.
+	f.mock.ConfigureAccount("token-gemini", &mocks.AccountBehavior{
+		AvailableModels: map[string]mocks.ModelPayloadItem{
+			"gemini-2.5-pro": {DisplayName: "Gemini 2.5 Pro", Recommended: true},
+		},
+		DefaultAgentModelID: "gemini-2.5-pro",
+		AgentModelSorts: []mocks.AgentModelSort{
+			mocks.NewAgentModelSort("Recommended", "gemini-2.5-pro"),
+		},
+	})
+	_, recoveredPayload := f.fetchModels(t, nil)
+	if got := modelIDs(recoveredPayload.Models); !equalStrings(got, []string{"claude-sonnet-4-6", "gemini-2.5-pro"}) {
+		t.Errorf("merged models after recovery = %v, want full union %v", got, []string{"claude-sonnet-4-6", "gemini-2.5-pro"})
+	}
+}
+
+func TestModelListHandler_InvalidatesCacheWhenActiveAccountChanges(t *testing.T) {
+	claudeAcc := newClaudeAccount()
+	geminiAcc := newGeminiAccount()
+	f := newModelListFixture(t, []*domain.Account{claudeAcc, geminiAcc})
+	configureTwoPlanPool(f)
+
+	_, firstPayload := f.fetchModels(t, nil)
+	if firstPayload.DefaultAgentModelID != "claude-sonnet-4-6" {
+		t.Fatalf("initial defaultAgentModelId = %q, want claude-sonnet-4-6", firstPayload.DefaultAgentModelID)
+	}
+
+	// Switch active account to Gemini
+	if err := f.repo.SetActive(f.ctx, geminiAcc.ID); err != nil {
+		t.Fatalf("SetActive: %v", err)
+	}
+
+	_, secondPayload := f.fetchModels(t, nil)
+	if secondPayload.DefaultAgentModelID != "gemini-2.5-pro" {
+		t.Errorf("defaultAgentModelId after active switch = %q, want gemini-2.5-pro", secondPayload.DefaultAgentModelID)
+	}
+}
+
+func TestModelListHandler_RefreshesOn401Unauthorized(t *testing.T) {
+	f := newModelListFixture(t, []*domain.Account{
+		{
+			ID:           "acc-claude",
+			Email:        "claude@example.com",
+			AccessToken:  "revoked-token",
+			RefreshToken: "refresh-claude",
+			TokenExpiry:  time.Now().Add(time.Hour), // looks valid, but revoked upstream
+			IsActive:     true,
+		},
+	}, proxy.WithTokenRefresher(proxy.TokenRefresherFunc(
+		func(ctx context.Context, refreshToken string) (string, time.Time, error) {
+			return "fresh-token-401", time.Now().Add(time.Hour), nil
+		},
+	)))
+
+	f.mock.ConfigureAccount("revoked-token", &mocks.AccountBehavior{
+		ForceStatusCode: http.StatusUnauthorized,
+		ForceErrorCode:  "UNAUTHENTICATED",
+	})
+	f.mock.SetAccountModels("fresh-token-401", "claude-sonnet-4-6",
+		map[string]mocks.ModelPayloadItem{"claude-sonnet-4-6": {DisplayName: "Claude Sonnet 4.6"}},
+	)
+
+	resp, payload := f.fetchModels(t, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after 401 refresh", resp.StatusCode)
+	}
+	if got := modelIDs(payload.Models); !equalStrings(got, []string{"claude-sonnet-4-6"}) {
+		t.Errorf("merged models = %v, want refreshed account models", got)
+	}
+
+	stored, err := f.repo.GetByID(f.ctx, "acc-claude")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.AccessToken != "fresh-token-401" {
+		t.Errorf("stored token = %q, want fresh-token-401", stored.AccessToken)
+	}
 }
 
 func TestModelListHandler_HonoursPerAccountTimeout(t *testing.T) {
