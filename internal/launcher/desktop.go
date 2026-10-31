@@ -97,7 +97,11 @@ func InstallDesktop(opts DesktopOptions) (*DesktopResult, error) {
 			destIcon = iconSrc
 		}
 	} else if iconSrc == "" {
-		destIcon = "applications-development" // Fallback standard system icon
+		if isIDE {
+			destIcon = "antigravity-ide"
+		} else {
+			destIcon = "antigravity"
+		}
 	}
 
 	// 4. Write .desktop file

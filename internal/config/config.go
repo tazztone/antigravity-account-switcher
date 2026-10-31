@@ -381,12 +381,21 @@ func ResolveAntigravityBin(explicitOverride string) (string, error) {
 	return "", errors.New("could not automatically locate Antigravity binary; specify it via 'antigravity-account-switcher config set antigravity_bin <path>' or flag '--bin'")
 }
 
-// FindAntigravityIcon searches for an icon in the directory of the resolved binary.
+// FindAntigravityIcon searches for an icon in system icon themes and the directory of the resolved binary.
 func FindAntigravityIcon(resolvedBin string) string {
 	if resolvedBin == "" {
 		return ""
 	}
 
+	binBase := strings.ToLower(filepath.Base(resolvedBin))
+	isIDE := strings.Contains(binBase, "antigravity-ide")
+
+	names := []string{"antigravity-ide.png", "antigravity.png", "icon.png", "logo.png"}
+	if !isIDE {
+		names = []string{"antigravity.png", "antigravity-ide.png", "icon.png", "logo.png"}
+	}
+
+	// 1. Probe application directory and resources first
 	dir := filepath.Dir(resolvedBin)
 	searchDirs := []string{
 		dir,
@@ -395,7 +404,32 @@ func FindAntigravityIcon(resolvedBin string) string {
 	}
 
 	for _, d := range searchDirs {
-		for _, name := range []string{"icon.png", "logo.png", "antigravity.png", "antigravity-ide.png"} {
+		for _, name := range names {
+			p := filepath.Join(d, name)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 0 {
+				return p
+			}
+		}
+	}
+
+	// 2. Probe system and user icon theme directories
+	home, _ := os.UserHomeDir()
+	iconDirs := []string{
+		"/usr/share/icons/hicolor/512x512/apps",
+		"/usr/share/icons/hicolor/256x256/apps",
+		"/usr/share/icons/hicolor/128x128/apps",
+		"/usr/share/icons/hicolor/scalable/apps",
+		"/usr/share/pixmaps",
+	}
+	if home != "" {
+		iconDirs = append([]string{
+			filepath.Join(home, ".local", "share", "icons"),
+			filepath.Join(home, ".local", "share", "icons", "hicolor", "512x512", "apps"),
+		}, iconDirs...)
+	}
+
+	for _, d := range iconDirs {
+		for _, name := range names {
 			p := filepath.Join(d, name)
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				return p
