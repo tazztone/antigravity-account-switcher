@@ -356,7 +356,6 @@ func (e *modelSortEntry) modelIDs() []string {
 	return ids
 }
 
-
 // groupModelIDs extracts the modelIds of one ordering group.
 func groupModelIDs(raw json.RawMessage) []string {
 	var group struct {
