@@ -3,6 +3,7 @@ package proxy_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -395,6 +396,54 @@ func TestModelListHandler_HonoursPerAccountTimeout(t *testing.T) {
 	}
 	if got := modelIDs(payload.Models); !equalStrings(got, []string{"claude-sonnet-4-6"}) {
 		t.Errorf("merged models = %v, want the timed-out account excluded", got)
+	}
+}
+
+func TestModelListHandler_CapsTotalFanOutLatency(t *testing.T) {
+	// Setup 6 accounts with concurrency limit = 4, so they run across 2 sequential batches
+	accounts := make([]*domain.Account, 6)
+	for i := 0; i < 6; i++ {
+		accounts[i] = &domain.Account{
+			ID:          fmt.Sprintf("acc-%d", i),
+			Email:       fmt.Sprintf("user-%d@example.com", i),
+			AccessToken: fmt.Sprintf("token-%d", i),
+			IsActive:    i == 0,
+		}
+	}
+	f := newModelListFixture(t, accounts, proxy.WithModelListTimeout(100*time.Millisecond))
+
+	// Configure first account to return immediately with its model
+	f.mock.SetAccountModels("token-0", "claude-sonnet-4-6",
+		map[string]mocks.ModelPayloadItem{"claude-sonnet-4-6": {DisplayName: "Claude Sonnet 4.6"}},
+		mocks.NewAgentModelSort("Recommended", "claude-sonnet-4-6"),
+	)
+
+	// Configure other 5 accounts to hang
+	for i := 1; i < 6; i++ {
+		f.mock.ConfigureAccount(fmt.Sprintf("token-%d", i), &mocks.AccountBehavior{
+			CustomHandler: func(w http.ResponseWriter, r *http.Request) bool {
+				if strings.HasSuffix(r.URL.Path, "fetchAvailableModels") {
+					time.Sleep(500 * time.Millisecond)
+				}
+				return false
+			},
+		})
+	}
+
+	start := time.Now()
+	resp, payload := f.fetchModels(t, nil)
+	duration := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 from responsive account", resp.StatusCode)
+	}
+	if got := modelIDs(payload.Models); !equalStrings(got, []string{"claude-sonnet-4-6"}) {
+		t.Errorf("merged models = %v, want responsive account", got)
+	}
+	// Total wall clock time must be bounded by ModelListTimeout + 500ms (< 800ms)
+	// and never take sequential sum of all hanging batches (2 * 500ms = 1000ms+)
+	if duration > 800*time.Millisecond {
+		t.Errorf("total fan-out took %v, want capped under 800ms", duration)
 	}
 }
 

@@ -101,6 +101,11 @@ func (h *ProxyHandler) serveMergedModelList(w http.ResponseWriter, r *http.Reque
 	results := make([]accountModels, len(candidates))
 	found := make([]bool, len(candidates))
 
+	// Cap the total wall-clock duration of the fan-out so sequential batches across
+	// concurrency limits never block agy startup indefinitely.
+	fanOutCtx, fanOutCancel := context.WithTimeout(ctx, h.cfg.ModelListTimeout+500*time.Millisecond)
+	defer fanOutCancel()
+
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, modelListFanOutConcurrency)
 	for i, acc := range candidates {
@@ -110,7 +115,7 @@ func (h *ProxyHandler) serveMergedModelList(w http.ResponseWriter, r *http.Reque
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			reqCtx, cancel := context.WithTimeout(ctx, h.cfg.ModelListTimeout)
+			reqCtx, cancel := context.WithTimeout(fanOutCtx, h.cfg.ModelListTimeout)
 			defer cancel()
 
 			body, fetchErr := h.fetchModelListForAccount(reqCtx, r, buffered, h.ensureFreshToken(reqCtx, account))
