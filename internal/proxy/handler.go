@@ -615,6 +615,18 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var accErr error
 		if origCategory != CategoryUnknown {
 			acc, accErr = h.accountRepo.GetActiveForCategory(ctx, origCategory)
+		} else {
+			// CategoryUnknown (e.g. /v1internal:retrieveUserQuotaSummary or unmodeled endpoints)
+			// Prefer active account assigned to primary IDE assistant category (Claude & GPT)
+			acc, accErr = h.accountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
+			if accErr != nil || acc == nil {
+				acc, accErr = h.accountRepo.GetActive(ctx)
+			}
+			if acc != nil && !acc.IsActive {
+				if active, gErr := h.accountRepo.GetActive(ctx); gErr != nil || active == nil {
+					_ = h.accountRepo.SetActive(ctx, acc.ID)
+				}
+			}
 		}
 		if accErr != nil || acc == nil {
 			if origCategory != CategoryGeminiArgon {

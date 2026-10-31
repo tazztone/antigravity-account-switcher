@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -58,6 +59,20 @@ func (c *modelListCache) put(accountHash string, data []byte, now time.Time, ttl
 	c.data = data
 	c.accountHash = accountHash
 	c.expiresAt = now.Add(ttl)
+}
+
+// clear evicts any cached model catalog.
+func (c *modelListCache) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = nil
+	c.accountHash = ""
+	c.expiresAt = time.Time{}
+}
+
+// InvalidateModelListCache invalidates the cached model catalog response.
+func (h *ProxyHandler) InvalidateModelListCache() {
+	h.modelListCache.clear()
 }
 
 // isModelListRequest reports whether path is a model catalog endpoint whose answer
@@ -120,6 +135,11 @@ func (h *ProxyHandler) serveMergedModelList(w http.ResponseWriter, r *http.Reque
 
 			body, fetchErr := h.fetchModelListForAccount(reqCtx, r, buffered, h.ensureFreshToken(reqCtx, account))
 			if fetchErr != nil {
+				slog.Warn("model catalog fan-out failed for account",
+					"account_id", account.ID,
+					"email", account.Email,
+					"err", fetchErr,
+				)
 				return
 			}
 			results[idx] = accountModels{accountID: account.ID, body: body}
