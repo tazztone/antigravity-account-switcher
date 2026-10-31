@@ -641,6 +641,7 @@ func (r *AccountRepository) UpsertAccountModels(ctx context.Context, accountID s
 	}
 	defer stmt.Close()
 
+	freshIDs := make([]string, 0, len(models))
 	for _, m := range models {
 		if m == nil || m.ID == "" {
 			continue
@@ -655,6 +656,30 @@ func (r *AccountRepository) UpsertAccountModels(ctx context.Context, accountID s
 		}
 		if _, err := stmt.ExecContext(ctx, accountID, m.ID, displayName, category, nowStr); err != nil {
 			return fmt.Errorf("failed to upsert model rule %s: %w", m.ID, err)
+		}
+		freshIDs = append(freshIDs, m.ID)
+	}
+
+	// Self-heal: any model previously marked discovered for this account that is absent
+	// from the freshly discovered catalog must have discovered reset to 0, so stale or
+	// polluted rules no longer trick IsAccountEligibleForModel. Explicit user toggles
+	// (enabled = 0) are preserved.
+	if len(freshIDs) > 0 {
+		placeholders := make([]string, len(freshIDs))
+		args := make([]any, 0, len(freshIDs)+3)
+		args = append(args, nowStr, accountID)
+		for i, id := range freshIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		pruneQuery := `
+			UPDATE account_model_rules
+			SET discovered = 0, updated_at = ?
+			WHERE account_id = ? AND discovered = 1
+			  AND model_id NOT IN (` + strings.Join(placeholders, ",") + `)
+		`
+		if _, err := tx.ExecContext(ctx, pruneQuery, args...); err != nil {
+			return fmt.Errorf("failed to reset stale discovered model rules: %w", err)
 		}
 	}
 
@@ -755,33 +780,37 @@ func (r *AccountRepository) IsAccountEligibleForModel(ctx context.Context, accou
 	query := `
 		SELECT
 			(SELECT COUNT(*) FROM account_model_rules WHERE account_id = ? AND discovered = 1),
+			COALESCE((SELECT enabled FROM account_model_rules WHERE account_id = ? AND model_id = ? AND discovered = 1), -1),
 			COALESCE((SELECT enabled FROM account_model_rules WHERE account_id = ? AND model_id = ?), -1)
 	`
-	var discoveredCount, enabledInt int
-	if err := r.db.QueryRowContext(ctx, query, accountID, accountID, modelID).
-		Scan(&discoveredCount, &enabledInt); err != nil {
+	var discoveredCount, discoveredEnabled, rawEnabled int
+	if err := r.db.QueryRowContext(ctx, query, accountID, accountID, modelID, accountID, modelID).
+		Scan(&discoveredCount, &discoveredEnabled, &rawEnabled); err != nil {
 		return false, fmt.Errorf("failed to query model rule: %w", err)
 	}
 
 	// 1. Explicit user toggle takes absolute precedence
-	if enabledInt == 1 {
-		return true, nil
-	}
-	if enabledInt == 0 {
+	if rawEnabled == 0 {
 		return false, nil
 	}
 
-	// 2. No explicit rule for this model: internal or preview models bypass
+	// 2. Discovered catalog exists and model was discovered enabled
+	if discoveredEnabled == 1 {
+		return true, nil
+	}
+
+	// 3. No explicit rule for this model: internal or preview models bypass
 	if domain.IsInternalOrPreviewModel(modelID) {
 		return true, nil
 	}
 
-	// 3. No discovered catalog for this account: fail-open for unconfigured models
+	// 4. No discovered catalog for this account: fail-open for unconfigured models
 	if discoveredCount == 0 {
 		return true, nil
 	}
 
-	// 4. Discovered catalog exists, but this model was never discovered on this account
+	// 5. Discovered catalog exists, but this model was never discovered on this account
+	// (or was reset because it is not in the account's actual catalog)
 	return false, nil
 }
 

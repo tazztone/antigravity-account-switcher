@@ -125,6 +125,48 @@ func TestUpsertAccountModels_PreservesUserOverrides(t *testing.T) {
 	}
 }
 
+func TestUpsertAccountModels_SelfHealsStaleDiscoveredRules(t *testing.T) {
+	ctx, _, repo := newEligibilityTestRepo(t)
+	createEligibilityAccount(t, repo, ctx, "acc-stale", "stale@example.com", true)
+
+	// Step 1: Initial discovery with two models (e.g. polluted from union list)
+	firstPass := []*domain.ModelInfo{
+		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", Category: "claude_gpt"},
+		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"},
+	}
+	if err := repo.UpsertAccountModels(ctx, "acc-stale", firstPass); err != nil {
+		t.Fatalf("first UpsertAccountModels: %v", err)
+	}
+
+	eligible, err := repo.IsAccountEligibleForModel(ctx, "acc-stale", "claude-opus-5-5")
+	if err != nil || !eligible {
+		t.Fatalf("expected opus eligible on first pass, got %v err=%v", eligible, err)
+	}
+
+	// Step 2: Fresh discovery with true catalog (only sonnet-4-6 is entitled)
+	secondPass := []*domain.ModelInfo{
+		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", Category: "claude_gpt"},
+	}
+	if err := repo.UpsertAccountModels(ctx, "acc-stale", secondPass); err != nil {
+		t.Fatalf("second UpsertAccountModels: %v", err)
+	}
+
+	// Stale model (claude-opus-5-5) must now be ineligible (discovered = 0)
+	eligible, err = repo.IsAccountEligibleForModel(ctx, "acc-stale", "claude-opus-5-5")
+	if err != nil {
+		t.Fatalf("IsAccountEligibleForModel: %v", err)
+	}
+	if eligible {
+		t.Errorf("expected stale model claude-opus-5-5 to be marked ineligible after second pass")
+	}
+
+	// Valid model (claude-sonnet-4-6) must still be eligible
+	eligible, err = repo.IsAccountEligibleForModel(ctx, "acc-stale", "claude-sonnet-4-6")
+	if err != nil || !eligible {
+		t.Errorf("expected claude-sonnet-4-6 still eligible, got %v err=%v", eligible, err)
+	}
+}
+
 func TestIsAccountEligibleForModel_FailOpenWithoutRules(t *testing.T) {
 	ctx, _, repo := newEligibilityTestRepo(t)
 	createEligibilityAccount(t, repo, ctx, "acc-1", "one@example.com", true)
