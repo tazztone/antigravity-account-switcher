@@ -944,6 +944,26 @@ func runLaunch(args []string) {
 		appName = "Antigravity CLI"
 	}
 
+	// Diagnostic guard: CLI 'agy' only takes prompts via flags/stdin, not path/directory arguments
+	if strings.Contains(binBase, "agy") && len(passthroughArgs) > 0 {
+		for _, arg := range passthroughArgs {
+			isDir := false
+			if arg == "." || arg == ".." {
+				isDir = true
+			} else if fi, err := os.Stat(arg); err == nil && fi.IsDir() {
+				isDir = true
+			}
+			if isDir {
+				fmt.Fprintf(os.Stderr, "Error: resolved binary is the Antigravity CLI ('agy'), which does not accept directory path argument %q.\n\n", arg)
+				fmt.Fprintf(os.Stderr, "To supervise Antigravity IDE, install it or configure its location:\n")
+				fmt.Fprintf(os.Stderr, "  antigravity-account-switcher config set antigravity_bin /path/to/antigravity-ide\n\n")
+				fmt.Fprintf(os.Stderr, "To run agy CLI commands directly with the switcher, use wrap:\n")
+				fmt.Fprintf(os.Stderr, "  antigravity-account-switcher wrap -- agy [args...]\n")
+				os.Exit(1)
+			}
+		}
+	}
+
 	cmdToRun := append([]string{antigravityBin}, passthroughArgs...)
 	fmt.Printf("==> Launching %s with coupled switcher supervisor:\n", appName)
 	fmt.Printf("    Executable: %s\n", antigravityBin)

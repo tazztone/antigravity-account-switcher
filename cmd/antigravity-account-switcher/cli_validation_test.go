@@ -388,3 +388,23 @@ func TestCLI_SubcommandFlags_MaxBodyMB_ValidationErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestCLI_Launch_CLIDirectoryArgumentDiagnostic(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeAgy := filepath.Join(tmpDir, "agy")
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{"launch", "--bin=" + fakeAgy, "."}
+	_, stderr, exitCode := runMainInSubprocess(t, args...)
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1 when passing '.' to agy via launch, got %d", exitCode)
+	}
+	if !strings.Contains(stderr, "does not accept directory path argument") {
+		t.Errorf("expected diagnostic error in stderr, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "antigravity-account-switcher config set antigravity_bin") {
+		t.Errorf("expected guidance in stderr, got:\n%s", stderr)
+	}
+}
