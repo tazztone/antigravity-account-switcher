@@ -372,6 +372,17 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		if body.Mode == domain.RoutingModeSolo || body.Mode == domain.RoutingModePool {
 			_ = a.accountRepo.SetCategoryRoutingMode(ctx, cat, body.Mode)
 		}
+		if err == nil {
+			if catsByAcc, cErr := a.accountRepo.GetActiveCategoriesByAccount(ctx); cErr == nil {
+				totalCats := 0
+				for _, cats := range catsByAcc {
+					totalCats += len(cats)
+				}
+				if totalCats > 0 && len(catsByAcc[id]) == totalCats {
+					_ = a.accountRepo.SetActive(ctx, id)
+				}
+			}
+		}
 	default:
 		writeErrorJSON(w, http.StatusBadRequest, "invalid category", nil)
 		return

@@ -997,15 +997,19 @@
       </div>
 
       <div class="account-actions">
-        ${activeCats.length === 3 ? `
+        ${isActive && activeCats.length === 3 ? `
           <div class="active-pill" aria-current="true">
             All Categories Active
           </div>
+        ` : (!isActive && activeCats.length === 3 ? `
+          <button class="btn btn-primary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Synchronize this account as primary active proxy login">
+            Set as Primary Active
+          </button>
         ` : `
           <button class="btn btn-secondary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Activate all model categories on this account">
             Activate All Categories
           </button>
-        `}
+        `)}
         <button class="btn btn-danger-subtle btn-delete-account" data-id="${escapeHtml(acc.id)}" title="Remove Account" aria-label="Remove Account">
           <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
