@@ -1037,13 +1037,11 @@ func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, s
 
 				var ms []*domain.ModelInfo
 				src := ""
-				// The local language_server reflects only the primary IDE login.
-				if aAcc.IsActive {
-					if lm, err := quota.QueryAvailableModels(ctx); err == nil && len(lm) > 0 {
-						ms, src = lm, "language_server"
-					}
-				}
-				if ms == nil && aAcc.AccessToken != "" {
+				// Query Cloud Code PA directly per account with that account's own Bearer token.
+				// Note: we deliberately do not query language_server here, because language_server
+				// receives the merged multi-account union catalog through the proxy, which would
+				// falsely stamp all pool models onto the active account in account_model_rules.
+				if aAcc.AccessToken != "" {
 					if cm, err := quota.FetchAvailableModelsFromCloudCode(ctx, aAcc.AccessToken); err == nil && len(cm) > 0 {
 						ms, src = cm, "cloud_code_pa"
 					}

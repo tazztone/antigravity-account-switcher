@@ -514,6 +514,23 @@ func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
 		t.Fatalf("expected acc-pro available for gemini_argon via 5.5 model rule, got %v err=%v", available, err)
 	}
 
+	// Add acc-pro-dot with dot notation in model rule (claude-sonnet-5.5-medium)
+	createEligibilityAccount(t, repo, ctx, "acc-pro-dot", "pro-dot@example.com", false)
+	if err := repo.UpsertAccountModels(ctx, "acc-pro-dot", []*domain.ModelInfo{
+		{ID: "claude-sonnet-5.5-medium", DisplayName: "Claude Sonnet 5.5 (Medium)", Category: "claude_gpt"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels: %v", err)
+	}
+
+	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-pro-dot", domain.CategoryGeminiArgon)
+	if err != nil || !available {
+		t.Fatalf("expected acc-pro-dot available for gemini_argon via 5.5 dot model rule, got %v err=%v", available, err)
+	}
+	hasArgon, err := repo.HasArgonEntitlement(ctx, "acc-pro-dot")
+	if err != nil || !hasArgon {
+		t.Fatalf("expected HasArgonEntitlement true for acc-pro-dot, got %v err=%v", hasArgon, err)
+	}
+
 	// Internal/tab/preview models are always eligible, even when disabled in DB rules
 	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
 		AccountID: "acc-pro",
