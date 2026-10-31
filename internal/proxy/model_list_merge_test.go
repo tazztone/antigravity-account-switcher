@@ -94,6 +94,61 @@ func TestMergeModelListResponses_UnionsDisjointCatalogs(t *testing.T) {
 	}
 }
 
+func TestMergeModelListResponses_AppendsToPrimaryGroupForIDEParity(t *testing.T) {
+	base := []byte(`{
+		"models": {
+			"claude-opus-5-5-high": {"displayName": "Claude Opus 5.5 (High)"},
+			"gemini-4-argon-medium": {"displayName": "Gemini 4 Argon (Medium)"}
+		},
+		"defaultAgentModelId": "gemini-4-argon-medium",
+		"agentModelSorts": [{"displayName": "Recommended", "groups": [{"modelIds": ["gemini-4-argon-medium", "claude-opus-5-5-high"]}]}]
+	}`)
+	other := []byte(`{
+		"models": {
+			"claude-sonnet-4-6": {"displayName": "Claude Sonnet 4.6 (Thinking)"},
+			"claude-opus-4-6-thinking": {"displayName": "Claude Opus 4.6 (Thinking)"}
+		},
+		"defaultAgentModelId": "claude-sonnet-4-6",
+		"agentModelSorts": [{"displayName": "Recommended", "groups": [{"modelIds": ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]}]}]
+	}`)
+
+	merged, err := MergeModelListResponses([][]byte{base, other})
+	if err != nil {
+		t.Fatalf("MergeModelListResponses: %v", err)
+	}
+
+	var doc struct {
+		AgentModelSorts []struct {
+			DisplayName string `json:"displayName"`
+			Groups      []struct {
+				ModelIDs []string `json:"modelIds"`
+			} `json:"groups"`
+		} `json:"agentModelSorts"`
+	}
+	if err := json.Unmarshal(merged, &doc); err != nil {
+		t.Fatalf("unmarshal agentModelSorts: %v", err)
+	}
+
+	if len(doc.AgentModelSorts) != 1 {
+		t.Fatalf("expected 1 sort entry, got %d", len(doc.AgentModelSorts))
+	}
+	// Antigravity IDE requires all models to reside in groups[0]
+	if len(doc.AgentModelSorts[0].Groups) != 1 {
+		t.Errorf("expected 1 unified group in groups[0], got %d groups", len(doc.AgentModelSorts[0].Groups))
+	}
+
+	wantIDs := []string{
+		"gemini-4-argon-medium",
+		"claude-opus-5-5-high",
+		"claude-sonnet-4-6",
+		"claude-opus-4-6-thinking",
+	}
+	gotIDs := doc.AgentModelSorts[0].Groups[0].ModelIDs
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Errorf("groups[0].modelIds = %v, want %v", gotIDs, wantIDs)
+	}
+}
+
 func TestMergeModelListResponses_PrefersEnabledModelEntry(t *testing.T) {
 	base := []byte(`{"models": {"claude-sonnet-4-6": {"displayName": "Claude Sonnet 4.6", "disabled": true}}}`)
 	other := []byte(`{"models": {"claude-sonnet-4-6": {"displayName": "Claude Sonnet 4.6", "disabled": false, "maxTokens": 8192}}}`)

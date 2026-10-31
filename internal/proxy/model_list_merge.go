@@ -177,7 +177,7 @@ func (d *modelListDocument) mergeSorts(other *modelListDocument, ownModels map[s
 				fresh = append(fresh, id)
 			}
 			if len(fresh) > 0 {
-				target.appendGroupWithRaw(group, fresh)
+				target.appendModels(fresh)
 				changed = true
 			}
 		}
@@ -186,6 +186,48 @@ func (d *modelListDocument) mergeSorts(other *modelListDocument, ownModels map[s
 	if changed {
 		d.setSorts(baseEntries)
 	}
+}
+
+// appendModels appends model IDs to the primary ordering group (groups[0]),
+// or creates the primary group if none exists yet. This ensures IDE parity,
+// as Antigravity IDE's model picker only renders groups[0].options.
+func (e *modelSortEntry) appendModels(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	if len(e.groups) == 0 {
+		e.appendGroupWithRaw(nil, ids)
+		return
+	}
+
+	var primary map[string]json.RawMessage
+	if err := json.Unmarshal(e.groups[0], &primary); err == nil && primary != nil {
+		var existingIDs []string
+		if rawIDs, ok := primary["modelIds"]; ok {
+			_ = json.Unmarshal(rawIDs, &existingIDs)
+		}
+		seen := make(map[string]bool, len(existingIDs)+len(ids))
+		for _, id := range existingIDs {
+			seen[id] = true
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				existingIDs = append(existingIDs, id)
+			}
+		}
+		newIDsBytes, err := json.Marshal(existingIDs)
+		if err == nil {
+			primary["modelIds"] = newIDsBytes
+			if marshaled, err := json.Marshal(primary); err == nil {
+				e.groups[0] = marshaled
+				e.dirty = true
+				return
+			}
+		}
+	}
+
+	e.appendGroupWithRaw(nil, ids)
 }
 
 // appendGroup adds a fresh ordering group holding the given model IDs.
