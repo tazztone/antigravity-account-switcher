@@ -691,6 +691,52 @@ func TestResolveAntigravityBin_ExplicitOverride(t *testing.T) {
 	}
 }
 
+func TestCandidateAntigravityPaths_PrioritizesGUIOverCLI(t *testing.T) {
+	candidates := CandidateAntigravityPaths()
+	if len(candidates) == 0 {
+		t.Fatal("expected non-empty candidate paths")
+	}
+
+	var ideIndex, agyIndex int = -1, -1
+	for i, c := range candidates {
+		base := filepath.Base(c)
+		if (base == "antigravity-ide" || base == "antigravity") && ideIndex == -1 {
+			ideIndex = i
+		}
+		if base == "agy" {
+			agyIndex = i
+		}
+	}
+
+	if ideIndex == -1 {
+		t.Error("expected candidate paths to contain antigravity or antigravity-ide")
+	}
+	if agyIndex != -1 && ideIndex > agyIndex {
+		t.Errorf("expected GUI binary index (%d) to precede CLI agy index (%d)", ideIndex, agyIndex)
+	}
+}
+
+func TestFindAntigravityIcon_IncludesIDEIcon(t *testing.T) {
+	tmpDir := t.TempDir()
+	binPath := filepath.Join(tmpDir, "Antigravity-IDE", "antigravity-ide")
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	iconPath := filepath.Join(tmpDir, "antigravity-ide.png")
+	if err := os.WriteFile(iconPath, []byte("fake icon png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	found := FindAntigravityIcon(binPath)
+	if found != iconPath {
+		t.Errorf("expected found icon %s, got %s", iconPath, found)
+	}
+}
+
 func TestFindAntigravityIcon(t *testing.T) {
 	tmpDir := t.TempDir()
 	binPath := filepath.Join(tmpDir, "Antigravity-x64", "antigravity")

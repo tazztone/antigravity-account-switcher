@@ -276,13 +276,19 @@ func CandidateAntigravityPaths() []string {
 	if home != "" {
 		candidates = append(candidates,
 			// 1. Standard XDG user application directories (Recommended, no sudo)
+			filepath.Join(home, ".local", "bin", "antigravity-ide"),
 			filepath.Join(home, ".local", "bin", "antigravity"),
-			filepath.Join(home, ".local", "bin", "agy"),
+			filepath.Join(home, ".local", "share", "antigravity-ide", "antigravity-ide"),
+			filepath.Join(home, ".local", "share", "antigravity-ide", "Antigravity-IDE", "antigravity-ide"),
 			filepath.Join(home, ".local", "share", "antigravity", "antigravity"),
 			filepath.Join(home, ".local", "share", "antigravity", "Antigravity-x64", "antigravity"),
 			filepath.Join(home, ".local", "share", "Antigravity", "antigravity"),
 			filepath.Join(home, ".local", "share", "Antigravity", "Antigravity-x64", "antigravity"),
 			// 2. Custom tools & user development directories
+			filepath.Join(home, "tools", "Antigravity-IDE", "antigravity-ide"),
+			filepath.Join(home, "tools", "Antigravity-IDE", "Antigravity-IDE", "antigravity-ide"),
+			filepath.Join(home, "tools", "antigravity-ide", "antigravity-ide"),
+			filepath.Join(home, "tools", "antigravity-ide", "Antigravity-IDE", "antigravity-ide"),
 			filepath.Join(home, "tools", "Antigravity", "Antigravity-x64", "antigravity"),
 			filepath.Join(home, "tools", "Antigravity", "antigravity"),
 			filepath.Join(home, "tools", "antigravity", "Antigravity-x64", "antigravity"),
@@ -298,13 +304,23 @@ func CandidateAntigravityPaths() []string {
 
 	// 4. System-wide FHS locations (Installed via sudo into /opt or /usr/local/bin)
 	candidates = append(candidates,
+		"/usr/local/bin/antigravity-ide",
 		"/usr/local/bin/antigravity",
+		"/opt/antigravity-ide/antigravity-ide",
+		"/opt/antigravity-ide/Antigravity-IDE/antigravity-ide",
 		"/opt/antigravity/antigravity",
 		"/opt/antigravity/Antigravity-x64/antigravity",
 		"/opt/Antigravity/antigravity",
 		"/opt/Antigravity/Antigravity-x64/antigravity",
 		"/Applications/Antigravity.app/Contents/MacOS/Antigravity",
 	)
+
+	// 5. User CLI fallback (only probed if no GUI IDE / app binary is found)
+	if home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".local", "bin", "agy"),
+		)
+	}
 
 	return candidates
 }
@@ -313,8 +329,8 @@ func CandidateAntigravityPaths() []string {
 // 1. Explicit override argument (if provided)
 // 2. ANTIGRAVITY_BIN environment variable
 // 3. Saved config file setting (`antigravity_bin`)
-// 4. Candidate probing paths in filesystem
-// 5. PATH lookups (`antigravity`, then `agy`)
+// 4. Candidate probing paths in filesystem (IDE and Desktop apps prioritized before CLI)
+// 5. PATH lookups (`antigravity-ide`, `antigravity`, then `agy`)
 func ResolveAntigravityBin(explicitOverride string) (string, error) {
 	if explicitOverride != "" {
 		if _, err := os.Stat(explicitOverride); err == nil {
@@ -356,7 +372,7 @@ func ResolveAntigravityBin(explicitOverride string) (string, error) {
 	}
 
 	// Look up in PATH
-	for _, cmdName := range []string{"antigravity", "agy"} {
+	for _, cmdName := range []string{"antigravity-ide", "antigravity", "agy"} {
 		if path, err := exec.LookPath(cmdName); err == nil {
 			return path, nil
 		}
@@ -379,7 +395,7 @@ func FindAntigravityIcon(resolvedBin string) string {
 	}
 
 	for _, d := range searchDirs {
-		for _, name := range []string{"icon.png", "logo.png", "antigravity.png"} {
+		for _, name := range []string{"icon.png", "logo.png", "antigravity.png", "antigravity-ide.png"} {
 			p := filepath.Join(d, name)
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				return p

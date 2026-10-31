@@ -411,7 +411,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 	if _, err := exec.LookPath(targetBin); err != nil {
 		base := strings.ToLower(filepath.Base(targetBin))
 		base = strings.TrimSuffix(base, ".exe")
-		if base == "antigravity" || base == "agy" {
+		if base == "antigravity" || base == "agy" || base == "antigravity-ide" {
 			if resolved, rErr := config.ResolveAntigravityBin(""); rErr == nil && resolved != "" {
 				targetBin = resolved
 			}
