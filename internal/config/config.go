@@ -413,9 +413,11 @@ var (
 )
 
 // DetectAntigravityCLIVersion determines the Antigravity / AGY CLI semantic version.
-// It probes the resolved binary with '--version'. If detection fails or returns a
+// It probes the CLI binary ('agy') with '--version'. If detection fails or returns a
 // version earlier than "1.4.10", it defaults to "1.4.10" so that Google Cloud Code PA
 // enables Gemini 4 Argon quota and models.
+// If the target or resolved binary is a GUI application (e.g. 'antigravity-ide' or 'antigravity'),
+// process execution is skipped to prevent launching the heavy Electron runtime.
 func DetectAntigravityCLIVersion(overrideBin string) string {
 	detectedVersionMu.RLock()
 	if detectedVersion != "" && overrideBin == "" {
@@ -428,12 +430,31 @@ func DetectAntigravityCLIVersion(overrideBin string) string {
 	const minSupportedVersion = "1.4.10"
 	targetVersion := minSupportedVersion
 
-	bin, err := ResolveAntigravityBin(overrideBin)
-	if err == nil && bin != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	var cliBin string
+	if overrideBin != "" {
+		base := strings.ToLower(filepath.Base(overrideBin))
+		base = strings.TrimSuffix(base, ".exe")
+		// Never execute '--version' on GUI binaries
+		if base != "antigravity-ide" && base != "antigravity" {
+			cliBin = overrideBin
+		}
+	} else {
+		// Specifically probe for the CLI binary 'agy'
+		if path, err := exec.LookPath("agy"); err == nil {
+			cliBin = path
+		} else if home, err := os.UserHomeDir(); err == nil && home != "" {
+			candidate := filepath.Join(home, ".local", "bin", "agy")
+			if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+				cliBin = candidate
+			}
+		}
+	}
+
+	if cliBin != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, bin, "--version")
-		cmd.WaitDelay = 500 * time.Millisecond
+		cmd := exec.CommandContext(ctx, cliBin, "--version")
+		cmd.WaitDelay = 300 * time.Millisecond
 		if out, cmdErr := cmd.Output(); cmdErr == nil {
 			trimmed := strings.TrimSpace(string(out))
 			if m := versionRegex.FindString(trimmed); m != "" {

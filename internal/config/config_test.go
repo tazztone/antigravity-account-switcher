@@ -784,7 +784,7 @@ func TestCompareSemver(t *testing.T) {
 
 func TestDetectAntigravityCLIVersion_ScriptSemver(t *testing.T) {
 	tmpDir := t.TempDir()
-	fakeBin := filepath.Join(tmpDir, "antigravity")
+	fakeBin := filepath.Join(tmpDir, "agy")
 	script := "#!/bin/sh\necho 'antigravity/cli/1.10.0 (linux-x64)'\n"
 	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -793,6 +793,23 @@ func TestDetectAntigravityCLIVersion_ScriptSemver(t *testing.T) {
 	ver := DetectAntigravityCLIVersion(fakeBin)
 	if ver != "1.10.0" {
 		t.Errorf("expected detected version 1.10.0, got %s", ver)
+	}
+}
+
+func TestDetectAntigravityCLIVersion_SkipsGUIBinaries(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, guiName := range []string{"antigravity-ide", "antigravity"} {
+		fakeGUI := filepath.Join(tmpDir, guiName)
+		// Write a script that fails if executed
+		script := "#!/bin/sh\nexit 42\n"
+		if err := os.WriteFile(fakeGUI, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		ver := DetectAntigravityCLIVersion(fakeGUI)
+		if ver != "1.4.10" {
+			t.Errorf("expected default 1.4.10 for GUI binary %s without execution, got %s", guiName, ver)
+		}
 	}
 }
 
