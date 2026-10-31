@@ -110,11 +110,13 @@ The codebase adheres strictly to **Clean Architecture / Hexagonal Principles**:
    - Browser launching handles platform-specific tools (`open` on macOS, `rundll32` on Windows, `xdg-open` on Linux).
    - Local `language_server` discovery via `/proc` on Linux automatically and transparently falls back to direct Google Cloud Code PA endpoint polling on Windows and macOS.
    - For full deployment steps, architecture, and native parity requirements on Windows, see `WINDOWS_COMPATIBILITY.md`.
-5. **Union Model List Merging**:
+5. **Union Model List Merging & IDE UI Parity**:
    - `language_server`'s model picker calls `POST /v1internal:fetchAvailableModels` with no model in the payload, so the proxy intercepts it (`isModelListRequest` → `serveMergedModelList`) instead of resolving a single account.
    - The request is fanned out to every enabled account (bounded concurrency, `DefaultModelListTimeout` per account, expired tokens refreshed first). Responses are merged by `MergeModelListResponses`: union of the `models` map (enabled entry wins), merged `agentModelSorts` by `displayName`, and the active account's `defaultAgentModelId`.
+   - **Antigravity IDE Parity**: The IDE UI explicitly parses only `agentModelSorts[0].groups[0].options`. Fan-out models must be appended directly into `groups[0].modelIds` (`appendModels`) rather than appended as new groups (`groups[1]`), ensuring all pooled models appear in the editor picker.
+   - **Category-Less Quota Routing**: Requests lacking model metadata (such as `POST /v1internal:retrieveUserQuotaSummary`) route to `GetActiveForCategory(ctx, CategoryClaudeGPT)` first, ensuring the IDE "View Usage" flyout displays live quota for the primary active assistant.
    - The merge works on raw JSON (`map[string]json.RawMessage`), so upstream fields this codebase does not model survive byte-for-byte. Never re-marshal through a reduced typed struct.
-   - The merged catalog is cached for `DefaultModelListCacheTTL` and invalidated by a change in the sorted account-ID set. Each merge also persists discovered models via `UpsertAccountModels` so per-model eligibility routing stays fresh.
+   - The merged catalog is cached for `DefaultModelListCacheTTL` and invalidated by a change in the sorted account-ID set or explicit `InvalidateModelListCache()`. Each merge also persists discovered models via `UpsertAccountModels` so per-model eligibility routing stays fresh.
    - Exhausted accounts still contribute entitlements; only `AccountStatusDisabled` accounts are excluded from the fan-out.
 
 ---

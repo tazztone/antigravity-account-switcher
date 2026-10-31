@@ -229,6 +229,8 @@ O `language_server` consulta o proxy para montar o seletor de modelos (`POST /v1
 **O switcher responde com a união de todo o pool:**
 - A requisição é distribuída simultaneamente para todas as contas habilitadas (concorrência limitada, timeout de 5s por conta), cada uma com seu próprio token Bearer.
 - As respostas são mescladas em um único catálogo: união do mapa `models`, ordenação `agentModelSorts` combinada e `defaultAgentModelId` da conta ativa. Campos desconhecidos do upstream são preservados exatamente como vieram.
+- **Paridade com Antigravity IDE**: Modelos adicionais do pool são integrados diretamente em `groups[0].modelIds`, garantindo visibilidade total no seletor do editor, que renderiza estritamente o grupo primário.
+- **Roteamento de Resumo de Cota**: Requisições de cota sem modelo (`POST /v1internal:retrieveUserQuotaSummary`) são encaminhadas para a conta do assistente principal (`claude_gpt`), mantendo o painel de uso do IDE com os limites reais da conta ativa.
 - O catálogo mesclado é mantido em cache por 60 segundos e invalidado assim que a composição do pool muda.
 - Cada mesclagem também atualiza `account_model_rules`, para que o roteamento por elegibilidade saiba imediatamente qual conta pode atender cada modelo.
 

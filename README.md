@@ -229,6 +229,8 @@ When switching between model providers (e.g. Claude <-> Gemini) or continuing mu
 **The switcher answers it with the union of the whole pool:**
 - The request is fanned out concurrently to every enabled account (bounded concurrency, 5s per-account timeout), each with its own bearer token.
 - Responses are merged into a single catalog: union of the `models` map, merged `agentModelSorts` ordering, and the active account's `defaultAgentModelId`. Unknown upstream fields are preserved verbatim.
+- **Antigravity IDE Parity**: Additional pooled models are merged directly into `groups[0].modelIds`, ensuring full visibility in the IDE's model picker which strictly renders the primary group.
+- **Category-Less Quota Summary Routing**: Unmodeled quota requests (`POST /v1internal:retrieveUserQuotaSummary`) route to the primary assistant account (`claude_gpt`), keeping the IDE flyout accurately reflecting active quota limits.
 - The merged catalog is cached for 60 seconds and invalidated as soon as the pool composition changes.
 - Each merge also refreshes `account_model_rules`, so per-model eligibility routing immediately knows which account can serve which model.
 
