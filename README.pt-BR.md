@@ -7,17 +7,20 @@
 [![CI Status](https://github.com/Muriel-Gasparini/antigravity-account-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/Muriel-Gasparini/antigravity-account-switcher/actions)
 [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/Muriel-Gasparini/antigravity-account-switcher?utm_source=oss&utm_medium=github&utm_campaign=Muriel-Gasparini%2Fantigravity-account-switcher&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
-Gerenciamento automático de pool de contas, monitoramento de cotas em tempo real e failover transparente em erros HTTP 429 para o **Google Antigravity 2.0** e CLI (`agy`).
+Gerenciamento automático de pool de contas, monitoramento de cotas em tempo real e failover transparente em erros HTTP 429 para o **Google Antigravity IDE**, **Antigravity 2.0** e CLI (`agy`).
 
 ---
 
-## O que é o Antigravity 2.0 e por que esta ferramenta é necessária?
+## O que é o Antigravity e por que esta ferramenta é necessária?
 
-O **Google Antigravity 2.0** é o novo aplicativo desktop de desenvolvimento com IA criado pela equipe do Google DeepMind (completamente independente e diferente das antigas extensões de preview para VS Code).
+O Google Antigravity disponibiliza diferentes superfícies de desenvolvimento conectadas ao Google Cloud Code PA:
+- **Antigravity IDE**: Editor de código standalone com foco em IA (baseado em fork do VS Code / VSCodium, binário `antigravity-ide`).
+- **Antigravity 2.0**: Aplicativo desktop standalone de orquestração de agentes (baseado em Electron, binário `antigravity`).
+- **Antigravity CLI**: Interface de linha de comando no terminal (`agy`).
 
-Ao trabalhar intensamente com o Antigravity 2.0, é muito comum atingir os limites de requisições (`HTTP 429 RESOURCE_EXHAUSTED` ou a janela deslizante de 5 horas de cota) nos modelos Claude, GPT e Gemini.
+Ao trabalhar intensamente em qualquer uma dessas superfícies, é muito comum atingir os limites de requisições (`HTTP 429 RESOURCE_EXHAUSTED` ou a janela deslizante de 5 horas de cota) nos modelos Claude, GPT e Gemini.
 
-O **Antigravity Account Switcher** roda como um supervisor local transparente e de alta performance que intercepta as requisições do Antigravity 2.0. Quando a conta ativa esgota sua cota, o switcher **alterna instantaneamente para a próxima conta disponível no seu pool e repete a requisição em memória** — sem interromper o raciocínio do agente, sem quebrar os streams de resposta e sem gerar erros na interface.
+O **Antigravity Account Switcher** roda como um supervisor local transparente e de alta performance que intercepta as requisições ao Google Cloud Code PA. Quando a conta ativa esgota sua cota, o switcher **alterna instantaneamente para a próxima conta disponível no seu pool e repete a requisição em memória** — sem interromper o raciocínio do agente, sem quebrar os streams de resposta e sem gerar erros na interface.
 
 ---
 
@@ -65,34 +68,39 @@ sudo ln -sf /opt/antigravity/antigravity /usr/local/bin/antigravity
 
 ---
 
-## Como o Switcher se Conecta ao Antigravity 2.0
+## Como o Switcher se Conecta ao Antigravity
 
 ### Detecção Automática (Zero Configuração)
 Se você seguiu qualquer um dos métodos de instalação recomendados acima, **você não precisa configurar nenhum caminho manualmente**.  
-Ao executar `antigravity-account-switcher launch`, o switcher busca automaticamente o executável nos caminhos padrão do Linux:
-1. `~/.local/bin/antigravity`
-2. `~/.local/share/antigravity/antigravity`
-3. `/usr/local/bin/antigravity`
-4. `/opt/antigravity/antigravity`
-5. `~/tools/Antigravity/Antigravity-x64/antigravity` *(fallback para pastas personalizadas)*
-6. Qualquer comando `antigravity` ou `agy` presente no `$PATH` do seu sistema
+Ao executar `antigravity-account-switcher launch`, o switcher busca automaticamente o executável nos caminhos padrão do Linux, priorizando IDEs e aplicativos gráficos antes da CLI:
+1. `~/.local/bin/antigravity-ide` ou `~/.local/bin/antigravity`
+2. `~/.local/share/antigravity-ide/...` ou `~/.local/share/antigravity/...`
+3. `/usr/local/bin/antigravity-ide` ou `/usr/local/bin/antigravity`
+4. `/opt/antigravity-ide/...` ou `/opt/antigravity/...`
+5. `~/tools/Antigravity-IDE/...` ou `~/tools/Antigravity/...`
+6. `~/.local/bin/agy` *(fallback para CLI)*
+7. Qualquer comando `antigravity-ide`, `antigravity` ou `agy` presente no `$PATH` do seu sistema
 
 ### Configuração de Caminho Personalizado
-Caso tenha descompactado o Antigravity 2.0 em uma pasta diferente, você pode especificar o caminho facilmente por qualquer um destes métodos:
+Caso queira alternar explicitamente entre o Antigravity IDE e o Antigravity 2.0 ou tenha descompactado em outra pasta:
 
 **Método 1: Configuração permanente via CLI (Recomendado)**
 ```bash
-antigravity-account-switcher config set antigravity_bin /caminho/para/seu/antigravity
+# Para o Antigravity IDE:
+antigravity-account-switcher config set antigravity_bin /usr/local/bin/antigravity-ide
+
+# Para o Antigravity 2.0:
+antigravity-account-switcher config set antigravity_bin /usr/local/bin/antigravity
 ```
 
 **Método 2: Variável de Ambiente**
 ```bash
-export ANTIGRAVITY_BIN="/caminho/para/seu/antigravity"
+export ANTIGRAVITY_BIN="/usr/local/bin/antigravity-ide"
 ```
 
 **Método 3: Flag no momento da execução**
 ```bash
-antigravity-account-switcher launch --bin /caminho/para/seu/antigravity
+antigravity-account-switcher launch --bin /usr/local/bin/antigravity-ide
 ```
 
 ---

@@ -7,25 +7,28 @@
 [![CI Status](https://github.com/Muriel-Gasparini/antigravity-account-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/Muriel-Gasparini/antigravity-account-switcher/actions)
 [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/Muriel-Gasparini/antigravity-account-switcher?utm_source=oss&utm_medium=github&utm_campaign=Muriel-Gasparini%2Fantigravity-account-switcher&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
-Automatic Multi-Account Pool Management, Real-Time Quota Tracking, and Seamless HTTP 429 Failover for **Google Antigravity 2.0** and CLI (`agy`).
+Automatic Multi-Account Pool Management, Real-Time Quota Tracking, and Seamless HTTP 429 Failover for **Google Antigravity IDE**, **Antigravity 2.0**, and CLI (`agy`).
 
 ---
 
-## What is Antigravity 2.0 and why is this needed?
+## What is Antigravity and why is this needed?
 
-**Google Antigravity 2.0** is Google DeepMind's standalone AI-first development application (distinct from the legacy preview VS Code extension).
+Google Antigravity provides multiple development surfaces connecting to Google Cloud Code PA:
+- **Antigravity IDE**: Standalone AI-first code editor (built on a VS Code / VSCodium fork, binary `antigravity-ide`).
+- **Antigravity 2.0**: Standalone desktop agent application (built on Electron, binary `antigravity`).
+- **Antigravity CLI**: Command-line terminal interface (`agy`).
 
-When working intensely with Antigravity 2.0, developers frequently hit rate limits (`HTTP 429 RESOURCE_EXHAUSTED` or rolling 5-hour limits) across Claude, GPT, and Gemini model tiers.
+When working intensely across any of these surfaces, developers frequently hit rate limits (`HTTP 429 RESOURCE_EXHAUSTED` or rolling 5-hour limits) across Claude, GPT, and Gemini model tiers.
 
-**Antigravity Account Switcher** runs as a transparent, high-performance local supervisor that intercepts Antigravity 2.0 requests. When your active account exhausts its quota, the switcher **seamlessly rotates to the next available account in your pool and replays the in-flight request in memory** — without interrupting your agent's thinking, breaking generation streams, or causing errors in the editor.
+**Antigravity Account Switcher** runs as a transparent, high-performance local supervisor that intercepts requests to Google Cloud Code PA. When your active account exhausts its quota, the switcher **seamlessly rotates to the next available account in your pool and replays the in-flight request in memory** — without interrupting your agent's thinking, breaking generation streams, or causing errors in the editor.
 
 ---
 
-## Installing Google Antigravity 2.0 on Linux
+## Installing Google Antigravity on Linux
 
 > [!IMPORTANT]
-> **Google Antigravity 2.0 is NOT distributed via package managers (`apt`, `snap`, `dnf`, `pacman`, or `flatpak`).**  
-> Google provides it directly as a standalone `.tar.gz` archive containing the bundled binary and runtime libraries.
+> **Google Antigravity binaries are NOT distributed via package managers (`apt`, `snap`, `dnf`, `pacman`, or `flatpak`).**  
+> Google provides them directly as standalone `.tar.gz` archives containing bundled binaries and runtime libraries.
 
 On Linux, software distributed this way should be placed in either the **XDG User Directory** (recommended, no root required) or the **System `/opt` Directory** (requires root).
 
@@ -34,16 +37,16 @@ On Linux, software distributed this way should be placed in either the **XDG Use
 This follows the **Linux XDG Base Directory Specification** (`~/.local/share/` and `~/.local/bin/`). It does not require administrator privileges and will not affect other users or system files:
 
 ```bash
-# 1. Create the application directory
+# 1. Create application directory
 mkdir -p ~/.local/share/antigravity
 
-# 2. Extract the downloaded Google archive
+# 2. Extract downloaded Google archive
 tar -xzf ~/Downloads/Antigravity-linux-x64.tar.gz -C ~/.local/share/antigravity --strip-components=1
 
-# 3. Ensure the binary has execution permissions
+# 3. Ensure binary has execution permissions
 chmod +x ~/.local/share/antigravity/antigravity
 
-# 4. Create a symlink in ~/.local/bin (in your PATH on modern Linux distros)
+# 4. Create symlink in ~/.local/bin (in your PATH on modern Linux distros)
 mkdir -p ~/.local/bin
 ln -sf ~/.local/share/antigravity/antigravity ~/.local/bin/antigravity
 ```
@@ -56,7 +59,7 @@ This follows the **Filesystem Hierarchy Standard (FHS)** for add-on third-party 
 # 1. Create system directory
 sudo mkdir -p /opt/antigravity
 
-# 2. Extract the archive
+# 2. Extract archive
 sudo tar -xzf ~/Downloads/Antigravity-linux-x64.tar.gz -C /opt/antigravity --strip-components=1
 
 # 3. Create global symlink
@@ -65,34 +68,39 @@ sudo ln -sf /opt/antigravity/antigravity /usr/local/bin/antigravity
 
 ---
 
-## How the Switcher Connects to Antigravity 2.0
+## How the Switcher Connects to Antigravity
 
 ### Automatic Detection (Zero Configuration)
 If you followed either of the standard installation methods above, **you do not need to configure any paths**.  
-When you run `antigravity-account-switcher launch`, the switcher automatically discovers your binary by checking standard Linux locations:
-1. `~/.local/bin/antigravity`
-2. `~/.local/share/antigravity/antigravity`
-3. `/usr/local/bin/antigravity`
-4. `/opt/antigravity/antigravity`
-5. `~/tools/Antigravity/Antigravity-x64/antigravity` *(user tools folder fallback)*
-6. Any `antigravity` or `agy` command available in your system `$PATH`
+When you run `antigravity-account-switcher launch`, the switcher automatically discovers your binary, prioritizing GUI IDE and desktop applications before CLI:
+1. `~/.local/bin/antigravity-ide` or `~/.local/bin/antigravity`
+2. `~/.local/share/antigravity-ide/...` or `~/.local/share/antigravity/...`
+3. `/usr/local/bin/antigravity-ide` or `/usr/local/bin/antigravity`
+4. `/opt/antigravity-ide/...` or `/opt/antigravity/...`
+5. `~/tools/Antigravity-IDE/...` or `~/tools/Antigravity/...`
+6. `~/.local/bin/agy` *(CLI fallback)*
+7. Any `antigravity-ide`, `antigravity`, or `agy` command available in system `$PATH`
 
 ### Custom Path Configuration
-If you unpacked Antigravity 2.0 into a custom folder, you can explicitly configure the binary location using any of the following methods:
+If you unpacked Antigravity into a custom folder or want to explicitly select between Antigravity IDE and Antigravity 2.0:
 
 **Method 1: Permanent setting via CLI (Recommended)**
 ```bash
-antigravity-account-switcher config set antigravity_bin /path/to/your/antigravity
+# For Antigravity IDE:
+antigravity-account-switcher config set antigravity_bin /usr/local/bin/antigravity-ide
+
+# For Antigravity 2.0:
+antigravity-account-switcher config set antigravity_bin /usr/local/bin/antigravity
 ```
 
 **Method 2: Environment Variable**
 ```bash
-export ANTIGRAVITY_BIN="/path/to/your/antigravity"
+export ANTIGRAVITY_BIN="/usr/local/bin/antigravity-ide"
 ```
 
 **Method 3: Per-launch flag**
 ```bash
-antigravity-account-switcher launch --bin /path/to/your/antigravity
+antigravity-account-switcher launch --bin /usr/local/bin/antigravity-ide
 ```
 
 ---

@@ -14,25 +14,29 @@ The switcher runs as a high-performance local supervisor that:
 
 ---
 
-## Antigravity 2.0 Runtime Insights (Reverse Engineering)
+## Antigravity Surfaces & Runtime Insights (Reverse Engineering)
 
-Understanding the internal design of Google Antigravity 2.0 is crucial when diagnosing bugs or extending functionality:
+Understanding the internal design of Google Antigravity surfaces is crucial when diagnosing bugs or extending functionality:
 
-- **Runtime Composition**: Google Antigravity 2.0 is an **Electron** desktop application bundled with a native background backend process named **`language_server` (compiled Go binary)**.
+- **Surfaces**:
+  - **Antigravity IDE**: Standalone AI-first code editor built on a VS Code / VSCodium fork (binary `antigravity-ide`).
+  - **Antigravity 2.0**: Standalone desktop agent application (binary `antigravity`), built with Electron and bundled with a native background backend process named **`language_server` (compiled Go binary)**.
+  - **Antigravity CLI**: Command-line interface (`agy`).
 - **Local Language Server Discovery**:
   - The Electron frontend spawns `language_server` with the flag `--csrf_token <token>`.
   - The frontend communicates with `language_server` over localhost TCP sockets using HTTP/gRPC-Web endpoints (e.g. `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`).
   - All local requests require the header `x-codeium-csrf-token: <csrf_token>`.
   - The switcher discovers running `language_server` instances by inspecting `/proc/<pid>/cmdline`, socket inodes in `/proc/<pid>/fd`, and listening ports in `/proc/net/tcp` (see `internal/quota/language_server.go`).
 - **Binary Resolution Priority**:
-  When locating the Antigravity 2.0 binary to launch or supervise, inspect paths in this exact order:
-  1. CLI flag: `--antigravity-bin` (or `overrideBin` parameter).
+  When locating the Antigravity binary to launch or supervise, inspect paths in this exact order (GUI IDE and desktop binaries are prioritized before CLI):
+  1. CLI flag: `--bin` or `--antigravity-bin` (or `overrideBin` parameter).
   2. Environment variable: `ANTIGRAVITY_BIN`.
   3. Saved configuration: `~/.config/antigravity-account-switcher/config.json` (`antigravity_bin` key).
-  4. User XDG directories: `~/.local/bin/antigravity`, `~/.local/share/antigravity/antigravity`.
-  5. User tools directory: `~/tools/Antigravity/Antigravity-x64/antigravity`.
-  6. System FHS paths: `/opt/antigravity/antigravity`, `/usr/local/bin/antigravity`.
-  7. System `$PATH`: `antigravity`, `agy`.
+  4. User XDG directories: `~/.local/bin/antigravity-ide`, `~/.local/bin/antigravity`, `~/.local/share/antigravity-ide/...`, `~/.local/share/antigravity/...`.
+  5. User tools directory: `~/tools/Antigravity-IDE/...`, `~/tools/Antigravity/...`.
+  6. System FHS paths: `/usr/local/bin/antigravity-ide`, `/usr/local/bin/antigravity`, `/opt/antigravity-ide/...`, `/opt/antigravity/...`.
+  7. User CLI fallback: `~/.local/bin/agy`.
+  8. System `$PATH`: `antigravity-ide`, `antigravity`, `agy`.
 - **Existing Credentials (Auto-Import)**:
   - Antigravity stores active Google OAuth credentials in `~/.gemini/antigravity-acp/acp_token.json` or `~/.gemini/antigravity-cli/acp_token.json`.
   - The switcher automatically imports these credentials if the account pool is empty on first boot (`internal/oauth/auto_import.go`).
