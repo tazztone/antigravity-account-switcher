@@ -3,8 +3,9 @@ package proxy
 import (
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
+
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
 // ErrNoModelListBodies indicates that none of the supplied upstream responses
@@ -61,9 +62,6 @@ func MergeModelListResponses(bodies [][]byte) ([]byte, error) {
 	if base == nil {
 		return nil, ErrNoModelListBodies
 	}
-	if merged > 1 {
-		base.ensureAllModelsSorted()
-	}
 	return base.marshal()
 }
 
@@ -108,15 +106,20 @@ func (d *modelListDocument) merge(other *modelListDocument, otherModels map[stri
 		ownModels = make(map[string]json.RawMessage, len(otherModels))
 	}
 	for id, raw := range otherModels {
-		if existing, ok := ownModels[id]; ok && !isDisabledModelEntry(existing) {
-			// The base already exposes this model: keep it as-is.
+		existing, ok := ownModels[id]
+		if ok && !isDisabledModelEntry(existing) {
+			// The base already exposes this model enabled: keep it as-is.
+			continue
+		}
+		// If both are disabled, do not overwrite base's metadata.
+		if ok && isDisabledModelEntry(existing) && isDisabledModelEntry(raw) {
 			continue
 		}
 		ownModels[id] = raw
 	}
 	d.setPayloadField("models", ownModels)
 
-	d.mergeSorts(other)
+	d.mergeSorts(other, ownModels)
 
 	// Adopt payload fields this response does not define yet, such as a default
 	// agent model or upstream additions, without overriding the base values.
@@ -129,7 +132,8 @@ func (d *modelListDocument) merge(other *modelListDocument, otherModels map[stri
 }
 
 // mergeSorts appends model ordering contributed by other to the base ordering.
-func (d *modelListDocument) mergeSorts(other *modelListDocument) {
+// Models that are disabled or internal endpoints are omitted from agentModelSorts.
+func (d *modelListDocument) mergeSorts(other *modelListDocument, ownModels map[string]json.RawMessage) {
 	sourceEntries := other.sorts()
 	if len(sourceEntries) == 0 {
 		return
@@ -137,7 +141,10 @@ func (d *modelListDocument) mergeSorts(other *modelListDocument) {
 
 	baseEntries := d.sorts()
 	if len(baseEntries) == 0 {
-		d.payload["agentModelSorts"] = other.payload["agentModelSorts"]
+		filtered := filterSortEntries(sourceEntries, ownModels)
+		if len(filtered) > 0 {
+			d.setSorts(filtered)
+		}
 		return
 	}
 
@@ -145,8 +152,11 @@ func (d *modelListDocument) mergeSorts(other *modelListDocument) {
 	for _, source := range sourceEntries {
 		target := findSortEntry(baseEntries, source.displayName)
 		if target == nil {
-			baseEntries = append(baseEntries, source)
-			changed = true
+			cleaned := filterSingleSortEntry(source, ownModels, nil)
+			if len(cleaned.groups) > 0 {
+				baseEntries = append(baseEntries, cleaned)
+				changed = true
+			}
 			continue
 		}
 
@@ -160,11 +170,14 @@ func (d *modelListDocument) mergeSorts(other *modelListDocument) {
 				if id == "" || known[id] {
 					continue
 				}
+				if isExcludedFromPicker(id, ownModels) {
+					continue
+				}
 				known[id] = true
 				fresh = append(fresh, id)
 			}
 			if len(fresh) > 0 {
-				target.appendGroup(fresh)
+				target.appendGroupWithRaw(group, fresh)
 				changed = true
 			}
 		}
@@ -175,39 +188,95 @@ func (d *modelListDocument) mergeSorts(other *modelListDocument) {
 	}
 }
 
-// ensureAllModelsSorted appends model IDs that no sort group references yet, so a
-// picker rendering strictly from agentModelSorts still exposes every merged model.
-func (d *modelListDocument) ensureAllModelsSorted() {
-	entries := d.sorts()
-	if len(entries) == 0 {
-		return
-	}
-	models := d.models()
-	if len(models) == 0 {
-		return
-	}
+// appendGroup adds a fresh ordering group holding the given model IDs.
+func (e *modelSortEntry) appendGroup(ids []string) {
+	e.appendGroupWithRaw(nil, ids)
+}
 
-	referenced := make(map[string]bool, len(models))
+// appendGroupWithRaw appends an ordering group, preserving unknown group fields from originalRaw.
+func (e *modelSortEntry) appendGroupWithRaw(originalRaw json.RawMessage, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	if len(originalRaw) > 0 {
+		var groupObj map[string]json.RawMessage
+		if err := json.Unmarshal(originalRaw, &groupObj); err == nil && groupObj != nil {
+			idBytes, err := json.Marshal(ids)
+			if err == nil {
+				groupObj["modelIds"] = idBytes
+				if marshaled, err := json.Marshal(groupObj); err == nil {
+					e.groups = append(e.groups, marshaled)
+					e.dirty = true
+					return
+				}
+			}
+		}
+	}
+	raw, err := json.Marshal(struct {
+		ModelIDs []string `json:"modelIds"`
+	}{ModelIDs: ids})
+	if err != nil {
+		return
+	}
+	e.groups = append(e.groups, raw)
+	e.dirty = true
+}
+
+// isExcludedFromPicker reports whether mid is excluded from the user-facing model picker.
+func isExcludedFromPicker(mid string, models map[string]json.RawMessage) bool {
+	if mid == "" {
+		return true
+	}
+	lower := strings.ToLower(mid)
+	if strings.Contains(lower, "disabled") || domain.IsInternalOrPreviewModel(mid) {
+		return true
+	}
+	if raw, ok := models[mid]; ok && isDisabledModelEntry(raw) {
+		return true
+	}
+	return false
+}
+
+// filterSortEntries filters out disabled and internal models from all sort entries.
+func filterSortEntries(entries []*modelSortEntry, models map[string]json.RawMessage) []*modelSortEntry {
+	var result []*modelSortEntry
 	for _, entry := range entries {
-		for _, id := range entry.modelIDs() {
-			referenced[id] = true
+		filtered := filterSingleSortEntry(entry, models, nil)
+		if len(filtered.groups) > 0 {
+			result = append(result, filtered)
 		}
 	}
+	return result
+}
 
-	var leftovers []string
-	for id, raw := range models {
-		if referenced[id] || isDisabledModelEntry(raw) {
-			continue
+// filterSingleSortEntry filters out disabled/internal model IDs from a sort entry's groups.
+func filterSingleSortEntry(entry *modelSortEntry, models map[string]json.RawMessage, known map[string]bool) *modelSortEntry {
+	if entry == nil {
+		return nil
+	}
+	cleaned := &modelSortEntry{
+		raw:         entry.raw,
+		displayName: entry.displayName,
+	}
+	for _, grp := range entry.groups {
+		var valid []string
+		for _, id := range groupModelIDs(grp) {
+			if id == "" || isExcludedFromPicker(id, models) {
+				continue
+			}
+			if known != nil && known[id] {
+				continue
+			}
+			if known != nil {
+				known[id] = true
+			}
+			valid = append(valid, id)
 		}
-		leftovers = append(leftovers, id)
+		if len(valid) > 0 {
+			cleaned.appendGroupWithRaw(grp, valid)
+		}
 	}
-	if len(leftovers) == 0 {
-		return
-	}
-
-	sort.Strings(leftovers)
-	entries[len(entries)-1].appendGroup(leftovers)
-	d.setSorts(entries)
+	return cleaned
 }
 
 // sorts decodes the agentModelSorts ordering, or nil when absent.
@@ -287,20 +356,6 @@ func (e *modelSortEntry) modelIDs() []string {
 	return ids
 }
 
-// appendGroup adds a fresh ordering group holding the given model IDs.
-func (e *modelSortEntry) appendGroup(ids []string) {
-	if len(ids) == 0 {
-		return
-	}
-	raw, err := json.Marshal(struct {
-		ModelIDs []string `json:"modelIds"`
-	}{ModelIDs: ids})
-	if err != nil {
-		return
-	}
-	e.groups = append(e.groups, raw)
-	e.dirty = true
-}
 
 // groupModelIDs extracts the modelIds of one ordering group.
 func groupModelIDs(raw json.RawMessage) []string {

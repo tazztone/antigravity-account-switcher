@@ -170,22 +170,52 @@ func TestMergeModelListResponses_MergesOrderingByDisplayName(t *testing.T) {
 	}
 }
 
-func TestMergeModelListResponses_AppendsUnreferencedModelsToOrdering(t *testing.T) {
+func TestMergeModelListResponses_ExcludesUnsortedAndInternalModelsFromPickerOrdering(t *testing.T) {
 	base := []byte(`{
-		"models": {"a": {}},
-		"agentModelSorts": [{"displayName": "Recommended", "groups": [{"modelIds": ["a"]}]}]
+		"models": {
+			"claude-sonnet-4-6": {"displayName": "Claude Sonnet 4.6", "recommended": true},
+			"chat_20706": {"displayName": ""},
+			"gemini-3.5-flash-lite": {"displayName": "Gemini 3.5 Flash Lite"},
+			"gemini-3.5-flash-lite-preview": {"displayName": "Gemini 3.5 Flash Lite"},
+			"gemini-3.8-flash-tiered": {"displayName": "Gemini 3.8 Flash"}
+		},
+		"agentModelSorts": [{"displayName": "Recommended", "groups": [{"modelIds": ["claude-sonnet-4-6"]}]}]
 	}`)
-	other := []byte(`{"models": {"b": {}, "c": {}}}`)
+	other := []byte(`{
+		"models": {
+			"claude-opus-5.5-high": {"displayName": "Claude Opus 5.5 (High)"},
+			"gemini-3-flash": {"displayName": "Gemini 3 Flash"},
+			"gemini-3.1-flash-image": {"displayName": "Gemini 3.1 Flash Image"},
+			"gemini-4-argon-disabled": {"displayName": "Gemini 4 Argon", "disabled": true}
+		},
+		"agentModelSorts": [{
+			"displayName": "Recommended",
+			"groups": [
+				{"modelIds": ["claude-opus-5.5-high"]},
+				{"modelIds": ["gemini-4-argon-disabled"]}
+			]
+		}]
+	}`)
 
 	merged, err := MergeModelListResponses([][]byte{base, other})
 	if err != nil {
 		t.Fatalf("MergeModelListResponses: %v", err)
 	}
 
+	// models map contains union of models
+	allModels := decodeMergedModelList(t, merged)
+	if _, ok := allModels["claude-opus-5.5-high"]; !ok {
+		t.Error("expected claude-opus-5.5-high in models map")
+	}
+	if _, ok := allModels["chat_20706"]; !ok {
+		t.Error("expected chat_20706 retained in backend models map")
+	}
+
+	// agentModelSorts must only contain user-selectable agent models, never internal/disabled leftovers
 	ids := sortModelIDs(t, merged)
-	sort.Strings(ids)
-	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(ids, want) {
-		t.Errorf("sorted models = %v, want every merged model ordered: %v", ids, want)
+	want := []string{"claude-sonnet-4-6", "claude-opus-5.5-high"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Errorf("sorted picker models = %v, want strictly curated models %v", ids, want)
 	}
 }
 
