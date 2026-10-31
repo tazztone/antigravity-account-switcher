@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 )
@@ -61,6 +62,25 @@ func InstallDesktop(opts DesktopOptions) (*DesktopResult, error) {
 		_ = config.Save(cfg)
 	}
 
+	binBase := strings.ToLower(filepath.Base(antigravityBin))
+	isIDE := strings.Contains(binBase, "antigravity-ide")
+
+	desktopFileName := "antigravity.desktop"
+	defaultName := "Antigravity 2.0"
+	defaultComment := "Google Antigravity 2.0 with Multi-Account Switcher"
+	defaultWMClass := "Antigravity"
+	defaultMimeType := "text/plain;inode/directory;"
+	iconFileName := "antigravity.png"
+
+	if isIDE {
+		desktopFileName = "antigravity-ide.desktop"
+		defaultName = "Antigravity IDE"
+		defaultComment = "Google Antigravity IDE with Multi-Account Switcher"
+		defaultWMClass = "antigravity-ide"
+		defaultMimeType = "inode/directory;text/plain;application/x-code-workspace;application/x-antigravity-workspace;x-scheme-handler/antigravity-ide;"
+		iconFileName = "antigravity-ide.png"
+	}
+
 	// 3. Resolve and copy Icon
 	iconSrc := opts.IconPath
 	if iconSrc == "" {
@@ -70,7 +90,7 @@ func InstallDesktop(opts DesktopOptions) (*DesktopResult, error) {
 	iconsDir := filepath.Join(home, ".local", "share", "icons")
 	_ = os.MkdirAll(iconsDir, 0o755)
 
-	destIcon := filepath.Join(iconsDir, "antigravity.png")
+	destIcon := filepath.Join(iconsDir, iconFileName)
 	if iconSrc != "" && iconSrc != destIcon {
 		if err := copyFile(iconSrc, destIcon); err != nil {
 			// Non-fatal fallback to iconSrc directly
@@ -86,15 +106,15 @@ func InstallDesktop(opts DesktopOptions) (*DesktopResult, error) {
 		return nil, fmt.Errorf("failed to create applications directory %s: %w", appsDir, err)
 	}
 
-	desktopFile := filepath.Join(appsDir, "antigravity.desktop")
+	desktopFile := filepath.Join(appsDir, desktopFileName)
 
 	name := opts.Name
 	if name == "" {
-		name = "Antigravity 2.0"
+		name = defaultName
 	}
 	comment := opts.Comment
 	if comment == "" {
-		comment = "Google Antigravity 2.0 with Multi-Account Switcher"
+		comment = defaultComment
 	}
 
 	content := fmt.Sprintf(`[Desktop Entry]
@@ -105,15 +125,15 @@ Icon=%s
 Terminal=false
 Type=Application
 Categories=Development;IDE;
-StartupWMClass=Antigravity
-MimeType=text/plain;inode/directory;
+StartupWMClass=%s
+MimeType=%s
 Actions=new-empty-window;
 
 [Desktop Action new-empty-window]
 Name=New Empty Window
 Exec=%s launch --new-window
 Icon=%s
-`, name, comment, switcherBin, destIcon, switcherBin, destIcon)
+`, name, comment, switcherBin, destIcon, defaultWMClass, defaultMimeType, switcherBin, destIcon)
 
 	if err := os.WriteFile(desktopFile, []byte(content), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to write desktop file to %s: %w", desktopFile, err)
@@ -122,6 +142,14 @@ Icon=%s
 	// Try updating the desktop database if the tool is installed
 	if updateBin, err := exec.LookPath("update-desktop-database"); err == nil {
 		_ = exec.Command(updateBin, appsDir).Run()
+	}
+
+	// Try updating the user mime database to eliminate stale/invalid cache warnings
+	if updateMimeBin, err := exec.LookPath("update-mime-database"); err == nil {
+		userMimeDir := filepath.Join(home, ".local", "share", "mime")
+		if fi, err := os.Stat(userMimeDir); err == nil && fi.IsDir() {
+			_ = exec.Command(updateMimeBin, userMimeDir).Run()
+		}
 	}
 
 	return &DesktopResult{
@@ -157,9 +185,9 @@ func UninstallDesktop() error {
 	}
 
 	appsDir := filepath.Join(home, ".local", "share", "applications")
-	desktopFile := filepath.Join(appsDir, "antigravity.desktop")
-	if err := os.Remove(desktopFile); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove desktop file %s: %w", desktopFile, err)
+	for _, f := range []string{"antigravity.desktop", "antigravity-ide.desktop"} {
+		desktopFile := filepath.Join(appsDir, f)
+		_ = os.Remove(desktopFile)
 	}
 
 	if updateBin, err := exec.LookPath("update-desktop-database"); err == nil {

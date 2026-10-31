@@ -58,3 +58,51 @@ func TestInstallDesktop(t *testing.T) {
 		t.Errorf("expected desktop file to be removed, but still exists")
 	}
 }
+
+func TestInstallDesktop_AntigravityIDE(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	fakeIDEBin := filepath.Join(tmpHome, "antigravity-ide")
+	if err := os.WriteFile(fakeIDEBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DesktopOptions{
+		SwitcherBin:    "/usr/bin/antigravity-account-switcher",
+		AntigravityBin: fakeIDEBin,
+	}
+
+	res, err := InstallDesktop(opts)
+	if err != nil {
+		t.Fatalf("InstallDesktop failed for IDE: %v", err)
+	}
+
+	if filepath.Base(res.DesktopFilePath) != "antigravity-ide.desktop" {
+		t.Errorf("expected desktop filename 'antigravity-ide.desktop', got %s", filepath.Base(res.DesktopFilePath))
+	}
+
+	contentBytes, err := os.ReadFile(res.DesktopFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(contentBytes)
+
+	if !strings.Contains(content, "Name=Antigravity IDE") {
+		t.Errorf("expected default Name=Antigravity IDE, got:\n%s", content)
+	}
+	if !strings.Contains(content, "StartupWMClass=antigravity-ide") {
+		t.Errorf("expected StartupWMClass=antigravity-ide, got:\n%s", content)
+	}
+	if !strings.Contains(content, "application/x-code-workspace") {
+		t.Errorf("expected workspace MIME types, got:\n%s", content)
+	}
+
+	// Verify Uninstall cleans up IDE desktop file
+	if err := UninstallDesktop(); err != nil {
+		t.Fatalf("UninstallDesktop failed: %v", err)
+	}
+	if _, err := os.Stat(res.DesktopFilePath); !os.IsNotExist(err) {
+		t.Errorf("expected IDE desktop file to be removed, but still exists")
+	}
+}

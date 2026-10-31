@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -935,8 +936,16 @@ func runLaunch(args []string) {
 		os.Exit(1)
 	}
 
+	appName := "Antigravity 2.0"
+	binBase := strings.ToLower(filepath.Base(antigravityBin))
+	if strings.Contains(binBase, "antigravity-ide") {
+		appName = "Antigravity IDE"
+	} else if strings.Contains(binBase, "agy") {
+		appName = "Antigravity CLI"
+	}
+
 	cmdToRun := append([]string{antigravityBin}, passthroughArgs...)
-	fmt.Printf("==> Launching Antigravity 2.0 with coupled switcher supervisor:\n")
+	fmt.Printf("==> Launching %s with coupled switcher supervisor:\n", appName)
 	fmt.Printf("    Executable: %s\n", antigravityBin)
 	if len(passthroughArgs) > 0 {
 		fmt.Printf("    Arguments:  %v\n", passthroughArgs)
