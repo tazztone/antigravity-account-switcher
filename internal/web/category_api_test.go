@@ -118,3 +118,56 @@ func TestServer_API_CategoryRoutingAndExclusion(t *testing.T) {
 		t.Fatalf("expected 404 for nonexistent account, got %d", r.StatusCode)
 	}
 }
+
+func TestServer_API_CategorySyncPromotesGlobalActive(t *testing.T) {
+	_, accRepo, quotaRepo, _, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for i, id := range []string{"acc-1", "acc-2"} {
+		if err := accRepo.Create(ctx, &domain.Account{
+			ID: id, Email: id + "@example.com", AccessToken: "t", IsActive: i == 0,
+			Status: domain.AccountStatusActive, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server, err := NewServer(accRepo, quotaRepo, metricsSvc, broadcaster, eventRepo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	do := func(method, path, body string) *http.Response {
+		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewBufferString(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+
+	// Initially acc-1 is active (is_active=1) and acc-2 is standby (is_active=0)
+	active, _ := accRepo.GetActive(ctx)
+	if active.ID != "acc-1" {
+		t.Fatalf("expected acc-1 to be active initially, got %s", active.ID)
+	}
+
+	// Sequentially activate claude_gpt, gemini, and gemini_argon on acc-2
+	for _, cat := range []string{"claude_gpt", "gemini", "gemini_argon"} {
+		resp := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":"`+cat+`"}`)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 activating %s, got %d", cat, resp.StatusCode)
+		}
+	}
+
+	// Verify accounts.is_active synchronized to acc-2
+	activeAfter, err := accRepo.GetActive(ctx)
+	if err != nil {
+		t.Fatalf("GetActive failed after syncing categories: %v", err)
+	}
+	if activeAfter.ID != "acc-2" {
+		t.Errorf("expected global active to synchronize to acc-2, got %s", activeAfter.ID)
+	}
+}

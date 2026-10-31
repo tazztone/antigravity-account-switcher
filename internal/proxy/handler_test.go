@@ -606,6 +606,64 @@ func TestProxyHandler_AutoActivateAvailable(t *testing.T) {
 	}
 }
 
+func TestHandler_UnmodeledQuotaSummary_PrefersClaudeGPTAccount(t *testing.T) {
+	mockGoogle := mocks.NewMockGoogleServer()
+	defer mockGoogle.Close()
+
+	_, accountRepo, _, _ := setupTestDB(t)
+
+	now := time.Now().UTC()
+	accA := &domain.Account{
+		ID:          "acc-global-active",
+		Email:       "a@example.com",
+		AccessToken: "token-a",
+		IsActive:    true,
+		Status:      domain.AccountStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	accB := &domain.Account{
+		ID:          "acc-claude-gpt",
+		Email:       "b@example.com",
+		AccessToken: "token-b",
+		IsActive:    false,
+		Status:      domain.AccountStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	_ = accountRepo.Create(context.Background(), accA)
+	_ = accountRepo.Create(context.Background(), accB)
+
+	// Route claude_gpt specifically to accB
+	if err := accountRepo.SetActiveForCategory(context.Background(), domain.CategoryClaudeGPT, accB.ID); err != nil {
+		t.Fatalf("SetActiveForCategory failed: %v", err)
+	}
+
+	handler, _ := NewProxyHandler(accountRepo, WithTargetURL(mockGoogle.URL))
+	proxyServer := httptest.NewServer(handler)
+	defer proxyServer.Close()
+
+	client := &http.Client{}
+	req, _ := http.NewRequest("POST", proxyServer.URL+"/v1internal:retrieveUserQuotaSummary", strings.NewReader("{}"))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("retrieveUserQuotaSummary request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	recorded := mockGoogle.RequestsForPath("/v1internal:retrieveUserQuotaSummary")
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 recorded request for quota summary, got %d", len(recorded))
+	}
+	if recorded[0].AuthBearer != "token-b" {
+		t.Errorf("expected quota summary to route with claude_gpt account token 'token-b', got %q", recorded[0].AuthBearer)
+	}
+}
+
 func TestProxyHandler_ConcurrentRequests(t *testing.T) {
 	mockGoogle := mocks.NewMockGoogleServer()
 	defer mockGoogle.Close()
