@@ -2108,6 +2108,43 @@ body.privacy-mode .blurred-email {
   line-height: 1.2;
 }
 
+.model-pool-route-badge {
+  font-size: 0.58rem;
+  font-family: inherit;
+  font-weight: 600;
+  padding: 0.05rem 0.28rem;
+  border-radius: 3px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  cursor: help;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.model-pool-route-badge:hover {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.3);
+}
+
+.model-pool-route-badge-inline {
+  display: inline-block;
+  padding: 0.02rem 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
 .model-rule-fallback {
   max-width: 90px;
   font-size: 0.65rem;

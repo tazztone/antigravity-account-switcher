@@ -213,6 +213,7 @@ You can configure model fallback directly from the browser dashboard (`http://12
 - **Per-Category Pins & Bucket-Level Routing**: Pin accounts separately for Claude/GPT, Gemini, or Gemini 4 Argon (`POST /api/accounts/{id}/select` with `{"category": "..."}`). Each model group features direct bucket-level borders and inline controls showing active routing state: `🔄 Pool` (auto-failover) vs `🔒 Solo` (locks category to account, returning 429 on exhaustion to protect other accounts). Accounts can also opt out of entire model categories (`🚫 Off / Excluded`) with a single click (`PUT /api/accounts/{id}/categories`).
 - **Gemini 4 Argon Weekly Quota Tracking**: Argon weekly sliding quota is tracked independently with live progress bars, percentages, and reset cooldown timers alongside standard Claude and Gemini quotas.
 - **Consolidated Model Rows**: Repetitive reasoning effort variants (`High`, `Med`, `Low`, `Think`) are combined into single clean base-model rows with compact capability pills.
+- **Exclusive Model Routing Badges**: Models provided uniquely by a single account in the pool display an inline `[Pool Route ⚡]` badge with context-aware tooltips. Selecting an exclusive model in the IDE routes directly to its provider account even while that account or category is in `STANDBY`.
 - **Instant Hot-Reload**: Persisting fallback settings updates `config.json` and immediately applies changes to the running proxy engine without restarting Antigravity 2.0 or the daemon.
 
 ### 3. Automatic 400 Thought Signature Recovery

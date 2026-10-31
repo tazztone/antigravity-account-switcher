@@ -372,6 +372,106 @@
     }
   }
 
+  function parseModelTierInfo(r) {
+    if (!r) return { baseName: '', tier: '' };
+    const rawMid = (r.model_id || '').trim();
+    let dName = (r.display_name || rawMid).trim();
+    let baseName = dName;
+    let tier = '';
+
+    // 1. If dName is raw slug like "gemini-3.8-flash-tiered", humanize baseName & extract tier
+    if (/^[a-z0-9_.-]+$/.test(dName) && dName.includes('-')) {
+      const parts = dName.split('-');
+      const lastPart = parts[parts.length - 1].toLowerCase();
+      if (['high', 'medium', 'med', 'low', 'thinking', 'preview', 'tiered', 'image'].includes(lastPart)) {
+        tier = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+        parts.pop();
+      }
+      baseName = parts.map(p => {
+        const pl = p.toLowerCase();
+        if (pl === 'gemini') return 'Gemini';
+        if (pl === 'claude') return 'Claude';
+        if (pl === 'gpt') return 'GPT';
+        if (pl === 'pro') return 'Pro';
+        if (pl === 'flash') return 'Flash';
+        if (pl === 'lite') return 'Lite';
+        if (pl === 'argon') return 'Argon';
+        return p.charAt(0).toUpperCase() + p.slice(1);
+      }).join(' ');
+    }
+
+    // 2. Check for explicit standard tier in parentheses: (High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)
+    const tierMatch = baseName.match(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i);
+    if (tierMatch) {
+      tier = tierMatch[1];
+      tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
+      baseName = baseName.replace(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
+    } else {
+      // 3. Check for disambiguated model ID in parentheses like (gemini-2.5-flash-lite)
+      const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
+      if (disambigMatch) {
+        const innerSlug = disambigMatch[1].toLowerCase();
+        if (innerSlug.includes('2.5')) tier = '2.5';
+        else if (innerSlug.includes('3.5')) tier = '3.5';
+        else if (innerSlug.includes('3.8')) tier = '3.8';
+        else if (innerSlug.includes('thinking')) tier = 'Think';
+        else if (innerSlug.includes('preview')) tier = 'Preview';
+        else tier = 'Std';
+        baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
+      }
+    }
+
+    // 4. Fallback: inspect model_id suffix if tier is still empty
+    if (!tier) {
+      const mid = rawMid.toLowerCase();
+      if (mid.endsWith('-high')) tier = 'High';
+      else if (mid.endsWith('-medium') || mid.endsWith('-med')) tier = 'Med';
+      else if (mid.endsWith('-low')) tier = 'Low';
+      else if (mid.endsWith('-thinking')) tier = 'Thinking';
+      else if (mid.endsWith('-preview')) tier = 'Preview';
+      else if (mid.endsWith('-tiered')) tier = 'Tiered';
+    }
+
+    return { baseName, tier };
+  }
+
+  function computeExclusiveModelMap() {
+    const enabledAccounts = (rawAccountsData || []).filter(a => a.status !== 'disabled');
+    if (enabledAccounts.length < 2) {
+      return { modelProviders: new Map(), baseNameProviders: new Map() };
+    }
+
+    const modelProviders = new Map(); // model_id -> Set(account_id)
+    const baseNameProviders = new Map(); // baseName.toLowerCase() -> Set(account_id)
+
+    enabledAccounts.forEach(acc => {
+      const disabledCats = acc.disabled_categories || [];
+      (acc.model_rules || []).forEach(r => {
+        if (r.enabled === false) return;
+        const g = getModelRuleCategory(r);
+        const catMap = { claude: 'claude_gpt', gemini: 'gemini', argon: 'gemini_argon' };
+        const catKey = catMap[g] || g;
+        if (catKey && disabledCats.includes(catKey)) return;
+
+        const { baseName } = parseModelTierInfo(r);
+        const mid = (r.model_id || '').trim();
+
+        if (mid) {
+          if (!modelProviders.has(mid)) modelProviders.set(mid, new Set());
+          modelProviders.get(mid).add(acc.id);
+        }
+
+        if (baseName) {
+          const lowerBase = baseName.toLowerCase();
+          if (!baseNameProviders.has(lowerBase)) baseNameProviders.set(lowerBase, new Set());
+          baseNameProviders.get(lowerBase).add(acc.id);
+        }
+      });
+    });
+
+    return { modelProviders, baseNameProviders };
+  }
+
   function renderAccountsGrid() {
     if (!accountsGrid) return;
     accountsGrid.innerHTML = '';
@@ -396,8 +496,10 @@
       return;
     }
 
+    const exclusiveMap = computeExclusiveModelMap();
+
     rawAccountsData.forEach(acc => {
-      const card = createAccountCard(acc);
+      const card = createAccountCard(acc, exclusiveMap);
       accountsGrid.appendChild(card);
     });
 
@@ -502,7 +604,7 @@
     });
   }
 
-  function createAccountCard(acc) {
+  function createAccountCard(acc, exclusiveMap) {
     const card = document.createElement('div');
     const isActive = Boolean(acc.is_active);
     const isExhausted = acc.status === 'exhausted';
@@ -701,68 +803,6 @@
     // Model rules categorized by bucket
     const rules = acc.model_rules || [];
 
-    function parseModelTierInfo(r) {
-      const rawMid = (r.model_id || '').trim();
-      let dName = (r.display_name || rawMid).trim();
-      let baseName = dName;
-      let tier = '';
-
-      // 1. If dName is raw slug like "gemini-3.8-flash-tiered", humanize baseName & extract tier
-      if (/^[a-z0-9_.-]+$/.test(dName) && dName.includes('-')) {
-        const parts = dName.split('-');
-        const lastPart = parts[parts.length - 1].toLowerCase();
-        if (['high', 'medium', 'med', 'low', 'thinking', 'preview', 'tiered', 'image'].includes(lastPart)) {
-          tier = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
-          parts.pop();
-        }
-        baseName = parts.map(p => {
-          const pl = p.toLowerCase();
-          if (pl === 'gemini') return 'Gemini';
-          if (pl === 'claude') return 'Claude';
-          if (pl === 'gpt') return 'GPT';
-          if (pl === 'pro') return 'Pro';
-          if (pl === 'flash') return 'Flash';
-          if (pl === 'lite') return 'Lite';
-          if (pl === 'argon') return 'Argon';
-          return p.charAt(0).toUpperCase() + p.slice(1);
-        }).join(' ');
-      }
-
-      // 2. Check for explicit standard tier in parentheses: (High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)
-      const tierMatch = baseName.match(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i);
-      if (tierMatch) {
-        tier = tierMatch[1];
-        tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
-        baseName = baseName.replace(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
-      } else {
-        // 3. Check for disambiguated model ID in parentheses like (gemini-2.5-flash-lite)
-        const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
-        if (disambigMatch) {
-          const innerSlug = disambigMatch[1].toLowerCase();
-          if (innerSlug.includes('2.5')) tier = '2.5';
-          else if (innerSlug.includes('3.5')) tier = '3.5';
-          else if (innerSlug.includes('3.8')) tier = '3.8';
-          else if (innerSlug.includes('thinking')) tier = 'Think';
-          else if (innerSlug.includes('preview')) tier = 'Preview';
-          else tier = 'Std';
-          baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
-        }
-      }
-
-      // 4. Fallback: inspect model_id suffix if tier is still empty
-      if (!tier) {
-        const mid = rawMid.toLowerCase();
-        if (mid.endsWith('-high')) tier = 'High';
-        else if (mid.endsWith('-medium') || mid.endsWith('-med')) tier = 'Med';
-        else if (mid.endsWith('-low')) tier = 'Low';
-        else if (mid.endsWith('-thinking')) tier = 'Thinking';
-        else if (mid.endsWith('-preview')) tier = 'Preview';
-        else if (mid.endsWith('-tiered')) tier = 'Tiered';
-      }
-
-      return { baseName, tier };
-    }
-
     function formatTierLabel(tier) {
       const t = tier.toLowerCase();
       if (t === 'medium') return 'Med';
@@ -800,6 +840,10 @@
         item.tiers.sort((a, b) => (tierWeights[a.tier.toLowerCase()] || 99) - (tierWeights[b.tier.toLowerCase()] || 99));
       });
 
+      const catMap = { claude: 'claude_gpt', gemini: 'gemini', argon: 'gemini_argon' };
+      const catKey = catMap[groupKey] || groupKey;
+      const isPinned = activeCats.includes(catKey);
+
       const rowsHtml = Array.from(baseModelMap.values()).map(item => {
         const modelIds = item.rules.map(r => r.model_id).join(',');
 
@@ -814,6 +858,29 @@
                 </span>
               `).join('')}
             </div>
+          `;
+        }
+
+        const lowerBase = (item.baseName || '').toLowerCase();
+        const baseProviders = exclusiveMap?.baseNameProviders?.get(lowerBase);
+        const isExclusiveBase = Boolean(baseProviders && baseProviders.size === 1 && baseProviders.has(acc.id));
+
+        const isExclusiveRules = item.rules.length > 0 && item.rules.every(r => {
+          const p = exclusiveMap?.modelProviders?.get(r.model_id);
+          return p && p.size === 1 && p.has(acc.id);
+        });
+
+        const isExclusive = isExclusiveBase || isExclusiveRules;
+
+        let exclusiveBadgeHtml = '';
+        if (isExclusive) {
+          const exclusiveTooltip = isPinned
+            ? `Exclusive provider in pool: selecting ${item.baseName} in the IDE routes to this account.`
+            : `Exclusive provider in pool: selecting ${item.baseName} in the IDE routes to this account automatically, even while in standby.`;
+          exclusiveBadgeHtml = `
+            <span class="model-pool-route-badge" title="${escapeHtml(exclusiveTooltip)}">
+              Pool Route ⚡
+            </span>
           `;
         }
 
@@ -858,6 +925,7 @@
               <span class="model-rule-bullet">▪</span>
               <span class="model-rule-name">${escapeHtml(item.baseName)}</span>
               ${badgesHtml}
+              ${exclusiveBadgeHtml}
             </div>
             ${fallbackHtml}
           </div>
