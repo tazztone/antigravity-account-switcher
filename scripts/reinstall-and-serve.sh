@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # reinstall-and-serve.sh
-# Uninstalls previous binary, builds and installs latest, then starts serve.
+# Uninstalls previous binary, builds and installs latest.
 # ==============================================================================
 set -eo pipefail
 
@@ -25,5 +25,10 @@ if [[ ! -x "${BIN_PATH}" ]] && command -v antigravity-account-switcher >/dev/nul
   BIN_PATH="$(command -v antigravity-account-switcher)"
 fi
 
-echo "==> Starting antigravity-account-switcher serve..."
-exec "${BIN_PATH}" serve "$@"
+if [[ -x "${BIN_PATH}" ]]; then
+  echo "==> Successfully reinstalled: ${BIN_PATH}"
+  "${BIN_PATH}" version
+else
+  echo "==> Reinstall failed: antigravity-account-switcher binary not found or not executable" >&2
+  exit 1
+fi

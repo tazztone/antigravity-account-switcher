@@ -14,7 +14,7 @@ LDFLAGS := -s -w \
 	-X main.Commit=$(COMMIT) \
 	-X main.Date=$(DATE)
 
-.PHONY: all build build-static test test-race test-cover fmt lint tidy clean run wrap help reinstall-serve
+.PHONY: all build build-static test test-race test-cover fmt lint tidy clean run wrap help reinstall reinstall-serve
 
 all: build
 
@@ -78,9 +78,13 @@ uninstall:
 run:
 	go run $(CMD_PKG) serve
 
-## reinstall-serve: Uninstalls, builds, installs, and runs serve
-reinstall-serve:
+## reinstall: Uninstalls, builds, and reinstalls the binary
+reinstall:
 	./scripts/reinstall-and-serve.sh
+
+## reinstall-serve: Uninstalls, builds, installs, and runs serve
+reinstall-serve: reinstall
+	$(HOME)/.local/bin/antigravity-account-switcher serve
 
 ## wrap: Executes wrapped command under switcher supervisor (e.g. make wrap CMD=agy)
 wrap:
