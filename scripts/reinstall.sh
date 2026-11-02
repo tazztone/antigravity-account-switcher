@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# reinstall-and-serve.sh
+# reinstall.sh
 # Uninstalls previous binary, builds and installs latest.
 # ==============================================================================
 set -eo pipefail

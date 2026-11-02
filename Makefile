@@ -80,7 +80,7 @@ run:
 
 ## reinstall: Uninstalls, builds, and reinstalls the binary
 reinstall:
-	./scripts/reinstall-and-serve.sh
+	./scripts/reinstall.sh
 
 ## reinstall-serve: Uninstalls, builds, installs, and runs serve
 reinstall-serve: reinstall
