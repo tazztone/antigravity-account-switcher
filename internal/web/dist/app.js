@@ -17,6 +17,10 @@
   };
   let allEvents = [];
   let currentLogFilter = 'all';
+  let logsSearchQuery = '';
+  let isStreamPaused = false;
+  let isLogsExpanded = false;
+  let pausedNewCount = 0;
   let isUserScrolledUp = false;
   let selectedColumnIndex = -1;
 
@@ -2056,6 +2060,162 @@
   // Live Proxy Event Logs & Filters
   // =========================================================================
 
+  const AVATAR_COLORS = [
+    '#38bdf8', '#818cf8', '#c084fc', '#f472b6', '#34d399', '#fbbf24', '#fb923c'
+  ];
+
+  function getAccountColor(accIdOrEmail) {
+    if (!accIdOrEmail) return AVATAR_COLORS[0];
+    let hash = 0;
+    for (let i = 0; i < accIdOrEmail.length; i++) {
+      hash = (hash << 5) - hash + accIdOrEmail.charCodeAt(i);
+      hash |= 0;
+    }
+    return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+  }
+
+  function resolveAccount(accountId) {
+    if (!accountId) return null;
+    return rawAccountsData.find(a => a.id === accountId || a.id.startsWith(accountId) || (a.email && a.email.toLowerCase() === accountId.toLowerCase())) || null;
+  }
+
+  function renderAccountChip(accountId, message) {
+    let acc = null;
+    if (accountId) {
+      acc = resolveAccount(accountId);
+    }
+
+    let email = acc ? acc.email : '';
+    if (!email && message) {
+      const m = message.match(EMAIL_REGEX);
+      if (m && m[0]) email = m[0];
+    }
+
+    if (email) {
+      const color = getAccountColor(email);
+      const idTooltip = acc ? `Account: ${escapeHtml(email)} (${escapeHtml(acc.id.slice(0, 8))})` : `Account: ${escapeHtml(email)}`;
+      return `
+        <span class="account-chip" title="${idTooltip}">
+          <span class="account-avatar-dot" style="background: ${color}"></span>
+          <span class="account-chip-email blurred-email">${escapeHtml(email)}</span>
+        </span>
+      `;
+    }
+
+    if (accountId) {
+      const color = getAccountColor(accountId);
+      return `
+        <span class="account-chip" title="Account ID: ${escapeHtml(accountId)}">
+          <span class="account-avatar-dot" style="background: ${color}"></span>
+          <span class="account-chip-email">[${escapeHtml(accountId.slice(0, 8))}]</span>
+        </span>
+      `;
+    }
+
+    return '';
+  }
+
+  function formatCompactNum(n) {
+    if (n === null || n === undefined || isNaN(n)) return '0';
+    const num = Number(n);
+    if (num < 1000) return String(num);
+    if (num < 1000000) {
+      const val = (num / 1000).toFixed(1).replace(/\.0$/, '');
+      return val + 'k';
+    }
+    const val = (num / 1000000).toFixed(2).replace(/\.00$/, '');
+    return val + 'M';
+  }
+
+  function extractEventTokens(event) {
+    const d = event.details || {};
+    let total = d.total_tokens;
+    let prompt = d.prompt_tokens;
+    let candidates = d.candidates_tokens;
+    let cached = d.cached_content_tokens;
+    let thoughts = d.thoughts_tokens;
+
+    // Fallback regex parsing from event.message if details not populated
+    if (total === undefined && event.message) {
+      const totalMatch = event.message.match(/total:\s*(\d+)/i);
+      if (totalMatch) total = parseInt(totalMatch[1], 10);
+      const promptMatch = event.message.match(/prompt:\s*(\d+)/i);
+      if (promptMatch) prompt = parseInt(promptMatch[1], 10);
+      const candMatch = event.message.match(/candidates:\s*(\d+)/i);
+      if (candMatch) candidates = parseInt(candMatch[1], 10);
+      const cachedMatch = event.message.match(/cached:\s*(\d+)/i);
+      if (cachedMatch) cached = parseInt(cachedMatch[1], 10);
+      const thoughtsMatch = event.message.match(/thoughts:\s*(\d+)/i);
+      if (thoughtsMatch) thoughts = parseInt(thoughtsMatch[1], 10);
+    }
+
+    return {
+      total: total !== undefined ? Number(total) : 0,
+      prompt: prompt !== undefined ? Number(prompt) : 0,
+      candidates: candidates !== undefined ? Number(candidates) : 0,
+      cached: cached !== undefined ? Number(cached) : 0,
+      thoughts: thoughts !== undefined ? Number(thoughts) : 0,
+    };
+  }
+
+  function extractEventModel(event) {
+    if (event.details && event.details.model_version) {
+      return event.details.model_version;
+    }
+    if (event.message) {
+      const match = event.message.match(/\[([a-zA-Z0-9\._-]+)\]/);
+      if (match) {
+        const val = match[1];
+        if (!/^[a-f0-9]{8}$/i.test(val)) {
+          return val;
+        }
+      }
+    }
+    return '';
+  }
+
+  function matchesSearch(event, query) {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    if (event.type && event.type.toLowerCase().includes(q)) return true;
+    if (event.account_id && event.account_id.toLowerCase().includes(q)) return true;
+    if (event.message && event.message.toLowerCase().includes(q)) return true;
+    const acc = resolveAccount(event.account_id);
+    if (acc && acc.email && acc.email.toLowerCase().includes(q)) return true;
+    if (event.details) {
+      for (const key of Object.keys(event.details)) {
+        const val = String(event.details[key]).toLowerCase();
+        if (val.includes(q)) return true;
+      }
+    }
+    return false;
+  }
+
+  function updatePauseButtonUI() {
+    const btn = document.getElementById('btn-pause-logs');
+    const icon = document.getElementById('pause-logs-icon');
+    const text = document.getElementById('pause-logs-text');
+    if (!btn || !icon || !text) return;
+
+    if (isStreamPaused) {
+      btn.classList.add('btn-warning');
+      icon.textContent = '▶';
+      text.textContent = pausedNewCount > 0 ? `Resume (${pausedNewCount})` : 'Resume';
+      btn.title = 'Resume live event stream';
+    } else {
+      btn.classList.remove('btn-warning');
+      icon.textContent = '⏸';
+      text.textContent = 'Pause';
+      btn.title = 'Pause live event stream';
+    }
+  }
+
+  function updateLogsCountBadge() {
+    const badge = document.getElementById('logs-count-badge');
+    if (!badge) return;
+    badge.textContent = `${allEvents.length} event${allEvents.length === 1 ? '' : 's'}`;
+  }
+
   function appendLog(event) {
     if (!event) return;
     allEvents.push(event);
@@ -2065,18 +2225,28 @@
       allEvents.shift();
     }
 
+    if (isStreamPaused) {
+      pausedNewCount++;
+      updatePauseButtonUI();
+      updateLogsCountBadge();
+      return;
+    }
+
     renderLogEntry(event);
   }
 
   function renderLogEntry(event) {
     if (!logsContainer) return;
 
-    if (!matchesFilter(event, currentLogFilter)) {
+    if (!matchesFilter(event, currentLogFilter) || !matchesSearch(event, logsSearchQuery)) {
       return;
     }
 
     const entry = document.createElement('div');
     entry.className = 'log-entry';
+    entry.tabIndex = 0;
+    entry.setAttribute('role', 'button');
+    entry.setAttribute('aria-expanded', 'false');
 
     let pillClass = 'pill-info';
     let pillText = (event.type || 'INFO').toUpperCase();
@@ -2113,14 +2283,110 @@
     }
 
     const timeStr = formatTimeOnly(event.timestamp);
-    const accPart = event.account_id ? `<span class="log-account">[${escapeHtml(event.account_id.slice(0, 8))}]</span> ` : '';
-    const formattedMsg = formatLogMessage(event.message || '');
+    const accountChipHtml = renderAccountChip(event.account_id, event.message);
+    const modelName = extractEventModel(event);
+    const modelBadgeHtml = modelName ? `<span class="model-badge">${escapeHtml(modelName)}</span>` : '';
+
+    let bodyContentHtml = '';
+
+    if (event.type === 'tokens_captured') {
+      const tokens = extractEventTokens(event);
+      bodyContentHtml = `
+        <div class="metric-pills">
+          <span class="metric-pill metric-total" title="${tokens.total.toLocaleString()} total tokens">${formatCompactNum(tokens.total)} total</span>
+          ${tokens.cached > 0 ? `<span class="metric-pill metric-cached" title="${tokens.cached.toLocaleString()} cached tokens">${formatCompactNum(tokens.cached)} cached</span>` : ''}
+          <span class="metric-pill metric-prompt" title="${tokens.prompt.toLocaleString()} prompt tokens">${formatCompactNum(tokens.prompt)} in</span>
+          <span class="metric-pill metric-candidates" title="${tokens.candidates.toLocaleString()} candidate tokens">${formatCompactNum(tokens.candidates)} out</span>
+          ${tokens.thoughts > 0 ? `<span class="metric-pill metric-thoughts" title="${tokens.thoughts.toLocaleString()} thoughts tokens">${formatCompactNum(tokens.thoughts)} thoughts</span>` : ''}
+        </div>
+      `;
+    } else {
+      let displayMsg = event.message || '';
+      bodyContentHtml = `<span class="log-message">${formatLogMessage(displayMsg)}</span>`;
+    }
 
     entry.innerHTML = `
-      <span class="log-time">${escapeHtml(timeStr)}</span>
-      <span class="log-pill ${pillClass}">${escapeHtml(pillText)}</span>
-      <span class="log-message">${accPart}${formattedMsg}</span>
+      <div class="log-entry-main">
+        <span class="log-time">${escapeHtml(timeStr)}</span>
+        <span class="log-pill ${pillClass}">${escapeHtml(pillText)}</span>
+        ${accountChipHtml}
+        ${modelBadgeHtml}
+        ${bodyContentHtml}
+      </div>
     `;
+
+    // Click to toggle expandable drawer
+    entry.addEventListener('click', (e) => {
+      if (e.target && e.target.classList.contains('drawer-btn-copy')) return;
+
+      const existingDrawer = entry.querySelector('.log-entry-drawer');
+      if (existingDrawer) {
+        existingDrawer.remove();
+        entry.classList.remove('is-expanded');
+        entry.setAttribute('aria-expanded', 'false');
+        return;
+      }
+
+      entry.classList.add('is-expanded');
+      entry.setAttribute('aria-expanded', 'true');
+
+      const drawer = document.createElement('div');
+      drawer.className = 'log-entry-drawer';
+
+      let drawerContent = '';
+      if (event.type === 'tokens_captured') {
+        const tokens = extractEventTokens(event);
+        drawerContent = `
+          <div class="drawer-metrics-grid">
+            <div class="drawer-metric-item">
+              <span class="drawer-metric-label">Total Tokens</span>
+              <span class="drawer-metric-val">${tokens.total.toLocaleString()}</span>
+            </div>
+            <div class="drawer-metric-item">
+              <span class="drawer-metric-label">Prompt (In)</span>
+              <span class="drawer-metric-val">${tokens.prompt.toLocaleString()}</span>
+            </div>
+            <div class="drawer-metric-item">
+              <span class="drawer-metric-label">Candidates (Out)</span>
+              <span class="drawer-metric-val">${tokens.candidates.toLocaleString()}</span>
+            </div>
+            <div class="drawer-metric-item">
+              <span class="drawer-metric-label">Cached Tokens</span>
+              <span class="drawer-metric-val">${tokens.cached.toLocaleString()}</span>
+            </div>
+            <div class="drawer-metric-item">
+              <span class="drawer-metric-label">Thoughts Tokens</span>
+              <span class="drawer-metric-val">${tokens.thoughts.toLocaleString()}</span>
+            </div>
+          </div>
+        `;
+      } else {
+        drawerContent = `<div class="drawer-message">${formatLogMessage(event.message || '')}</div>`;
+      }
+
+      const isoTime = event.timestamp ? new Date(event.timestamp).toISOString() : '';
+      const accDetail = event.account_id ? ` • Account ID: ${escapeHtml(event.account_id)}` : '';
+      const pathDetail = event.details && event.details.request_path ? ` • Path: ${escapeHtml(event.details.request_path)}` : '';
+
+      drawer.innerHTML = `
+        ${drawerContent}
+        <div class="drawer-footer">
+          <span>${escapeHtml(isoTime)}${accDetail}${pathDetail}</span>
+          <button class="drawer-btn-copy" type="button" title="Copy raw event JSON">Copy JSON</button>
+        </div>
+      `;
+
+      const copyBtn = drawer.querySelector('.drawer-btn-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', (ce) => {
+          ce.stopPropagation();
+          const jsonStr = JSON.stringify(event, null, 2);
+          copyToClipboard(jsonStr, 'Event JSON');
+        });
+      }
+
+      entry.appendChild(drawer);
+    });
 
     logsContainer.appendChild(entry);
 
@@ -2129,10 +2395,16 @@
       logsContainer.removeChild(logsContainer.firstChild);
     }
 
-    // Auto-scroll if user has not scrolled up
-    if (!isUserScrolledUp) {
+    // Update floating Jump to latest button and auto-scroll
+    const btnJumpLatest = document.getElementById('btn-jump-latest');
+    if (isUserScrolledUp) {
+      if (btnJumpLatest) btnJumpLatest.classList.remove('hidden');
+    } else {
+      if (btnJumpLatest) btnJumpLatest.classList.add('hidden');
       logsContainer.scrollTop = logsContainer.scrollHeight;
     }
+
+    updateLogsCountBadge();
   }
 
   function matchesFilter(event, filter) {
@@ -2148,6 +2420,10 @@
     if (!logsContainer) return;
     logsContainer.innerHTML = '';
     allEvents.forEach(evt => renderLogEntry(evt));
+    updateLogsCountBadge();
+    const btnJumpLatest = document.getElementById('btn-jump-latest');
+    if (btnJumpLatest) btnJumpLatest.classList.add('hidden');
+    isUserScrolledUp = false;
     logsContainer.scrollTop = logsContainer.scrollHeight;
   }
 
@@ -2321,16 +2597,66 @@
       }
     });
 
+    // Search input for logs
+    const logsSearchInput = document.getElementById('logs-search-input');
+    if (logsSearchInput) {
+      logsSearchInput.addEventListener('input', (e) => {
+        logsSearchQuery = e.target.value.trim().toLowerCase();
+        reapplyLogFilter();
+      });
+    }
+
+    // Pause / Resume logs stream
+    const btnPauseLogs = document.getElementById('btn-pause-logs');
+    if (btnPauseLogs) {
+      btnPauseLogs.addEventListener('click', () => {
+        isStreamPaused = !isStreamPaused;
+        if (!isStreamPaused) {
+          pausedNewCount = 0;
+          reapplyLogFilter();
+        }
+        updatePauseButtonUI();
+      });
+    }
+
+    // Expand / Collapse console height
+    const btnExpandLogs = document.getElementById('btn-expand-logs');
+    if (btnExpandLogs && logsContainer) {
+      btnExpandLogs.addEventListener('click', () => {
+        isLogsExpanded = !isLogsExpanded;
+        logsContainer.classList.toggle('is-expanded', isLogsExpanded);
+        btnExpandLogs.setAttribute('aria-pressed', isLogsExpanded ? 'true' : 'false');
+        const icon = document.getElementById('expand-logs-icon');
+        if (icon) icon.textContent = isLogsExpanded ? '⤡' : '⤢';
+        btnExpandLogs.title = isLogsExpanded ? 'Collapse Console Height' : 'Expand Console Height';
+      });
+    }
+
+    // Floating Jump to latest button
+    const btnJumpLatest = document.getElementById('btn-jump-latest');
+    if (btnJumpLatest && logsContainer) {
+      btnJumpLatest.addEventListener('click', () => {
+        isUserScrolledUp = false;
+        logsContainer.scrollTop = logsContainer.scrollHeight;
+        btnJumpLatest.classList.add('hidden');
+      });
+    }
+
     // Clear logs button
     const btnClearLogs = document.getElementById('btn-clear-logs');
     if (btnClearLogs && logsContainer) {
       btnClearLogs.addEventListener('click', () => {
         allEvents = [];
+        pausedNewCount = 0;
+        updatePauseButtonUI();
+        updateLogsCountBadge();
         logsContainer.innerHTML = `
           <div class="log-entry">
-            <span class="log-time">--:--:--</span>
-            <span class="log-pill pill-info">SYSTEM</span>
-            <span class="log-message text-muted">Logs cleared by user.</span>
+            <div class="log-entry-main">
+              <span class="log-time">--:--:--</span>
+              <span class="log-pill pill-info">SYSTEM</span>
+              <span class="log-message text-muted">Logs cleared by user.</span>
+            </div>
           </div>
         `;
         showToast('Console logs cleared', 'info', 2000);
@@ -2348,12 +2674,15 @@
         const textLines = allEvents.map(evt => {
           const t = formatTimeOnly(evt.timestamp);
           const type = (evt.type || 'INFO').toUpperCase();
-          const acc = evt.account_id ? `[${evt.account_id.slice(0, 8)}] ` : '';
+          const acc = resolveAccount(evt.account_id);
+          const accStr = acc ? `[${acc.email}]` : (evt.account_id ? `[${evt.account_id.slice(0, 8)}]` : '');
+          const model = extractEventModel(evt);
+          const modelStr = model ? `[${model}]` : '';
           let msg = evt.message || '';
           if (isPrivacyMode) {
             msg = redactEmails(msg);
           }
-          return `[${t}] [${type}] ${acc}${msg}`;
+          return `[${t}] [${type}] ${accStr} ${modelStr} ${msg}`.replace(/\s+/g, ' ').trim();
         }).join('\n');
         copyToClipboard(textLines, isPrivacyMode ? 'Redacted proxy logs' : 'Proxy logs');
       });
@@ -2382,6 +2711,10 @@
         const threshold = 30;
         const atBottom = logsContainer.scrollHeight - logsContainer.scrollTop - logsContainer.clientHeight < threshold;
         isUserScrolledUp = !atBottom;
+        const btnJump = document.getElementById('btn-jump-latest');
+        if (btnJump && atBottom) {
+          btnJump.classList.add('hidden');
+        }
       });
     }
 

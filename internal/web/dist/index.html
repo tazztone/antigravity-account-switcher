@@ -234,15 +234,23 @@
 
     <!-- Section 4: Real-Time Proxy Event Log -->
     <section class="panel" aria-labelledby="logs-section-title">
-      <div class="panel-header">
+      <div class="panel-header logs-panel-header">
         <div class="panel-title-group">
           <h2 id="logs-section-title" class="panel-title">
             Live Proxy Event Stream
             <span class="badge badge-info mono">/api/events</span>
+            <span id="logs-count-badge" class="badge badge-subtle mono">0 events</span>
           </h2>
           <p class="panel-description">Streaming events via SSE: failovers, token telemetry, quota updates, switch actions</p>
         </div>
-        <div class="header-actions">
+        <div class="header-actions logs-header-actions">
+          <!-- Search box -->
+          <div class="logs-search-wrapper">
+            <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor" width="13" height="13" aria-hidden="true">
+              <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
+            </svg>
+            <input type="search" id="logs-search-input" class="logs-search-input" placeholder="Search account, model, tokens..." aria-label="Filter events by keyword">
+          </div>
           <!-- Filter Buttons -->
           <div class="filter-group" role="group" aria-label="Event Log Filters">
             <button class="filter-btn active" data-filter="all">All</button>
@@ -251,18 +259,32 @@
             <button class="filter-btn" data-filter="tokens">Tokens</button>
             <button class="filter-btn" data-filter="error">Errors</button>
           </div>
+          <button id="btn-pause-logs" class="btn btn-subtle" title="Pause or resume live event stream">
+            <span id="pause-logs-icon" class="btn-icon">⏸</span>
+            <span id="pause-logs-text">Pause</span>
+          </button>
           <button id="btn-copy-logs" class="btn btn-subtle" title="Copy Logs to Clipboard">Copy</button>
           <button id="btn-clear-logs" class="btn btn-subtle" title="Clear Visible Logs">Clear</button>
+          <button id="btn-expand-logs" class="btn btn-subtle" title="Toggle Expanded View" aria-pressed="false">
+            <span id="expand-logs-icon" class="btn-icon">⤢</span>
+          </button>
         </div>
       </div>
 
-      <!-- Terminal Console Box -->
-      <div id="logs-container" class="logs-console" role="log" aria-live="polite" tabindex="0">
-        <div class="log-entry">
-          <span class="log-time">--:--:--</span>
-          <span class="log-pill pill-info">SYSTEM</span>
-          <span class="log-message text-muted">Listening for live proxy telemetry events...</span>
+      <!-- Terminal Console Box with Floating Actions -->
+      <div class="logs-console-wrapper">
+        <div id="logs-container" class="logs-console" role="log" aria-live="polite" tabindex="0">
+          <div class="log-entry">
+            <div class="log-entry-main">
+              <span class="log-time">--:--:--</span>
+              <span class="log-pill pill-info">SYSTEM</span>
+              <span class="log-message text-muted">Listening for live proxy telemetry events...</span>
+            </div>
+          </div>
         </div>
+        <button id="btn-jump-latest" class="btn-jump-latest hidden" aria-label="Jump to latest events">
+          ↓ Latest events
+        </button>
       </div>
     </section>
   </main>
