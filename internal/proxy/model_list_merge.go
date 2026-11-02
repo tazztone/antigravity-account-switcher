@@ -230,11 +230,6 @@ func (e *modelSortEntry) appendModels(ids []string) {
 	e.appendGroupWithRaw(nil, ids)
 }
 
-// appendGroup adds a fresh ordering group holding the given model IDs.
-func (e *modelSortEntry) appendGroup(ids []string) {
-	e.appendGroupWithRaw(nil, ids)
-}
-
 // appendGroupWithRaw appends an ordering group, preserving unknown group fields from originalRaw.
 func (e *modelSortEntry) appendGroupWithRaw(originalRaw json.RawMessage, ids []string) {
 	if len(ids) == 0 {

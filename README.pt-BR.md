@@ -149,6 +149,63 @@ antigravity-account-switcher uninstall-desktop
 
 ---
 
+## Uso com a CLI do Antigravity (`agy`)
+
+Se você prefere utilizar a interface de terminal (`agy`) diretamente no seu shell ou nas abas de terminal do Codium / VS Code em vez do aplicativo desktop gráfico, você pode roteá-la através do switcher de duas maneiras:
+
+### Método 1: Wrapper Efêmero (`wrap`)
+Inicia o proxy e o painel web sob demanda, roteia o tráfego do `agy` e encerra o processo imediatamente ao sair do `agy` (`PR_SET_PDEATHSIG`):
+```bash
+antigravity-account-switcher wrap --port 1831 -- agy
+```
+Enquanto o `agy` estiver em execução, o painel web e as configurações ficam acessíveis em `http://127.0.0.1:1831/`.
+
+### Método 2: Daemon Persistente (`serve`) + Script Auto-Recuperável (`agy2`)
+Caso queira manter o painel web e o monitor de cotas em `http://127.0.0.1:1831/` sempre online entre múltiplas sessões de terminal:
+
+1. **Defina a porta padrão e inicie o daemon:**
+   ```bash
+   antigravity-account-switcher config set port 1831
+   antigravity-account-switcher serve --port 1831
+   ```
+2. **Crie o script wrapper auto-recuperável (`~/.local/bin/agy2`):**
+   ```bash
+   cat << 'EOF' > ~/.local/bin/agy2
+   #!/usr/bin/env bash
+
+   # Inicia automaticamente o daemon do switcher se não estiver ativo na porta 1831
+   if ! curl -s -m 1 -f http://127.0.0.1:1831/api/status >/dev/null 2>&1; then
+     antigravity-account-switcher serve --port 1831 >/tmp/antigravity-switcher.log 2>&1 &
+     for _ in {1..30}; do
+       if curl -s -m 1 -f http://127.0.0.1:1831/api/status >/dev/null 2>&1; then
+         break
+       fi
+       sleep 0.1
+     done
+   fi
+
+   export HTTP_PROXY="http://127.0.0.1:1831"
+   export HTTPS_PROXY="http://127.0.0.1:1831"
+   export http_proxy="http://127.0.0.1:1831"
+   export https_proxy="http://127.0.0.1:1831"
+   export CLOUD_CODE_URL="http://127.0.0.1:1831"
+   export NO_PROXY="localhost,127.0.0.1,::1,speech.googleapis.com"
+   export no_proxy="localhost,127.0.0.1,::1,speech.googleapis.com"
+
+   exec agy "$@"
+   EOF
+   chmod +x ~/.local/bin/agy2
+   ```
+3. **Execute `agy2` em qualquer terminal:**
+   * Executa diretamente o `agy` roteado pelo pool de contas do switcher.
+   * Inicia automaticamente o daemon em segundo plano caso ele não esteja ativo.
+   * Mantém `http://127.0.0.1:1831/` acessível no navegador para monitoramento de cotas e configurações.
+
+> [!NOTE]
+> `CLOUD_CODE_URL=http://127.0.0.1:1831` redireciona explicitamente os endpoints gRPC-Web e REST internos do `agy` para o switcher. `NO_PROXY` preserva o tráfego direto de IPC no localhost e do serviço de reconhecimento de voz (`speech.googleapis.com`).
+
+---
+
 ## Referência de Comandos da CLI
 
 A CLI disponibiliza comandos para supervisão, troca manual e configuração:
