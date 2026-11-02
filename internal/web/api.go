@@ -42,6 +42,7 @@ type APIHandler struct {
 	cfgMu                sync.RWMutex
 	appConfig            *config.Config
 	fallbackConfigSetter FallbackConfigSetter
+	shutdownFunc         func()
 }
 
 // SetConfig sets the configuration pointer for APIHandler.
@@ -66,6 +67,43 @@ type QuotaPoller interface {
 // SetPoller assigns the quota poller.
 func (a *APIHandler) SetPoller(p QuotaPoller) {
 	a.poller = p
+}
+
+// SetShutdownFunc assigns the shutdown callback.
+func (a *APIHandler) SetShutdownFunc(f func()) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.shutdownFunc = f
+}
+
+// HandleShutdown serves POST /api/shutdown to gracefully stop the switcher.
+func (a *APIHandler) HandleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	a.cfgMu.RLock()
+	shutdown := a.shutdownFunc
+	a.cfgMu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if shutdown == nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    false,
+			"error": "shutdown not supported in this server mode",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"message": "Server shutting down...",
+	})
+
+	time.AfterFunc(100*time.Millisecond, shutdown)
 }
 
 // HandleQuotaRefresh serves POST /api/quota/refresh.

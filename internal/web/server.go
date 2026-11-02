@@ -32,6 +32,7 @@ type ServerConfig struct {
 	Poller               QuotaPoller
 	AppConfig            *config.Config
 	FallbackConfigSetter FallbackConfigSetter
+	ShutdownFunc         func()
 	ReadTimeout          time.Duration
 	WriteTimeout         time.Duration
 }
@@ -82,6 +83,11 @@ func WithConfig(cfg *config.Config) Option {
 // WithFallbackConfigSetter sets the dynamic fallback setter for live proxy updates.
 func WithFallbackConfigSetter(setter FallbackConfigSetter) Option {
 	return func(c *ServerConfig) { c.FallbackConfigSetter = setter }
+}
+
+// WithShutdownFunc sets the shutdown callback for graceful termination via /api/shutdown.
+func WithShutdownFunc(f func()) Option {
+	return func(c *ServerConfig) { c.ShutdownFunc = f }
 }
 
 // Server serves both the Web UI/REST API dashboard and the local reverse proxy.
@@ -143,6 +149,9 @@ func NewServer(
 	if cfg.FallbackConfigSetter != nil {
 		api.SetFallbackConfigSetter(cfg.FallbackConfigSetter)
 	}
+	if cfg.ShutdownFunc != nil {
+		api.SetShutdownFunc(cfg.ShutdownFunc)
+	}
 
 	return &Server{
 		cfg:          cfg,
@@ -159,6 +168,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 1. API Endpoints
 	if path == "/api/status" {
 		s.api.HandleStatus(w, r)
+		return
+	}
+	if path == "/api/shutdown" {
+		s.api.HandleShutdown(w, r)
 		return
 	}
 	if strings.HasPrefix(path, "/api/accounts") {

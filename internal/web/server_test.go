@@ -634,6 +634,98 @@ func TestServer_Lifecycle_StartStop(t *testing.T) {
 	}
 }
 
+func TestServer_API_Shutdown(t *testing.T) {
+	_, accRepo, quotaRepo, _, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
+
+	shutdownCalled := make(chan struct{}, 1)
+	server, err := NewServer(accRepo, quotaRepo, metricsSvc, broadcaster, eventRepo, nil,
+		WithPort(0),
+		WithBindAddr("127.0.0.1"),
+		WithShutdownFunc(func() {
+			select {
+			case shutdownCalled <- struct{}{}:
+			default:
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("server.Start() failed: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	}()
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", server.Port())
+
+	// 1. Method not allowed for GET
+	getResp, err := http.Get(baseURL + "/api/shutdown")
+	if err != nil {
+		t.Fatalf("GET /api/shutdown failed: %v", err)
+	}
+	_ = getResp.Body.Close()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET /api/shutdown, got %d", getResp.StatusCode)
+	}
+
+	// 2. POST /api/shutdown triggers callback
+	postResp, err := http.Post(baseURL+"/api/shutdown", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/shutdown failed: %v", err)
+	}
+	defer postResp.Body.Close()
+	if postResp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK for POST /api/shutdown, got %d", postResp.StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(postResp.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if okVal, ok := res["ok"].(bool); !ok || !okVal {
+		t.Errorf("expected ok: true, got %v", res["ok"])
+	}
+
+	// Assert shutdown callback was triggered
+	select {
+	case <-shutdownCalled:
+		// success
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected shutdown callback to be called within 1 second")
+	}
+
+	// 3. Test when shutdownFunc is nil
+	serverNoHook, err := NewServer(accRepo, quotaRepo, metricsSvc, broadcaster, eventRepo, nil,
+		WithPort(0),
+		WithBindAddr("127.0.0.1"),
+	)
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+	if err := serverNoHook.Start(); err != nil {
+		t.Fatalf("serverNoHook.Start() failed: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = serverNoHook.Stop(ctx)
+	}()
+
+	respNoHook, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/shutdown", serverNoHook.Port()), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/shutdown failed: %v", err)
+	}
+	_ = respNoHook.Body.Close()
+	if respNoHook.StatusCode != http.StatusNotImplemented {
+		t.Errorf("expected 501 Not Implemented when shutdownFunc is nil, got %d", respNoHook.StatusCode)
+	}
+}
+
 func TestServer_ConcurrentWorkload_RaceDetector(t *testing.T) {
 	_, accRepo, quotaRepo, metricsRepo, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
 	ctx := context.Background()
