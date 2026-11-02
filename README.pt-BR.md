@@ -166,6 +166,11 @@ Mantém `http://127.0.0.1:1831/` sempre ativo para o painel web entre sessões:
 # Define a porta padrão e inicia o daemon em segundo plano
 antigravity-account-switcher config set port 1831
 antigravity-account-switcher serve --port 1831
+
+# Para parar o daemon em segundo plano quando desejar
+antigravity-account-switcher stop
+# Ou especificando a porta caso use uma porta personalizada
+antigravity-account-switcher stop --port 1831
 ```
 
 Crie `~/.local/bin/agy2` (inicia o `serve` se estiver parado e injeta as variáveis do proxy):
@@ -193,6 +198,7 @@ A CLI disponibiliza comandos para supervisão, troca manual e configuração:
 | :--- | :--- |
 | `launch` | **(Recomendado)** Inicia o Antigravity 2.0 sob a supervisão do proxy acoplado. |
 | `serve` | Inicia o proxy local, monitor de cotas em segundo plano e dashboard web como serviço. |
+| `stop` | Encerra graciosamente um daemon do switcher em execução em segundo plano. |
 | `wrap -- <comando>` | Executa qualquer comando arbitrário injetando o proxy apenas naquele processo. |
 | `add-account` | Inicia o fluxo OAuth2 loopback (RFC 8252) no navegador para cadastrar uma nova conta Google. |
 | `list-accounts` | Exibe todas as contas cadastradas, qual está ativa e as porcentagens de cota. |

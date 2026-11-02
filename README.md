@@ -166,6 +166,11 @@ Keeps `http://127.0.0.1:1831/` persistent for web dashboard and settings across 
 # Set default port and start background daemon
 antigravity-account-switcher config set port 1831
 antigravity-account-switcher serve --port 1831
+
+# Stop the background daemon anytime
+antigravity-account-switcher stop
+# Or specify port explicitly if running on a custom port
+antigravity-account-switcher stop --port 1831
 ```
 
 Create `~/.local/bin/agy2` (auto-launches `serve` if stopped and scopes proxy variables):
@@ -193,6 +198,7 @@ The CLI provides commands for launch supervision, manual switching, and configur
 | :--- | :--- |
 | `launch` | **(Recommended)** Launches Antigravity 2.0 under proxy supervision. |
 | `serve` | Runs the proxy, background quota monitor, and web dashboard as a daemon. |
+| `stop` | Gracefully terminates a running background switcher daemon. |
 | `wrap -- <cmd>` | Executes any arbitrary command with scoped switcher proxy variables. |
 | `add-account` | Initiates RFC 8252 loopback OAuth2 flow to register a Google account. |
 | `list-accounts` | Displays all registered accounts, active status, and quota percentages. |
