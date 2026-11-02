@@ -151,58 +151,37 @@ antigravity-account-switcher uninstall-desktop
 
 ## Using with Antigravity CLI (`agy`)
 
-If you prefer using the terminal interface (`agy`) directly in your shell or inside Codium / VS Code terminal tabs instead of the GUI desktop app, you can supervise it through the switcher in two ways:
+Route terminal sessions through the switcher pool using either mode:
 
-### Method 1: Ephemeral Wrapper (`wrap`)
-Launches the proxy and web dashboard on demand, routes `agy` traffic, and terminates immediately when `agy` exits (`PR_SET_PDEATHSIG`):
+### 1. Ephemeral Supervision (`wrap`)
+Spins up proxy and web UI, runs `agy`, and exits together (`PR_SET_PDEATHSIG`):
 ```bash
 antigravity-account-switcher wrap --port 1831 -- agy
 ```
-While `agy` is running, the web dashboard and settings remain accessible at `http://127.0.0.1:1831/`.
 
-### Method 2: Persistent Daemon (`serve`) + Self-Healing Wrapper (`agy2`)
-To keep the web dashboard and quota tracker at `http://127.0.0.1:1831/` persistently online across multiple terminal sessions:
+### 2. Persistent Daemon (`serve`) + Auto-Starting Wrapper (`agy2`)
+Keeps `http://127.0.0.1:1831/` persistent for web dashboard and settings across sessions:
 
-1. **Set the default port and start the daemon:**
-   ```bash
-   antigravity-account-switcher config set port 1831
-   antigravity-account-switcher serve --port 1831
-   ```
-2. **Create the self-healing wrapper script (`~/.local/bin/agy2`):**
-   ```bash
-   cat << 'EOF' > ~/.local/bin/agy2
-   #!/usr/bin/env bash
+```bash
+# Set default port and start background daemon
+antigravity-account-switcher config set port 1831
+antigravity-account-switcher serve --port 1831
+```
 
-   # Auto-start switcher daemon if not already running on port 1831
-   if ! curl -s -m 1 -f http://127.0.0.1:1831/api/status >/dev/null 2>&1; then
-     antigravity-account-switcher serve --port 1831 >/tmp/antigravity-switcher.log 2>&1 &
-     for _ in {1..30}; do
-       if curl -s -m 1 -f http://127.0.0.1:1831/api/status >/dev/null 2>&1; then
-         break
-       fi
-       sleep 0.1
-     done
-   fi
-
-   export HTTP_PROXY="http://127.0.0.1:1831"
-   export HTTPS_PROXY="http://127.0.0.1:1831"
-   export http_proxy="http://127.0.0.1:1831"
-   export https_proxy="http://127.0.0.1:1831"
-   export CLOUD_CODE_URL="http://127.0.0.1:1831"
-   export NO_PROXY="localhost,127.0.0.1,::1,speech.googleapis.com"
-   export no_proxy="localhost,127.0.0.1,::1,speech.googleapis.com"
-
-   exec agy "$@"
-   EOF
-   chmod +x ~/.local/bin/agy2
-   ```
-3. **Execute `agy2` anywhere:**
-   * Directly invokes `agy` routed through the switcher account pool.
-   * Auto-launches the background proxy daemon if it was offline.
-   * Keeps `http://127.0.0.1:1831/` accessible in your browser for settings and quota monitoring.
+Create `~/.local/bin/agy2` (auto-launches `serve` if stopped and scopes proxy variables):
+```bash
+#!/usr/bin/env bash
+curl -s -m 1 -f http://127.0.0.1:1831/api/status >/dev/null 2>&1 || {
+  antigravity-account-switcher serve --port 1831 >/tmp/antigravity-switcher.log 2>&1 &
+  sleep 0.3
+}
+export HTTP_PROXY="http://127.0.0.1:1831" HTTPS_PROXY="http://127.0.0.1:1831" CLOUD_CODE_URL="http://127.0.0.1:1831" NO_PROXY="localhost,127.0.0.1,::1,speech.googleapis.com"
+exec agy "$@"
+```
+*(Make executable: `chmod +x ~/.local/bin/agy2`)*
 
 > [!NOTE]
-> `CLOUD_CODE_URL=http://127.0.0.1:1831` explicitly redirects `agy`'s internal endpoints to the switcher. `NO_PROXY` preserves direct loopback IPC and Google voice speech-to-text (`speech.googleapis.com`).
+> `CLOUD_CODE_URL` redirects internal gRPC-Web calls to the switcher; `NO_PROXY` preserves direct localhost IPC and voice speech-to-text (`speech.googleapis.com`).
 
 ---
 
