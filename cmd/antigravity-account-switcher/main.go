@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -101,6 +103,8 @@ func main() {
 		runLaunch(args)
 	case "serve":
 		runServe(args)
+	case "stop":
+		runStop(args)
 	case "wrap":
 		runWrap(args)
 	case "config":
@@ -137,6 +141,7 @@ func printUsage() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  launch             Launch Google Antigravity 2.0 directly with coupled proxy supervisor")
 	fmt.Println("  serve              Start the local proxy, quota monitor, and web dashboard")
+	fmt.Println("  stop               Stop a running background switcher daemon")
 	fmt.Println("  wrap               Supervise any command with scoped proxy environment (PR_SET_PDEATHSIG)")
 	fmt.Println("  config             Get, set, or list persistent configuration (models, port, db, paths)")
 	fmt.Println("  install-desktop    Install GNOME / XDG desktop application entry with official icon")
@@ -326,6 +331,7 @@ func runServe(args []string) {
 		web.WithPoller(poller),
 		web.WithConfig(cfg),
 		web.WithFallbackConfigSetter(failoverEngine),
+		web.WithShutdownFunc(stop),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating web server: %v\n", err)
@@ -358,6 +364,94 @@ func runServe(args []string) {
 	_ = server.Stop(shutdownCtx)
 	_ = poller.Stop()
 	fmt.Println("Goodbye.")
+}
+
+// runStop sends a graceful shutdown request to a running background switcher daemon.
+func runStop(args []string) {
+	if code := executeStop(args, os.Stdout, os.Stderr); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// executeStop executes the stop subcommand logic and returns an exit code.
+func executeStop(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	port := fs.Int("port", 0, "Port of running server to stop (defaults to configured port, or checks 8080 and 1831)")
+	timeout := fs.Duration("timeout", 5*time.Second, "Maximum time to wait for server to shut down")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if *port < 0 || *port > 65535 {
+		fmt.Fprintf(stderr, "Configuration error: invalid port %d: must be between 1 and 65535\n", *port)
+		return 1
+	}
+
+	var candidatePorts []int
+	if *port > 0 {
+		candidatePorts = []int{*port}
+	} else {
+		cfg, err := config.Load()
+		if err == nil && cfg != nil && cfg.Port > 0 {
+			candidatePorts = []int{cfg.Port}
+		} else {
+			candidatePorts = []int{config.DefaultPort, 1831}
+		}
+	}
+
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+
+	var targetPort int
+	found := false
+
+	for _, p := range candidatePorts {
+		url := fmt.Sprintf("http://127.0.0.1:%d/api/shutdown", p)
+		req, err := http.NewRequest(http.MethodPost, url, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			found = true
+			targetPort = p
+			break
+		}
+	}
+
+	if !found {
+		if len(candidatePorts) == 1 {
+			fmt.Fprintf(stderr, "No active Antigravity Account Switcher server found on port %d.\n", candidatePorts[0])
+		} else {
+			fmt.Fprintf(stderr, "No active Antigravity Account Switcher server found on ports %d or %d.\n", candidatePorts[0], candidatePorts[1])
+		}
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Sending shutdown request to server on port %d...\n", targetPort)
+
+	// Wait for port to close
+	deadline := time.Now().Add(*timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", targetPort), 100*time.Millisecond)
+		if err != nil {
+			// Connection refused means server successfully stopped and released port
+			fmt.Fprintf(stdout, "Antigravity Account Switcher on port %d stopped successfully.\n", targetPort)
+			return 0
+		}
+		_ = conn.Close()
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	fmt.Fprintf(stderr, "Warning: shutdown request accepted, but port %d still listening after %v.\n", targetPort, *timeout)
+	return 1
 }
 
 // runWrap starts the switcher supervisor and wraps an existing command process.

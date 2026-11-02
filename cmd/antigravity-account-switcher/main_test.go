@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +42,7 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(out, "Usage:") {
 		t.Errorf("expected usage output to contain 'Usage:', got: %s", out)
 	}
-	if !strings.Contains(out, "serve") || !strings.Contains(out, "wrap") {
+	if !strings.Contains(out, "serve") || !strings.Contains(out, "wrap") || !strings.Contains(out, "stop") {
 		t.Errorf("expected usage output to describe subcommands, got: %s", out)
 	}
 }
@@ -770,5 +774,84 @@ func TestCLI_RunListAccounts_RefreshCountdown(t *testing.T) {
 	}
 	if !strings.Contains(out, "5h: 100%") {
 		t.Errorf("expected 100%% quota to omit countdown, got:\n%s", out)
+	}
+}
+
+func TestCLI_StopCommand_InvalidPort(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := executeStop([]string{"--port", "-1"}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("expected exit code 1 for negative port, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "invalid port -1") {
+		t.Errorf("expected invalid port error message, got: %s", stderr.String())
+	}
+}
+
+func TestCLI_StopCommand_ServerNotRunning(t *testing.T) {
+	// Find an unused ephemeral port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on ephemeral port: %v", err)
+	}
+	unusedPort := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := executeStop([]string{"--port", strconv.Itoa(unusedPort)}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("expected exit code 1 when server is not running, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), fmt.Sprintf("No active Antigravity Account Switcher server found on port %d", unusedPort)) {
+		t.Errorf("expected server not found diagnostic, got: %s", stderr.String())
+	}
+}
+
+func TestCLI_StopCommand_SuccessfulShutdown(t *testing.T) {
+	// Create a test HTTP server with /api/shutdown endpoint
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on ephemeral port: %v", err)
+	}
+	serverPort := ln.Addr().(*net.TCPAddr).Port
+
+	mux := http.NewServeMux()
+	shutdownReceived := make(chan struct{})
+	server := &http.Server{Handler: mux}
+
+	mux.HandleFunc("/api/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"message":"Server shutting down..."}`))
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			close(shutdownReceived)
+			_ = server.Close()
+		}()
+	})
+
+	go func() {
+		_ = server.Serve(ln)
+	}()
+
+	var stdout, stderr bytes.Buffer
+	code := executeStop([]string{"--port", strconv.Itoa(serverPort), "--timeout", "3s"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected executeStop exit code 0, got %d, stderr: %s", code, stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), fmt.Sprintf("Antigravity Account Switcher on port %d stopped successfully", serverPort)) {
+		t.Errorf("expected success message in stdout, got:\n%s", stdout.String())
+	}
+
+	select {
+	case <-shutdownReceived:
+		// success
+	case <-time.After(1 * time.Second):
+		t.Error("expected shutdown endpoint to be called")
 	}
 }
