@@ -78,8 +78,8 @@ func TestServer_StaticFiles(t *testing.T) {
 		t.Errorf("expected javascript content-type, got %s", respJS.Header.Get("Content-Type"))
 	}
 	bodyJS, _ := io.ReadAll(respJS.Body)
-	if !strings.Contains(string(bodyJS), "bucket-active-pool") || !strings.Contains(string(bodyJS), "bucket-standby-pool") || !strings.Contains(string(bodyJS), "drawPoolCircuits") || !strings.Contains(string(bodyJS), "bucket-unentitled") || !strings.Contains(string(bodyJS), "hasArgonAccess") {
-		t.Errorf("expected app.js to contain bucket routing, standby pool, drawPoolCircuits, and argon entitlement logic")
+	if !strings.Contains(string(bodyJS), "bucket-active-pool") || !strings.Contains(string(bodyJS), "bucket-standby-pool") || !strings.Contains(string(bodyJS), "drawPoolCircuits") || !strings.Contains(string(bodyJS), "bucket-unentitled") || !strings.Contains(string(bodyJS), "hasArgonAccess") || !strings.Contains(string(bodyJS), "bucket-exhausted") || !strings.Contains(string(bodyJS), "isBucketDepleted") {
+		t.Errorf("expected app.js to contain bucket routing, standby pool, drawPoolCircuits, argon entitlement logic, and bucket-exhausted detection")
 	}
 
 	// 3. /dist/style.css
@@ -92,8 +92,8 @@ func TestServer_StaticFiles(t *testing.T) {
 		t.Fatalf("expected 200 OK for /dist/style.css, got %d", respCSS.StatusCode)
 	}
 	bodyCSS, _ := io.ReadAll(respCSS.Body)
-	if !strings.Contains(string(bodyCSS), ".bucket-active-pool") || !strings.Contains(string(bodyCSS), ".pool-circuit-canvas") || !strings.Contains(string(bodyCSS), ".circuit-path") || !strings.Contains(string(bodyCSS), ".bucket-unentitled") || !strings.Contains(string(bodyCSS), ".badge-unentitled") {
-		t.Errorf("expected style.css to contain bucket routing, pool circuit canvas, circuit path, and unentitled bucket styling")
+	if !strings.Contains(string(bodyCSS), ".bucket-active-pool") || !strings.Contains(string(bodyCSS), ".pool-circuit-canvas") || !strings.Contains(string(bodyCSS), ".circuit-path") || !strings.Contains(string(bodyCSS), ".bucket-unentitled") || !strings.Contains(string(bodyCSS), ".badge-unentitled") || !strings.Contains(string(bodyCSS), ".bucket-exhausted") {
+		t.Errorf("expected style.css to contain bucket routing, pool circuit canvas, circuit path, unentitled bucket styling, and bucket-exhausted styling")
 	}
 
 	// 4. SPA fallback

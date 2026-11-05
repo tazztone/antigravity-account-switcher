@@ -638,6 +638,18 @@
     const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly, argonWeekly].filter(Boolean));
     const extraBuckets = buckets.filter(b => !standardBucketSet.has(b));
 
+    function isBucketDepleted(bucket) {
+      if (!bucket) return false;
+      const fraction = Math.max(0, Math.min(1, bucket.remaining_fraction ?? 1.0));
+      const pct = Math.round(fraction * 100);
+      if (pct > 0) return false;
+      if (bucket.reset_time) {
+        const remainingSec = getRemainingSeconds(bucket.reset_time);
+        return remainingSec > 0;
+      }
+      return true;
+    }
+
     function renderQuotaRow(label, bucket) {
       if (!bucket) {
         return `
@@ -720,7 +732,33 @@
     const activeCats = acc.active_categories || [];
     const disabledCats = acc.disabled_categories || [];
 
-    function getCategoryRouting(catKey, catLabel) {
+    // Model rules categorized by bucket
+    const rules = acc.model_rules || [];
+
+    function formatTierLabel(tier) {
+      const t = tier.toLowerCase();
+      if (t === 'medium') return 'Med';
+      if (t === 'thinking') return 'Think';
+      return tier;
+    }
+
+    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
+    rules.forEach(r => {
+      const g = getModelRuleCategory(r);
+      if (g && groupedRules[g]) {
+        groupedRules[g].push(r);
+      }
+    });
+
+    const hasArgonAccess = Boolean(argonWeekly) ||
+      (groupedRules.argon && groupedRules.argon.length > 0) ||
+      rules.some(r => /5-5/i.test(r.model_id) || (/argon/i.test(r.model_id) && !r.model_id.includes('disabled')));
+
+    const isClaudeExhausted = isBucketDepleted(claude5h) || isBucketDepleted(claudeWeekly);
+    const isGeminiExhausted = isBucketDepleted(gemini5h) || isBucketDepleted(geminiWeekly);
+    const isArgonExhausted = hasArgonAccess && isBucketDepleted(argonWeekly);
+
+    function getCategoryRouting(catKey, catLabel, isExhausted) {
       const isPinned = activeCats.includes(catKey);
       const isDisabled = disabledCats.includes(catKey);
       const catMode = (acc.category_modes && acc.category_modes[catKey]) || rawCategoryModes[catKey] || 'pool';
@@ -747,7 +785,7 @@
           actionIcon = '🔄';
           actionTitle = 'Pool Mode active (auto-rotates). Click to switch to Solo';
           nextMode = 'solo';
-          isInPool = true;
+          isInPool = !isExhausted;
         }
       } else {
         if (isDisabled) {
@@ -756,6 +794,13 @@
           actionIcon = '🚫';
           actionTitle = 'Excluded from category failover. Click to re-enable';
           nextEnabled = true;
+          isInPool = false;
+        } else if (isExhausted) {
+          pillClass = 'state-standby-exhausted';
+          groupClass = 'bucket-standby-pool';
+          actionIcon = '✓';
+          actionTitle = 'Quota exhausted (in cooldown). Click to exclude from category failover';
+          nextEnabled = false;
           isInPool = false;
         } else if (catMode === 'solo') {
           pillClass = 'state-standby-solo';
@@ -772,6 +817,10 @@
           nextEnabled = false;
           isInPool = true;
         }
+      }
+
+      if (isExhausted) {
+        groupClass += ' bucket-exhausted';
       }
 
       const pillHtml = `
@@ -800,27 +849,9 @@
       return { groupClass, pillHtml, isInPool };
     }
 
-    const claudeRouting = getCategoryRouting('claude_gpt', 'Claude/GPT');
-    const geminiRouting = getCategoryRouting('gemini', 'Gemini');
-    const argonRouting = getCategoryRouting('gemini_argon', 'Argon');
-
-    // Model rules categorized by bucket
-    const rules = acc.model_rules || [];
-
-    function formatTierLabel(tier) {
-      const t = tier.toLowerCase();
-      if (t === 'medium') return 'Med';
-      if (t === 'thinking') return 'Think';
-      return tier;
-    }
-
-    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
-    rules.forEach(r => {
-      const g = getModelRuleCategory(r);
-      if (g && groupedRules[g]) {
-        groupedRules[g].push(r);
-      }
-    });
+    const claudeRouting = getCategoryRouting('claude_gpt', 'Claude/GPT', isClaudeExhausted);
+    const geminiRouting = getCategoryRouting('gemini', 'Gemini', isGeminiExhausted);
+    const argonRouting = getCategoryRouting('gemini_argon', 'Argon', isArgonExhausted);
 
     function buildModelGroupRows(ruleList, groupKey) {
       if (!ruleList || ruleList.length === 0) return { count: 0, html: '' };
@@ -961,9 +992,6 @@
     const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude);
     const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini);
     const argonModelsHtml = renderBucketModels('argon', groupedRules.argon);
-    const hasArgonAccess = Boolean(argonWeekly) ||
-      (groupedRules.argon && groupedRules.argon.length > 0) ||
-      rules.some(r => /5-5/i.test(r.model_id) || (/argon/i.test(r.model_id) && !r.model_id.includes('disabled')));
 
     // Build Model Groups with Bucket-Level Borders
     let extraHtml = '';
@@ -1024,13 +1052,22 @@
       ${extraHtml}
     `;
 
+    // Total entitled, non-disabled categories for this account
+    const entitledCats = ['claude_gpt', 'gemini'];
+    if (hasArgonAccess) entitledCats.push('gemini_argon');
+    const enabledEntitledCats = entitledCats.filter(c => !disabledCats.includes(c));
+
+    const isAllExhausted = enabledEntitledCats.length > 0 && enabledEntitledCats.every(c => {
+      if (c === 'claude_gpt') return isClaudeExhausted;
+      if (c === 'gemini') return isGeminiExhausted;
+      if (c === 'gemini_argon') return isArgonExhausted;
+      return false;
+    });
+
     // Status badge formatting
     let statusBadgeClass = 'badge-neutral';
     let statusText = 'STANDBY';
-    if (isExhausted) {
-      statusBadgeClass = 'badge-danger';
-      statusText = 'EXHAUSTED';
-    } else if (acc.status === 'error') {
+    if (acc.status === 'error') {
       statusBadgeClass = 'badge-danger';
       statusText = 'ERROR';
     } else if (acc.status === 'disabled') {
@@ -1039,6 +1076,9 @@
     } else if (activeCats.length > 0) {
       statusBadgeClass = 'badge-success';
       statusText = `ROUTING (${activeCats.length}/3)`;
+    } else if (isAllExhausted || (buckets.length === 0 && acc.status === 'exhausted')) {
+      statusBadgeClass = 'badge-danger';
+      statusText = 'EXHAUSTED';
     }
 
     const cardTitle = isPrivacyMode ? '[Protected in Privacy Mode]' : escapeHtml(acc.email);
@@ -1187,6 +1227,17 @@
           timerSpan.textContent = 'Reset ready';
           alertEl.style.color = 'var(--color-success)';
           if (dot) dot.classList.add('ready');
+
+          const group = alertEl.closest('.quota-group');
+          if (group) {
+            const hasActiveCooldown = Array.from(group.querySelectorAll('.cooldown-alert[data-reset-time]')).some(a => {
+              const rStr = a.getAttribute('data-reset-time');
+              return rStr && getRemainingSeconds(rStr) > 0;
+            });
+            if (!hasActiveCooldown) {
+              group.classList.remove('bucket-exhausted');
+            }
+          }
         } else {
           timerSpan.textContent = formatRemainingDuration(remainingSec);
           if (dot) dot.classList.remove('ready');
