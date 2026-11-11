@@ -190,6 +190,65 @@ exec agy "$@"
 
 ---
 
+## Usando com a Extensão do VSCodium / VS Code (`codium2`)
+
+Se você usa a extensão oficial [Antigravity para VS Code / VSCodium](https://antigravity.google/docs/ide/extensions/vscode/):
+
+### 1. Isolar Terminais Integrados (Acesso Direto à Internet)
+Garanta que comandos no terminal do editor (`git`, `npm`, `curl`, etc.) conectem-se diretamente à internet sem passar pelo proxy adicionando ao `~/.config/VSCodium/User/settings.json` (ou `settings.json` do Code):
+
+```json
+  "terminal.integrated.env.linux": {
+    "HTTP_PROXY": null,
+    "HTTPS_PROXY": null,
+    "http_proxy": null,
+    "https_proxy": null,
+    "ALL_PROXY": null,
+    "all_proxy": null,
+    "CLOUD_CODE_URL": null
+  }
+```
+
+### 2. Wrapper com Inicialização Automática (`codium2`)
+Crie `~/.local/bin/codium2` (inicia o `serve` se estiver parado e injeta as variáveis do proxy no backend da extensão):
+
+```bash
+#!/usr/bin/env bash
+curl -s -m 1 -f http://127.0.0.1:1831/api/status >/dev/null 2>&1 || {
+  antigravity-account-switcher serve --port 1831 >/tmp/antigravity-switcher.log 2>&1 &
+  sleep 0.3
+}
+export HTTP_PROXY="http://127.0.0.1:1831" HTTPS_PROXY="http://127.0.0.1:1831" CLOUD_CODE_URL="http://127.0.0.1:1831" NO_PROXY="localhost,127.0.0.1,::1,speech.googleapis.com"
+exec codium "$@"
+```
+*(Torne executável: `chmod +x ~/.local/bin/codium2`)*
+
+### 3. Atalho de Aplicativo Desktop (`codium2.desktop`)
+Crie `~/.local/share/applications/codium2.desktop` para iniciar o **Codium 2** diretamente do lançador de aplicativos ou dock:
+
+```ini
+[Desktop Entry]
+Name=Codium 2
+Comment=VSCodium with Antigravity Account Switcher Proxy
+GenericName=Text Editor
+Exec=/home/tazztone/.local/bin/codium2 %F
+Icon=/home/tazztone/.local/share/icons/codium2.png
+Type=Application
+StartupNotify=true
+StartupWMClass=VSCodium
+Categories=TextEditor;Development;IDE;
+MimeType=text/plain;inode/directory;application/x-codium-workspace;
+Actions=new-empty-window;
+
+[Desktop Action new-empty-window]
+Name=New Empty Window
+Exec=/home/tazztone/.local/bin/codium2 --new-window %F
+Icon=/home/tazztone/.local/share/icons/codium2.png
+```
+Execute `update-desktop-database ~/.local/share/applications/` para registrar.
+
+---
+
 ## Referência de Comandos da CLI
 
 A CLI disponibiliza comandos para supervisão, troca manual e configuração:
