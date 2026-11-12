@@ -223,8 +223,8 @@ exec codium "$@"
 ```
 *(Torne executável: `chmod +x ~/.local/bin/codium2`)*
 
-### 3. Atalho de Aplicativo Desktop (`codium2.desktop`)
-Crie `~/.local/share/applications/codium2.desktop` para iniciar o **Codium 2** diretamente do lançador de aplicativos ou dock:
+### 3. Atalho de Aplicativo Desktop (`com.visualstudio.CodeOSS.desktop`)
+Crie `~/.local/share/applications/com.visualstudio.CodeOSS.desktop` para que o GNOME Dash e o gerenciador de janelas do Wayland associem a janela do VSCodium diretamente ao **Codium 2** e ao seu ícone verde:
 
 ```ini
 [Desktop Entry]
@@ -239,6 +239,7 @@ StartupWMClass=VSCodium
 Categories=TextEditor;Development;IDE;
 MimeType=text/plain;inode/directory;application/x-codium-workspace;
 Actions=new-empty-window;
+Keywords=vscodium;codium;codium2;antigravity;vscode;
 
 [Desktop Action new-empty-window]
 Name=New Empty Window

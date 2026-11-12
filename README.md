@@ -223,8 +223,8 @@ exec codium "$@"
 ```
 *(Make executable: `chmod +x ~/.local/bin/codium2`)*
 
-### 3. Desktop Application Entry (`codium2.desktop`)
-Create `~/.local/share/applications/codium2.desktop` to launch **Codium 2** directly from your application launcher or dock:
+### 3. Desktop Application Entry (`com.visualstudio.CodeOSS.desktop`)
+Create `~/.local/share/applications/com.visualstudio.CodeOSS.desktop` so GNOME Dash and Wayland window trackers associate the running VSCodium process directly with **Codium 2** and its green icon:
 
 ```ini
 [Desktop Entry]
@@ -239,6 +239,7 @@ StartupWMClass=VSCodium
 Categories=TextEditor;Development;IDE;
 MimeType=text/plain;inode/directory;application/x-codium-workspace;
 Actions=new-empty-window;
+Keywords=vscodium;codium;codium2;antigravity;vscode;
 
 [Desktop Action new-empty-window]
 Name=New Empty Window
