@@ -2210,8 +2210,9 @@
   }
 
   function extractEventModel(event) {
-    if (event.details && event.details.model_version) {
-      return event.details.model_version;
+    if (event.details) {
+      if (event.details.model_version) return event.details.model_version;
+      if (event.details.requested_model) return event.details.requested_model;
     }
     if (event.message) {
       const match = event.message.match(/\[([a-zA-Z0-9\._-]+)\]/);
@@ -2225,6 +2226,72 @@
     return '';
   }
 
+  function extractEventReasoning(event) {
+    const d = event && event.details ? event.details : null;
+    if (!d) return '';
+    if (d.reasoning_mode) return String(d.reasoning_mode);
+    if (d.thinking_level) return String(d.thinking_level);
+    if (typeof d.thinking_budget === 'number') {
+      if (d.thinking_budget < 0) return 'auto';
+      if (d.thinking_budget === 0) return 'off';
+      return `budget:${d.thinking_budget}`;
+    }
+    if (d.include_thoughts) return 'THINKING';
+    return '';
+  }
+
+  function formatReasoningBadgeLabel(mode) {
+    const upper = String(mode).toUpperCase();
+    if (upper === 'MEDIUM') return 'MED';
+    if (upper === 'MINIMAL') return 'MIN';
+    if (upper === 'THINKING') return 'THINK';
+    if (upper.startsWith('BUDGET:')) {
+      const n = parseInt(upper.slice(7), 10);
+      if (!isNaN(n)) {
+        return n >= 1024 && n % 1024 === 0 ? `${n / 1024}k` : `${n}t`;
+      }
+    }
+    return upper;
+  }
+
+  function reasoningTierClass(mode) {
+    const lower = String(mode).toLowerCase();
+    if (lower === 'xhigh') return 'reasoning-xhigh';
+    if (lower === 'high') return 'reasoning-high';
+    if (lower === 'medium' || lower === 'med') return 'reasoning-medium';
+    if (lower === 'low') return 'reasoning-low';
+    if (lower === 'minimal') return 'reasoning-minimal';
+    if (lower === 'off') return 'reasoning-off';
+    if (lower === 'auto') return 'reasoning-auto';
+    if (lower === 'thinking') return 'reasoning-thinking';
+    if (lower.startsWith('budget:')) return 'reasoning-budget';
+    return '';
+  }
+
+  function renderReasoningBadge(reasoning) {
+    if (!reasoning) return '';
+    const label = formatReasoningBadgeLabel(reasoning);
+    const tierCls = reasoningTierClass(reasoning);
+    return `<span class="reasoning-badge ${tierCls}" title="Reasoning mode: ${escapeHtml(reasoning)}">${escapeHtml(label)}</span>`;
+  }
+
+  function shortConvId(convId) {
+    if (!convId) return '';
+    if (convId.startsWith('c-')) return convId;
+    return convId.length > 10 ? convId.slice(0, 8) : convId;
+  }
+
+  function renderConversationChip(event) {
+    const d = event && event.details ? event.details : null;
+    if (!d || !d.conversation_id) return '';
+    const convId = String(d.conversation_id);
+    const source = d.conversation_source ? String(d.conversation_source) : 'unknown';
+    const color = getAccountColor(convId);
+    const isFiltered = logsSearchQuery && logsSearchQuery.trim().toLowerCase() === convId.toLowerCase();
+    const label = shortConvId(convId);
+    return `<button type="button" class="conversation-chip${isFiltered ? ' is-filtered' : ''}" data-conv-id="${escapeHtml(convId)}" title="Conversation ${escapeHtml(convId)} (${escapeHtml(source)}) — click to filter"><span class="conv-dot" style="background:${color}"></span>${escapeHtml(label)}</button>`;
+  }
+
   function matchesSearch(event, query) {
     if (!query) return true;
     const q = query.toLowerCase();
@@ -2235,6 +2302,7 @@
     if (acc && acc.email && acc.email.toLowerCase().includes(q)) return true;
     if (event.details) {
       for (const key of Object.keys(event.details)) {
+        if (key === 'conversation_snippet' && isPrivacyMode) continue;
         const val = String(event.details[key]).toLowerCase();
         if (val.includes(q)) return true;
       }
@@ -2337,6 +2405,9 @@
     const accountChipHtml = renderAccountChip(event.account_id, event.message);
     const modelName = extractEventModel(event);
     const modelBadgeHtml = modelName ? `<span class="model-badge">${escapeHtml(modelName)}</span>` : '';
+    const reasoningMode = extractEventReasoning(event);
+    const reasoningBadgeHtml = renderReasoningBadge(reasoningMode);
+    const convChipHtml = renderConversationChip(event);
 
     let bodyContentHtml = '';
 
@@ -2362,9 +2433,26 @@
         <span class="log-pill ${pillClass}">${escapeHtml(pillText)}</span>
         ${accountChipHtml}
         ${modelBadgeHtml}
+        ${reasoningBadgeHtml}
+        ${convChipHtml}
         ${bodyContentHtml}
       </div>
     `;
+
+    const convChipBtn = entry.querySelector('.conversation-chip');
+    if (convChipBtn) {
+      convChipBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const convId = convChipBtn.getAttribute('data-conv-id') || '';
+        const searchInput = document.getElementById('logs-search-input');
+        const nextQuery = (logsSearchQuery.trim().toLowerCase() === convId.toLowerCase()) ? '' : convId;
+        logsSearchQuery = nextQuery;
+        if (searchInput) {
+          searchInput.value = nextQuery;
+        }
+        reapplyLogFilter();
+      });
+    }
 
     // Click to toggle expandable drawer
     entry.addEventListener('click', (e) => {
@@ -2387,6 +2475,10 @@
       let drawerContent = '';
       if (event.type === 'tokens_captured') {
         const tokens = extractEventTokens(event);
+        const d = event.details || {};
+        const reqModel = d.requested_model ? (d.original_model && d.original_model !== d.requested_model ? `${d.requested_model} (from ${d.original_model})` : d.requested_model) : '';
+        const convDisplay = d.conversation_id ? `${d.conversation_id}${d.conversation_source ? ` (${d.conversation_source})` : ''}` : '';
+        const trajDisplay = d.trajectory_id ? `${d.trajectory_id}${d.request_type ? ` (${d.request_type})` : ''}` : (d.request_type || '');
         drawerContent = `
           <div class="drawer-metrics-grid">
             <div class="drawer-metric-item">
@@ -2409,6 +2501,11 @@
               <span class="drawer-metric-label">Thoughts Tokens</span>
               <span class="drawer-metric-val">${tokens.thoughts.toLocaleString()}</span>
             </div>
+            ${reqModel ? `<div class="drawer-metric-item"><span class="drawer-metric-label">Requested Model</span><span class="drawer-metric-val">${escapeHtml(reqModel)}</span></div>` : ''}
+            ${reasoningMode ? `<div class="drawer-metric-item"><span class="drawer-metric-label">Reasoning Mode</span><span class="drawer-metric-val">${escapeHtml(reasoningMode)}</span></div>` : ''}
+            ${convDisplay ? `<div class="drawer-metric-item"><span class="drawer-metric-label">Conversation</span><span class="drawer-metric-val">${escapeHtml(convDisplay)}</span></div>` : ''}
+            ${trajDisplay ? `<div class="drawer-metric-item"><span class="drawer-metric-label">Trajectory</span><span class="drawer-metric-val">${escapeHtml(trajDisplay)}</span></div>` : ''}
+            ${d.conversation_snippet ? `<div class="drawer-metric-item"><span class="drawer-metric-label">Opening Prompt</span><span class="drawer-metric-val blurred-snippet">${escapeHtml(d.conversation_snippet)}</span></div>` : ''}
           </div>
         `;
       } else {
@@ -2729,11 +2826,15 @@
           const accStr = acc ? `[${acc.email}]` : (evt.account_id ? `[${evt.account_id.slice(0, 8)}]` : '');
           const model = extractEventModel(evt);
           const modelStr = model ? `[${model}]` : '';
+          const reasoning = extractEventReasoning(evt);
+          const reasoningStr = reasoning ? `[${reasoning}]` : '';
+          const convId = evt.details && evt.details.conversation_id ? shortConvId(String(evt.details.conversation_id)) : '';
+          const convStr = convId ? `[${convId}]` : '';
           let msg = evt.message || '';
           if (isPrivacyMode) {
             msg = redactEmails(msg);
           }
-          return `[${t}] [${type}] ${accStr} ${modelStr} ${msg}`.replace(/\s+/g, ' ').trim();
+          return `[${t}] [${type}] ${accStr} ${modelStr} ${reasoningStr} ${convStr} ${msg}`.replace(/\s+/g, ' ').trim();
         }).join('\n');
         copyToClipboard(textLines, isPrivacyMode ? 'Redacted proxy logs' : 'Proxy logs');
       });

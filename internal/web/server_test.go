@@ -1160,3 +1160,36 @@ func TestAPI_QuotaRefresh_EnforcesTimeout(t *testing.T) {
 		t.Errorf("expected PollOnce context to have a timeout deadline")
 	}
 }
+
+func TestStaticAssets_ReasoningAndConversationUI(t *testing.T) {
+	checks := []struct {
+		path    string
+		markers []string
+	}{
+		{
+			path:    "dist/index.html",
+			markers: []string{`placeholder="Search account, model, reasoning, conversation..."`},
+		},
+		{
+			path:    "dist/app.js",
+			markers: []string{"extractEventReasoning", "renderReasoningBadge", "renderConversationChip", "blurred-snippet"},
+		},
+		{
+			path:    "dist/style.css",
+			markers: []string{".reasoning-badge", ".reasoning-xhigh", ".conversation-chip", ".blurred-snippet"},
+		},
+	}
+
+	for _, c := range checks {
+		data, err := embeddedDistFS.ReadFile(c.path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", c.path, err)
+		}
+		content := string(data)
+		for _, m := range c.markers {
+			if !strings.Contains(content, m) {
+				t.Errorf("%s missing expected marker %q", c.path, m)
+			}
+		}
+	}
+}
