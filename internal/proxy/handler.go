@@ -998,7 +998,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if isRespSSE {
-			_ = StreamAndInterceptSSE(ctx, w, resp.Body, accID, currentPath, h.metricsRepo, h.eventBroadcaster)
+			telemetry := ExtractRequestTelemetry(r.Header, currentBody, currentModel, origModel)
+			_ = StreamAndInterceptSSEWithMeta(ctx, w, resp.Body, accID, currentPath, &telemetry, h.metricsRepo, h.eventBroadcaster)
 			_ = resp.Body.Close()
 			return
 		}

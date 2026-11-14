@@ -423,3 +423,59 @@ func TestSSEInterceptor_ModelVersionCaptureAndFormatting(t *testing.T) {
 		t.Fatal("timed out waiting for EventTypeTokensCaptured event")
 	}
 }
+
+func TestSSEInterceptor_WithMeta(t *testing.T) {
+	w := newMockResponseWriter()
+	metricsRepo := &mockMetricsRepo{}
+	broadcaster := NewBroadcaster(10)
+
+	eventsCh, unsubscribe := broadcaster.Subscribe()
+	defer unsubscribe()
+
+	payload := `data: {"response":{"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":30,"totalTokenCount":150},"modelVersion":"gemini-4-hydrogen-xhigh"}}` + "\n\n"
+	meta := &RequestTelemetry{
+		RequestedModel:     "gemini-4-hydrogen-xhigh",
+		OriginalModel:      "gemini-4-hydrogen-xhigh",
+		ReasoningMode:      "XHIGH",
+		ThinkingLevel:      "XHIGH",
+		ConversationID:     "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		ConversationSource: "cascade_id",
+	}
+
+	err := StreamAndInterceptSSEWithMeta(
+		context.Background(),
+		w,
+		strings.NewReader(payload),
+		"acc-meta",
+		"/v1internal:streamGenerateContent",
+		meta,
+		metricsRepo,
+		broadcaster,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case ev := <-eventsCh:
+		if ev.Type != domain.EventTypeTokensCaptured {
+			t.Fatalf("expected %s, got %s", domain.EventTypeTokensCaptured, ev.Type)
+		}
+		if ev.Details["reasoning_mode"] != "XHIGH" {
+			t.Errorf("reasoning_mode = %v, want XHIGH", ev.Details["reasoning_mode"])
+		}
+		if ev.Details["conversation_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+			t.Errorf("conversation_id = %v", ev.Details["conversation_id"])
+		}
+		if _, hasOrig := ev.Details["original_model"]; hasOrig {
+			t.Errorf("expected original_model omitted when equal to requested_model, got %v", ev.Details["original_model"])
+		}
+		if !strings.Contains(ev.Message, "[gemini-4-hydrogen-xhigh]") ||
+			!strings.Contains(ev.Message, "mode: XHIGH") ||
+			!strings.Contains(ev.Message, "conv: aaaaaaaa") {
+			t.Errorf("unexpected formatted message: %q", ev.Message)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for EventTypeTokensCaptured event")
+	}
+}

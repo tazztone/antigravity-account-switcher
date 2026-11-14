@@ -1151,3 +1151,74 @@ func TestWithMaxBodyBytes_Fallback(t *testing.T) {
 		}
 	})
 }
+
+func TestProxyHandler_SSETelemetryEnrichment(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":50,\"candidatesTokenCount\":25,\"totalTokenCount\":75},\"modelVersion\":\"gemini-4-hydrogen-xhigh\"}}\n\n"))
+	}))
+	defer upstream.Close()
+
+	accRepo := newMockAccountRepo()
+	now := time.Now()
+	_ = accRepo.Create(context.Background(), &domain.Account{
+		ID:          "acc-1",
+		Email:       "user@example.com",
+		Status:      domain.AccountStatusActive,
+		IsActive:    true,
+		AccessToken: "tok-1",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	metricsRepo := &mockMetricsRepo{}
+	broadcaster := NewBroadcaster(10)
+	eventsCh, unsubscribe := broadcaster.Subscribe()
+	defer unsubscribe()
+
+	h, err := NewProxyHandler(
+		accRepo,
+		WithTargetURL(upstream.URL),
+		WithMetricsRepository(metricsRepo),
+		WithEventBroadcaster(broadcaster),
+	)
+	if err != nil {
+		t.Fatalf("NewProxyHandler: %v", err)
+	}
+
+	reqBody := `{
+		"model": "gemini-4-hydrogen-xhigh",
+		"request": {
+			"generationConfig": {"thinkingConfig": {"includeThoughts": true, "thinkingLevel": 100}},
+			"labels": {"root_cascade_id": "11111111-2222-3333-4444-555555555555"},
+			"contents": [{"role": "user", "parts": [{"text": "explain telemetry"}]}]
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1internal:streamGenerateContent?alt=sse", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-eventsCh:
+			if ev.Type != domain.EventTypeTokensCaptured {
+				continue
+			}
+			if ev.Details["reasoning_mode"] != "XHIGH" {
+				t.Fatalf("reasoning_mode = %v, want XHIGH", ev.Details["reasoning_mode"])
+			}
+			if ev.Details["conversation_id"] != "11111111-2222-3333-4444-555555555555" {
+				t.Fatalf("conversation_id = %v", ev.Details["conversation_id"])
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for EventTypeTokensCaptured")
+		}
+	}
+}

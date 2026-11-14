@@ -50,6 +50,21 @@ func StreamAndInterceptSSE(
 	metricsRepo domain.MetricsRepository,
 	eventBroadcaster domain.EventBroadcaster,
 ) error {
+	return StreamAndInterceptSSEWithMeta(ctx, w, upstreamBody, accountID, requestPath, nil, metricsRepo, eventBroadcaster)
+}
+
+// StreamAndInterceptSSEWithMeta streams SSE bytes like StreamAndInterceptSSE and enriches
+// emitted token events with extracted request telemetry when meta is non-nil.
+func StreamAndInterceptSSEWithMeta(
+	ctx context.Context,
+	w http.ResponseWriter,
+	upstreamBody io.Reader,
+	accountID string,
+	requestPath string,
+	meta *RequestTelemetry,
+	metricsRepo domain.MetricsRepository,
+	eventBroadcaster domain.EventBroadcaster,
+) error {
 	flusher, isFlusher := w.(http.Flusher)
 	bufR := bufio.NewReader(upstreamBody)
 	var bodyReader io.Reader = bufR
@@ -102,10 +117,11 @@ func StreamAndInterceptSSE(
 					if mVer != "" {
 						details["model_version"] = mVer
 					}
+					enrichTokenEventDetails(details, meta)
 					eventBroadcaster.Broadcast(&domain.ProxyEvent{
 						Type:      domain.EventTypeTokensCaptured,
 						AccountID: accountID,
-						Message:   formatUsageMessage(u, mVer),
+						Message:   formatUsageMessageWithMeta(u, mVer, meta),
 						Details:   details,
 						Timestamp: time.Now().UTC(),
 					})
@@ -179,10 +195,10 @@ func parseSSEData(data []byte) (*RawUsageMetadata, string) {
 	return usage, modelVersion
 }
 
-func formatUsageMessage(u *RawUsageMetadata, modelVersion ...string) string {
-	parts := make([]string, 0, 6)
-	if len(modelVersion) > 0 && modelVersion[0] != "" {
-		parts = append(parts, fmt.Sprintf("[%s]", modelVersion[0]))
+func formatUsageMessageWithMeta(u *RawUsageMetadata, modelVersion string, meta *RequestTelemetry) string {
+	parts := make([]string, 0, 8)
+	if modelVersion != "" {
+		parts = append(parts, fmt.Sprintf("[%s]", modelVersion))
 	}
 	if u.PromptTokenCount > 0 {
 		parts = append(parts, fmt.Sprintf("prompt: %d", u.PromptTokenCount))
@@ -199,8 +215,61 @@ func formatUsageMessage(u *RawUsageMetadata, modelVersion ...string) string {
 	if u.ThoughtsTokenCount > 0 {
 		parts = append(parts, fmt.Sprintf("thoughts: %d", u.ThoughtsTokenCount))
 	}
+	if meta != nil {
+		if meta.ReasoningMode != "" {
+			parts = append(parts, fmt.Sprintf("mode: %s", meta.ReasoningMode))
+		}
+		if meta.ConversationID != "" {
+			parts = append(parts, fmt.Sprintf("conv: %s", shortConversationID(meta.ConversationID)))
+		}
+	}
 	if len(parts) == 0 {
 		return "tokens: 0"
 	}
 	return strings.Join(parts, ", ")
+}
+
+func shortConversationID(id string) string {
+	if len(id) > 10 && !strings.HasPrefix(id, "c-") {
+		return id[:8]
+	}
+	return id
+}
+
+func enrichTokenEventDetails(details map[string]any, meta *RequestTelemetry) {
+	if meta == nil {
+		return
+	}
+	origModel := ""
+	if meta.OriginalModel != "" && meta.OriginalModel != meta.RequestedModel {
+		origModel = meta.OriginalModel
+	}
+	strFields := []struct {
+		key string
+		val string
+	}{
+		{"requested_model", meta.RequestedModel},
+		{"original_model", origModel},
+		{"request_type", meta.RequestType},
+		{"reasoning_mode", meta.ReasoningMode},
+		{"thinking_level", meta.ThinkingLevel},
+		{"conversation_id", meta.ConversationID},
+		{"conversation_source", meta.ConversationSource},
+		{"conversation_snippet", meta.ConversationSnippet},
+		{"cascade_id", meta.CascadeID},
+		{"root_cascade_id", meta.RootCascadeID},
+		{"trajectory_id", meta.TrajectoryID},
+		{"user_prompt_id", meta.UserPromptID},
+	}
+	for _, f := range strFields {
+		if f.val != "" {
+			details[f.key] = f.val
+		}
+	}
+	if meta.ThinkingBudget != nil {
+		details["thinking_budget"] = *meta.ThinkingBudget
+	}
+	if meta.IncludeThoughts != nil {
+		details["include_thoughts"] = *meta.IncludeThoughts
+	}
 }
