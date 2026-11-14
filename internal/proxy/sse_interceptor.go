@@ -88,9 +88,21 @@ func StreamAndInterceptSSEWithMeta(
 			if totTokens == 0 {
 				totTokens = capturedUsage.PromptTokenCount + capturedUsage.CandidatesTokenCount
 			}
+			model := capturedModelVersion
+			var reasoningMode, conversationID string
+			if meta != nil {
+				if model == "" {
+					model = meta.RequestedModel
+				}
+				reasoningMode = meta.ReasoningMode
+				conversationID = meta.ConversationID
+			}
 			metric := &domain.TokenMetric{
 				AccountID:           accountID,
 				RequestPath:         requestPath,
+				Model:               model,
+				ReasoningMode:       reasoningMode,
+				ConversationID:      conversationID,
 				PromptTokens:        capturedUsage.PromptTokenCount,
 				CandidatesTokens:    capturedUsage.CandidatesTokenCount,
 				TotalTokens:         totTokens,

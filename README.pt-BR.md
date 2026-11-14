@@ -351,7 +351,8 @@ O servidor web embutido expõe endpoints locais de gerenciamento JSON e SSE (`ht
 | `/api/accounts/{id}/models` | `PUT` | Atualiza regras de ativação por modelo na conta. |
 | `/api/quota/refresh` | `POST` | Dispara atualização forçada e imediata de cota junto ao Google para todas as contas (timeout de 10s). |
 | `/api/metrics` | `GET` | Métricas de tokens e agregados diários; suporta histórico localizado via `?tz=America/Sao_Paulo` ou `?tz_offset=-180`. |
-| `/api/events` | `GET` | Transmissão de eventos em tempo real via Server-Sent Events (SSE) para roteamento, failover e cotas. |
+| `/api/conversations` | `GET` | Uso agregado de tokens por conversa, último modelo e modo de raciocínio (`?limit=50`). |
+| `/api/events` | `GET` | Transmissão SSE em tempo real de roteamento, failover, badges de raciocínio e chips de conversa clicáveis para filtrar (trechos iniciais ofuscados no Modo Privacidade). |
 
 ---
 

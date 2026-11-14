@@ -646,6 +646,40 @@ func (a *APIHandler) deleteAccount(w http.ResponseWriter, r *http.Request, id st
 	})
 }
 
+// HandleConversations serves GET /api/conversations?limit=50.
+func (a *APIHandler) HandleConversations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	type convProvider interface {
+		GetConversationSummaries(ctx context.Context, limit int) ([]domain.ConversationSummary, error)
+	}
+	provider, ok := a.metricsService.(convProvider)
+	if !ok || a.metricsService == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"conversations": []domain.ConversationSummary{}})
+		return
+	}
+
+	summaries, err := provider.GetConversationSummaries(r.Context(), limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to load conversations: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if summaries == nil {
+		summaries = []domain.ConversationSummary{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversations": summaries})
+}
+
 // HandleMetrics serves GET /api/metrics.
 func (a *APIHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

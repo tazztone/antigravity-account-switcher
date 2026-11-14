@@ -478,4 +478,14 @@ func TestSSEInterceptor_WithMeta(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for EventTypeTokensCaptured event")
 	}
+
+	metricsRepo.mu.Lock()
+	defer metricsRepo.mu.Unlock()
+	if len(metricsRepo.records) != 1 {
+		t.Fatalf("expected 1 recorded metric, got %d", len(metricsRepo.records))
+	}
+	rec := metricsRepo.records[0]
+	if rec.Model != "gemini-4-hydrogen-xhigh" || rec.ReasoningMode != "XHIGH" || rec.ConversationID != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("unexpected recorded metric fields: %+v", rec)
+	}
 }

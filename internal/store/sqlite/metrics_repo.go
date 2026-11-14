@@ -31,13 +31,16 @@ func (r *MetricsRepository) Record(ctx context.Context, m *domain.TokenMetric) e
 
 	query := `
 		INSERT INTO token_metrics (
-			account_id, request_path, prompt_tokens, candidates_tokens,
-			total_tokens, cached_content_tokens, thoughts_tokens, timestamp
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			account_id, request_path, model, reasoning_mode, conversation_id,
+			prompt_tokens, candidates_tokens, total_tokens, cached_content_tokens, thoughts_tokens, timestamp
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	res, err := r.db.ExecContext(ctx, query,
 		m.AccountID,
 		m.RequestPath,
+		m.Model,
+		m.ReasoningMode,
+		m.ConversationID,
 		m.PromptTokens,
 		m.CandidatesTokens,
 		m.TotalTokens,
@@ -55,6 +58,97 @@ func (r *MetricsRepository) Record(ctx context.Context, m *domain.TokenMetric) e
 	}
 
 	return nil
+}
+
+// Compile-time interface check.
+var _ domain.ConversationMetricsRepository = (*MetricsRepository)(nil)
+
+// GetConversationSummaries returns aggregated token usage per conversation, ordered by last_seen DESC.
+func (r *MetricsRepository) GetConversationSummaries(ctx context.Context, limit int) ([]domain.ConversationSummary, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	query := `
+		SELECT
+			agg.conversation_id,
+			COALESCE((
+				SELECT t2.model FROM token_metrics t2
+				WHERE t2.conversation_id = agg.conversation_id AND t2.model != ''
+				ORDER BY t2.timestamp DESC, t2.id DESC LIMIT 1
+			), '') AS latest_model,
+			COALESCE((
+				SELECT t3.reasoning_mode FROM token_metrics t3
+				WHERE t3.conversation_id = agg.conversation_id AND t3.reasoning_mode != ''
+				ORDER BY t3.timestamp DESC, t3.id DESC LIMIT 1
+			), '') AS latest_reasoning_mode,
+			agg.request_count,
+			agg.prompt_tokens,
+			agg.candidates_tokens,
+			agg.total_tokens,
+			agg.cached_content_tokens,
+			agg.thoughts_tokens,
+			agg.first_seen,
+			agg.last_seen
+		FROM (
+			SELECT
+				conversation_id,
+				COUNT(*) AS request_count,
+				COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+				COALESCE(SUM(candidates_tokens), 0) AS candidates_tokens,
+				COALESCE(SUM(total_tokens), 0) AS total_tokens,
+				COALESCE(SUM(cached_content_tokens), 0) AS cached_content_tokens,
+				COALESCE(SUM(thoughts_tokens), 0) AS thoughts_tokens,
+				MIN(timestamp) AS first_seen,
+				MAX(timestamp) AS last_seen
+			FROM token_metrics
+			WHERE conversation_id != ''
+			GROUP BY conversation_id
+		) agg
+		ORDER BY agg.last_seen DESC
+		LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query conversation summaries: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.ConversationSummary, 0)
+	for rows.Next() {
+		var s domain.ConversationSummary
+		var firstStr, lastStr string
+		if err := rows.Scan(
+			&s.ConversationID,
+			&s.LatestModel,
+			&s.LatestReasoningMode,
+			&s.RequestCount,
+			&s.PromptTokens,
+			&s.CandidatesTokens,
+			&s.TotalTokens,
+			&s.CachedContentTokens,
+			&s.ThoughtsTokens,
+			&firstStr,
+			&lastStr,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan conversation summary: %w", err)
+		}
+		if t, parseErr := parseDBTime(firstStr); parseErr == nil {
+			s.FirstSeen = t
+		}
+		if t, parseErr := parseDBTime(lastStr); parseErr == nil {
+			s.LastSeen = t
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating conversation summaries: %w", err)
+	}
+	return out, nil
 }
 
 // GetSummary calculates aggregated usage for an account (or global pool if accountID is empty).

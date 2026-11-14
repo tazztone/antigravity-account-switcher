@@ -1193,3 +1193,69 @@ func TestStaticAssets_ReasoningAndConversationUI(t *testing.T) {
 		}
 	}
 }
+
+type mockConvMetricsService struct {
+	domain.MetricsService
+	gotLimit int
+	rows     []domain.ConversationSummary
+}
+
+func (m *mockConvMetricsService) GetConversationSummaries(_ context.Context, limit int) ([]domain.ConversationSummary, error) {
+	m.gotLimit = limit
+	return m.rows, nil
+}
+
+func TestHandleConversations(t *testing.T) {
+	srv, err := NewServer(nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/conversations?limit=10", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/conversations status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"conversations"`) {
+		t.Errorf("expected conversations key in JSON, got %s", rec.Body.String())
+	}
+
+	mockSvc := &mockConvMetricsService{
+		rows: []domain.ConversationSummary{
+			{
+				ConversationID:      "conv-xyz",
+				LatestModel:         "gemini-4-hydrogen-xhigh",
+				LatestReasoningMode: "XHIGH",
+				RequestCount:        2,
+				TotalTokens:         450,
+			},
+		},
+	}
+	srv2, err := NewServer(nil, nil, mockSvc, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewServer(mockSvc): %v", err)
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/api/conversations?limit=25", nil)
+	rec2 := httptest.NewRecorder()
+	srv2.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET /api/conversations (mockSvc) status = %d, want 200", rec2.Code)
+	}
+	if mockSvc.gotLimit != 25 {
+		t.Errorf("forwarded limit = %d, want 25", mockSvc.gotLimit)
+	}
+	body := rec2.Body.String()
+	for _, want := range []string{`"conversation_id":"conv-xyz"`, `"latest_model":"gemini-4-hydrogen-xhigh"`, `"latest_reasoning_mode":"XHIGH"`, `"total_tokens":450`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("response body missing %s: %s", want, body)
+		}
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, "/api/conversations", nil)
+	postRec := httptest.NewRecorder()
+	srv.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/conversations status = %d, want 405", postRec.Code)
+	}
+}

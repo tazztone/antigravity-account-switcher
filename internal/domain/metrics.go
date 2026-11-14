@@ -25,12 +25,30 @@ type TokenMetric struct {
 	ID                  int64     `json:"id"`
 	AccountID           string    `json:"account_id"`
 	RequestPath         string    `json:"request_path"`
+	Model               string    `json:"model,omitempty"`
+	ReasoningMode       string    `json:"reasoning_mode,omitempty"`
+	ConversationID      string    `json:"conversation_id,omitempty"`
 	PromptTokens        int64     `json:"prompt_tokens"`
 	CandidatesTokens    int64     `json:"candidates_tokens"`
 	TotalTokens         int64     `json:"total_tokens"`
 	CachedContentTokens int64     `json:"cached_content_tokens"`
 	ThoughtsTokens      int64     `json:"thoughts_tokens,omitempty"`
 	Timestamp           time.Time `json:"timestamp"`
+}
+
+// ConversationSummary aggregates token usage and latest model/reasoning per conversation.
+type ConversationSummary struct {
+	ConversationID      string    `json:"conversation_id"`
+	LatestModel         string    `json:"latest_model"`
+	LatestReasoningMode string    `json:"latest_reasoning_mode"`
+	RequestCount        int64     `json:"request_count"`
+	PromptTokens        int64     `json:"prompt_tokens"`
+	CandidatesTokens    int64     `json:"candidates_tokens"`
+	TotalTokens         int64     `json:"total_tokens"`
+	CachedContentTokens int64     `json:"cached_content_tokens"`
+	ThoughtsTokens      int64     `json:"thoughts_tokens"`
+	FirstSeen           time.Time `json:"first_seen"`
+	LastSeen            time.Time `json:"last_seen"`
 }
 
 // AggregatedMetrics represents summarized token metrics over a given period.
@@ -99,6 +117,11 @@ type AccountSummariesRepository interface {
 // TimezoneDailyHistoryRepository defines the timezone-aware daily aggregation capability.
 type TimezoneDailyHistoryRepository interface {
 	GetDailyHistoryInLocation(ctx context.Context, accountID string, days int, loc *time.Location) ([]*DailyTokenUsage, error)
+}
+
+// ConversationMetricsRepository defines per-conversation aggregated token metrics capability.
+type ConversationMetricsRepository interface {
+	GetConversationSummaries(ctx context.Context, limit int) ([]ConversationSummary, error)
 }
 
 // MetricsService specifies the use-case methods exposed to HTTP handlers and CLI.

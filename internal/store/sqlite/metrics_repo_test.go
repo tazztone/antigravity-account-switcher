@@ -240,3 +240,58 @@ func TestMetricsRepository_GetDailyHistoryInLocation(t *testing.T) {
 		t.Errorf("expected 700 tokens in UTC, got %d", lastItemUTC.TotalTokens)
 	}
 }
+
+func TestMetricsRepository_ConversationSummaries(t *testing.T) {
+	_, accRepo, _, metricsRepo, _ := setupTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	_ = accRepo.Create(ctx, &domain.Account{
+		ID: "acc-conv", Email: "conv@example.com", Status: domain.AccountStatusActive, CreatedAt: now, UpdatedAt: now,
+	})
+
+	records := []*domain.TokenMetric{
+		{
+			AccountID: "acc-conv", RequestPath: "/stream", Model: "gemini-4-hydrogen-low",
+			ReasoningMode: "LOW", ConversationID: "conv-1", PromptTokens: 100, CandidatesTokens: 50, TotalTokens: 150,
+			Timestamp: now.Add(-10 * time.Minute),
+		},
+		{
+			AccountID: "acc-conv", RequestPath: "/stream", Model: "gemini-4-hydrogen-xhigh",
+			ReasoningMode: "XHIGH", ConversationID: "conv-1", PromptTokens: 200, CandidatesTokens: 100, TotalTokens: 300,
+			Timestamp: now.Add(-5 * time.Minute),
+		},
+		{
+			AccountID: "acc-conv", RequestPath: "/stream", Model: "claude-sonnet-5-5-high",
+			ReasoningMode: "HIGH", ConversationID: "conv-2", PromptTokens: 400, CandidatesTokens: 200, TotalTokens: 600,
+			Timestamp: now.Add(-1 * time.Minute),
+		},
+		{
+			AccountID: "acc-conv", RequestPath: "/stream", Model: "gemini-2.5-flash",
+			ConversationID: "", PromptTokens: 50, CandidatesTokens: 25, TotalTokens: 75,
+			Timestamp: now,
+		},
+	}
+	for _, r := range records {
+		if err := metricsRepo.Record(ctx, r); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	summaries, err := metricsRepo.GetConversationSummaries(ctx, 10)
+	if err != nil {
+		t.Fatalf("GetConversationSummaries: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("len(summaries) = %d, want 2", len(summaries))
+	}
+	if summaries[0].ConversationID != "conv-2" {
+		t.Errorf("first summary = %q, want conv-2 (most recent)", summaries[0].ConversationID)
+	}
+	if summaries[1].ConversationID != "conv-1" || summaries[1].RequestCount != 2 || summaries[1].TotalTokens != 450 {
+		t.Errorf("unexpected conv-1 summary: %+v", summaries[1])
+	}
+	if summaries[1].LatestModel != "gemini-4-hydrogen-xhigh" || summaries[1].LatestReasoningMode != "XHIGH" {
+		t.Errorf("unexpected conv-1 latest fields: model=%q mode=%q", summaries[1].LatestModel, summaries[1].LatestReasoningMode)
+	}
+}

@@ -114,6 +114,18 @@ func (s *Service) GetDailyUsage(ctx context.Context, accountID string, days int,
 	return s.GetDailyUsageInLocation(ctx, accountID, days, zeroFill, time.UTC)
 }
 
+// GetConversationSummaries returns aggregated token usage per conversation when supported by the repository.
+func (s *Service) GetConversationSummaries(ctx context.Context, limit int) ([]domain.ConversationSummary, error) {
+	if s.metricsRepo == nil {
+		return []domain.ConversationSummary{}, nil
+	}
+	getter, ok := s.metricsRepo.(domain.ConversationMetricsRepository)
+	if !ok {
+		return []domain.ConversationSummary{}, nil
+	}
+	return getter.GetConversationSummaries(ctx, limit)
+}
+
 // GetDailyUsageInLocation retrieves daily grouped usage in the specified location.
 func (s *Service) GetDailyUsageInLocation(ctx context.Context, accountID string, days int, zeroFill bool, loc *time.Location) ([]*domain.DailyTokenUsage, error) {
 	if days <= 0 {

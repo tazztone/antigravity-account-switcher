@@ -194,6 +194,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.api.HandleMetrics(w, r)
 		return
 	}
+	if path == "/api/conversations" {
+		s.api.HandleConversations(w, r)
+		return
+	}
 	if path == "/api/events" {
 		s.api.HandleEvents(w, r)
 		return

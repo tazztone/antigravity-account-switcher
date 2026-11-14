@@ -139,6 +139,18 @@ ALTER TABLE account_model_rules ADD COLUMN discovered INTEGER NOT NULL DEFAULT 0
 CREATE INDEX IF NOT EXISTS idx_account_model_rules_discovered ON account_model_rules(account_id, discovered);
 `,
 	},
+	{
+		Version:     6,
+		Description: "token_metrics_model_reasoning_conversation",
+		SQL: `
+-- 10. Add model, reasoning_mode, and conversation_id to token_metrics
+ALTER TABLE token_metrics ADD COLUMN model TEXT NOT NULL DEFAULT '';
+ALTER TABLE token_metrics ADD COLUMN reasoning_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE token_metrics ADD COLUMN conversation_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_token_metrics_conversation ON token_metrics(conversation_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_token_metrics_model ON token_metrics(model, timestamp);
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.

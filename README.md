@@ -351,7 +351,8 @@ The embedded web server exposes local JSON and SSE endpoints (`http://127.0.0.1:
 | `/api/accounts/{id}/models` | `PUT` | Toggles model enablement rules per account. |
 | `/api/quota/refresh` | `POST` | Triggers immediate live quota polling pass across all accounts (10s deadline). |
 | `/api/metrics` | `GET` | Token telemetry & daily aggregates; supports localized queries via `?tz=Europe/Rome` or `?tz_offset=-120`. |
-| `/api/events` | `GET` | Server-Sent Events (SSE) realtime feed of proxy routing, failover, and quota events. |
+| `/api/conversations` | `GET` | Per-conversation aggregated token usage, latest model, and reasoning mode (`?limit=50`). |
+| `/api/events` | `GET` | Server-Sent Events (SSE) realtime feed of proxy routing, failover, reasoning mode badges, and click-to-filter conversation chips (opening prompt snippets redacted in Privacy Mode). |
 
 ---
 
