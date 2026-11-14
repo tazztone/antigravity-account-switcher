@@ -102,6 +102,7 @@
         iconPath.setAttribute('d', 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z');
       }
     }
+    renderCategoryRouteChips();
 
     // Refresh active route email title tooltip
     const activeEmailEl = document.getElementById('active-email');
@@ -371,6 +372,8 @@
       }
 
       renderAccountsGrid();
+      renderCategoryRouteChips();
+      updateLastPollTime();
     } catch (e) {
       console.warn('Failed to fetch accounts:', e);
     }
@@ -387,8 +390,8 @@
     if (/^[a-z0-9_.-]+$/.test(dName) && dName.includes('-')) {
       const parts = dName.split('-');
       const lastPart = parts[parts.length - 1].toLowerCase();
-      if (['high', 'medium', 'med', 'low', 'thinking', 'preview', 'tiered', 'image'].includes(lastPart)) {
-        tier = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+      if (['xhigh', 'high', 'medium', 'med', 'low', 'minimal', 'min', 'thinking', 'think', 'preview', 'tiered', 'image'].includes(lastPart)) {
+        tier = lastPart === 'xhigh' ? 'XHigh' : (lastPart === 'minimal' || lastPart === 'min' ? 'Min' : lastPart.charAt(0).toUpperCase() + lastPart.slice(1));
         parts.pop();
       }
       baseName = parts.map(p => {
@@ -404,21 +407,26 @@
       }).join(' ');
     }
 
-    // 2. Check for explicit standard tier in parentheses: (High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)
-    const tierMatch = baseName.match(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i);
+    // 2. Check for explicit standard tier in parentheses: (XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)
+    const tierMatch = baseName.match(/\s*\((XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)\)/i);
     if (tierMatch) {
-      tier = tierMatch[1];
-      tier = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase();
-      baseName = baseName.replace(/\s*\((High|Medium|Med|Low|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
+      const tLow = tierMatch[1].toLowerCase();
+      tier = tLow === 'xhigh' ? 'XHigh' : (tLow === 'minimal' || tLow === 'min' ? 'Min' : tLow.charAt(0).toUpperCase() + tLow.slice(1));
+      baseName = baseName.replace(/\s*\((XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
     } else {
       // 3. Check for disambiguated model ID in parentheses like (gemini-2.5-flash-lite)
       const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
       if (disambigMatch) {
         const innerSlug = disambigMatch[1].toLowerCase();
-        if (innerSlug.includes('2.5')) tier = '2.5';
+        if (innerSlug.includes('xhigh')) tier = 'XHigh';
+        else if (innerSlug.includes('high')) tier = 'High';
+        else if (innerSlug.includes('medium') || innerSlug.endsWith('-med')) tier = 'Med';
+        else if (innerSlug.includes('low')) tier = 'Low';
+        else if (innerSlug.includes('minimal') || innerSlug.endsWith('-min')) tier = 'Min';
+        else if (innerSlug.includes('2.5')) tier = '2.5';
         else if (innerSlug.includes('3.5')) tier = '3.5';
         else if (innerSlug.includes('3.8')) tier = '3.8';
-        else if (innerSlug.includes('thinking')) tier = 'Think';
+        else if (innerSlug.includes('thinking') || innerSlug.includes('think')) tier = 'Think';
         else if (innerSlug.includes('preview')) tier = 'Preview';
         else tier = 'Std';
         baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
@@ -428,10 +436,12 @@
     // 4. Fallback: inspect model_id suffix if tier is still empty
     if (!tier) {
       const mid = rawMid.toLowerCase();
-      if (mid.endsWith('-high')) tier = 'High';
+      if (mid.endsWith('-xhigh')) tier = 'XHigh';
+      else if (mid.endsWith('-high')) tier = 'High';
       else if (mid.endsWith('-medium') || mid.endsWith('-med')) tier = 'Med';
       else if (mid.endsWith('-low')) tier = 'Low';
-      else if (mid.endsWith('-thinking')) tier = 'Thinking';
+      else if (mid.endsWith('-minimal') || mid.endsWith('-min')) tier = 'Min';
+      else if (mid.endsWith('-thinking') || mid.endsWith('-think')) tier = 'Thinking';
       else if (mid.endsWith('-preview')) tier = 'Preview';
       else if (mid.endsWith('-tiered')) tier = 'Tiered';
     }
@@ -700,13 +710,15 @@
             </div>
           `;
         } else {
-          statusHtml = `
-            <div class="quota-refresh-status text-success quota-status-available">
-              <span>Quota available</span>
-            </div>
-          `;
+          if (pct < 100) {
+            statusHtml = `
+              <div class="quota-refresh-status text-success quota-status-available">
+                <span>Quota available</span>
+              </div>
+            `;
+          }
         }
-      } else {
+      } else if (pct < 100) {
         statusHtml = `
           <div class="quota-refresh-status text-success quota-status-available">
             <span>Quota available</span>
@@ -737,6 +749,8 @@
 
     function formatTierLabel(tier) {
       const t = tier.toLowerCase();
+      if (t === 'xhigh') return 'XHigh';
+      if (t === 'minimal' || t === 'min') return 'Min';
       if (t === 'medium') return 'Med';
       if (t === 'thinking') return 'Think';
       return tier;
@@ -791,14 +805,14 @@
         if (isDisabled) {
           pillClass = 'state-excluded';
           groupClass = 'bucket-excluded';
-          actionIcon = '🚫';
+          actionIcon = '+';
           actionTitle = 'Excluded from category failover. Click to re-enable';
           nextEnabled = true;
           isInPool = false;
         } else if (isExhausted) {
           pillClass = 'state-standby-exhausted';
           groupClass = 'bucket-standby-pool';
-          actionIcon = '✓';
+          actionIcon = '⊘';
           actionTitle = 'Quota exhausted (in cooldown). Click to exclude from category failover';
           nextEnabled = false;
           isInPool = false;
@@ -812,7 +826,7 @@
         } else {
           pillClass = 'state-standby';
           groupClass = 'bucket-standby-pool';
-          actionIcon = '✓';
+          actionIcon = '⊘';
           actionTitle = 'Standby failover target. Click to exclude from pool';
           nextEnabled = false;
           isInPool = true;
@@ -855,7 +869,7 @@
 
     function buildModelGroupRows(ruleList, groupKey) {
       if (!ruleList || ruleList.length === 0) return { count: 0, html: '' };
-      const tierWeights = { 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'thinking': 4, 'think': 4, '2.5': 5, '3.5': 6, '3.8': 7, 'preview': 8, 'tiered': 9, 'image': 10 };
+      const tierWeights = { 'minimal': 0, 'min': 0, 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'xhigh': 4, 'thinking': 5, 'think': 5, '2.5': 6, '3.5': 7, '3.8': 8, 'preview': 9, 'tiered': 10, 'image': 11 };
       const baseModelMap = new Map();
       ruleList.forEach(r => {
         const { baseName, tier } = parseModelTierInfo(r);
@@ -956,7 +970,7 @@
 
         return `
           <div class="model-rule-row" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
-            <div class="model-rule-info" title="${escapeHtml(modelIds)}">
+            <div class="model-rule-info" title="${escapeHtml(item.baseName + '\nModels: ' + modelIds)}">
               <span class="model-rule-bullet">▪</span>
               <span class="model-rule-name">${escapeHtml(item.baseName)}</span>
               ${badgesHtml}
@@ -1029,33 +1043,36 @@
         ${geminiModelsHtml}
       </div>
 
-      <!-- Group 3: Gemini 4 Argon -->
-      ${hasArgonAccess ? `
-      <div class="quota-group ${argonRouting.groupClass}" data-category-group="gemini_argon" data-in-pool="${argonRouting.isInPool ? 'true' : 'false'}">
-        <div class="quota-group-header">
-          <span class="quota-group-name">Gemini 4 Argon</span>
-          ${argonRouting.pillHtml}
+      <div class="quota-slot-tail">
+        <!-- Group 3: Gemini 4 Argon -->
+        ${hasArgonAccess ? `
+        <div class="quota-group ${argonRouting.groupClass}" data-category-group="gemini_argon" data-in-pool="${argonRouting.isInPool ? 'true' : 'false'}">
+          <div class="quota-group-header">
+            <span class="quota-group-name">Gemini 4 Argon</span>
+            ${argonRouting.pillHtml}
+          </div>
+          ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
+          ${argonModelsHtml}
         </div>
-        ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
-        ${argonModelsHtml}
-      </div>
-      ` : `
-      <div class="quota-group bucket-unentitled" data-category-group="gemini_argon" data-in-pool="false">
-        <div class="quota-group-header">
-          <span class="quota-group-name">Gemini 4 Argon</span>
-          <span class="badge-unentitled" title="This account does not have a paid Pro plan with Argon access">No Plan Access</span>
+        ` : `
+        <div class="quota-group bucket-unentitled" data-category-group="gemini_argon" data-in-pool="false">
+          <div class="quota-group-header">
+            <span class="quota-group-name">Gemini 4 Argon</span>
+            <span class="badge-unentitled" title="This account does not have a paid Pro plan with Argon access">No Plan Access</span>
+          </div>
+          <div class="quota-row-unentitled">Not available on this account tier</div>
         </div>
-        <div class="quota-row-unentitled">Not available on this account tier</div>
-      </div>
-      `}
+        `}
 
-      ${extraHtml}
+        ${extraHtml}
+      </div>
     `;
 
     // Total entitled, non-disabled categories for this account
     const entitledCats = ['claude_gpt', 'gemini'];
     if (hasArgonAccess) entitledCats.push('gemini_argon');
     const enabledEntitledCats = entitledCats.filter(c => !disabledCats.includes(c));
+    const allEntitledActive = entitledCats.length > 0 && entitledCats.every(c => activeCats.includes(c));
 
     const isAllExhausted = enabledEntitledCats.length > 0 && enabledEntitledCats.every(c => {
       if (c === 'claude_gpt') return isClaudeExhausted;
@@ -1075,7 +1092,7 @@
       statusText = 'DISABLED';
     } else if (activeCats.length > 0) {
       statusBadgeClass = 'badge-success';
-      statusText = `ROUTING (${activeCats.length}/3)`;
+      statusText = `ROUTING (${activeCats.length}/${entitledCats.length})`;
     } else if (isAllExhausted || (buckets.length === 0 && acc.status === 'exhausted')) {
       statusBadgeClass = 'badge-danger';
       statusText = 'EXHAUSTED';
@@ -1109,11 +1126,11 @@
       </div>
 
       <div class="account-actions">
-        ${isActive && activeCats.length === 3 ? `
+        ${isActive && allEntitledActive ? `
           <div class="active-pill" aria-current="true">
             All Categories Active
           </div>
-        ` : (!isActive && activeCats.length === 3 ? `
+        ` : (!isActive && allEntitledActive ? `
           <button class="btn btn-primary btn-switch-account" data-id="${escapeHtml(acc.id)}" style="flex: 1;" title="Synchronize this account as primary active proxy login">
             Set as Primary Active
           </button>
@@ -1271,6 +1288,7 @@
       const res = await fetch('/api/config');
       if (!res.ok) return;
       currentAppConfig = await res.json();
+      renderFallbackPolicyBar();
     } catch (err) {
       console.warn('Failed to fetch config:', err);
     }
@@ -1328,7 +1346,7 @@
     }
     if (mid === 'gemini-3-flash' || mid.includes('flash-image') ||
         mid.startsWith('gemini-3.5-flash') || mid.startsWith('gemini-3.1-flash') ||
-        mid.startsWith('gemini-2.5') || mid.endsWith('-tiered')) {
+        mid.endsWith('-tiered')) {
       return true;
     }
     return false;
@@ -1438,10 +1456,11 @@
       const explanationText = document.getElementById('popover-explanation-text');
       const warningNote = document.getElementById('popover-account-warning');
 
-      if (titleEl) titleEl.textContent = `Model Fallback: ${baseName || 'Model'}`;
+      if (titleEl) titleEl.textContent = account ? `Model Fallback: ${baseName || 'Model'}` : 'Global 429 Fallback Policy';
       if (accountTagEl) {
-        const email = account?.email || 'Active Account';
-        accountTagEl.textContent = `Triggered from ${email}`;
+        const rawEmail = account?.email || 'Global Pool';
+        const displayEmail = account ? (isPrivacyMode ? '[redacted@email.com]' : rawEmail) : 'Global Pool';
+        accountTagEl.textContent = account ? `Triggered from ${displayEmail}` : 'Applies across all pooled accounts';
       }
 
       // Set strategy radio based on current config
@@ -1455,8 +1474,20 @@
       const allCandidates = getCandidateModels();
       const ids = (modelIdsStr || '').split(',').filter(Boolean);
 
-      if (ids.length > 1 && tierGroup && selectPrimary) {
+      if (ids.length === 0 && tierGroup && selectPrimary) {
         tierGroup.style.display = 'block';
+        const priLabel = tierGroup.querySelector('label[for="popover-select-primary"]');
+        if (priLabel) priLabel.textContent = 'Primary Model';
+        const primaryChoices = allCandidates.filter(m => !isInternalOrPreviewModel(m.id));
+        selectPrimary.innerHTML = primaryChoices.map(m => {
+          const label = m.display_name || m.id;
+          const isSel = m.id === currentAppConfig.model_primary;
+          return `<option value="${escapeHtml(m.id)}" ${isSel ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        }).join('');
+      } else if (ids.length > 1 && tierGroup && selectPrimary) {
+        tierGroup.style.display = 'block';
+        const priLabel = tierGroup.querySelector('label[for="popover-select-primary"]');
+        if (priLabel) priLabel.textContent = 'Primary Tier / Variant';
         selectPrimary.innerHTML = ids.map(id => {
           const m = allCandidates.find(rm => rm.id === id);
           const label = m?.display_name || id;
@@ -1485,7 +1516,7 @@
           explanationText.innerHTML = `When <strong>${escapeHtml(priName)}</strong> encounters HTTP 429, the switcher retries with <strong>${escapeHtml(secName)}</strong> on this account first before rotating accounts.`;
           const secId = selectSecondary.value;
           const isEnabledOnThisAccount = (account?.model_rules || []).some(r => r.model_id === secId);
-          if (!isEnabledOnThisAccount && warningNote) {
+          if (account && !isEnabledOnThisAccount && warningNote) {
             warningNote.style.display = 'block';
             warningNote.innerHTML = `⚠️ <strong>${escapeHtml(secName)}</strong> is only available on other accounts in the pool. When 429 occurs, failover will rotate to an account that supports it.`;
           } else if (warningNote) {
@@ -1501,41 +1532,53 @@
 
         const allowed = allCandidates.filter(m => m.id !== currentPri && !isInternalOrPreviewModel(m.id));
 
-        const thisAccRules = account?.model_rules || [];
-        const thisAccModels = [];
-        const otherAccModels = [];
-
-        allowed.forEach(m => {
-          const rule = thisAccRules.find(r => r.model_id === m.id);
-          if (rule) {
-            thisAccModels.push(m);
-          } else {
-            // Find which other account has it
-            const otherAcc = (rawAccountsData || []).find(a => a.id !== account?.id && (a.model_rules || []).some(r => r.model_id === m.id));
-            otherAccModels.push({ model: m, otherAccount: otherAcc });
-          }
-        });
-
         let html = '';
-        const thisEmail = account?.email || 'this account';
-        if (thisAccModels.length > 0) {
-          html += `<optgroup label="Available on ${escapeHtml(thisEmail)} (This Account)">`;
-          thisAccModels.forEach(m => {
-            const sel = m.id === currentSec ? 'selected' : '';
-            const star = m.recommended ? ' ★' : '';
-            html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-          });
-          html += '</optgroup>';
-        }
+        if (!account) {
+          if (allowed.length > 0) {
+            html += '<optgroup label="Available in Pool">';
+            allowed.forEach(m => {
+              const sel = m.id === currentSec ? 'selected' : '';
+              const star = m.recommended ? ' ★' : '';
+              html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+            });
+            html += '</optgroup>';
+          }
+        } else {
+          const thisAccRules = account.model_rules || [];
+          const thisAccModels = [];
+          const otherAccModels = [];
 
-        if (otherAccModels.length > 0) {
-          html += '<optgroup label="Available on other accounts in pool">';
-          otherAccModels.forEach(({ model, otherAccount }) => {
-            const sel = model.id === currentSec ? 'selected' : '';
-            const accTag = otherAccount ? ` [${otherAccount.email}]` : '';
-            html += `<option value="${escapeHtml(model.id)}" ${sel}>${escapeHtml(model.display_name || model.id)}${escapeHtml(accTag)}</option>`;
+          allowed.forEach(m => {
+            const rule = thisAccRules.find(r => r.model_id === m.id);
+            if (rule) {
+              thisAccModels.push(m);
+            } else {
+              const otherAcc = (rawAccountsData || []).find(a => a.id !== account.id && (a.model_rules || []).some(r => r.model_id === m.id));
+              otherAccModels.push({ model: m, otherAccount: otherAcc });
+            }
           });
-          html += '</optgroup>';
+
+          const thisEmail = isPrivacyMode ? '[redacted@email.com]' : (account.email || 'this account');
+          if (thisAccModels.length > 0) {
+            html += `<optgroup label="Available on ${escapeHtml(thisEmail)} (This Account)">`;
+            thisAccModels.forEach(m => {
+              const sel = m.id === currentSec ? 'selected' : '';
+              const star = m.recommended ? ' ★' : '';
+              html += `<option value="${escapeHtml(m.id)}" ${sel}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
+            });
+            html += '</optgroup>';
+          }
+
+          if (otherAccModels.length > 0) {
+            html += '<optgroup label="Available on other accounts in pool">';
+            otherAccModels.forEach(({ model, otherAccount }) => {
+              const sel = model.id === currentSec ? 'selected' : '';
+              const otherEmail = otherAccount ? (isPrivacyMode ? '[redacted@email.com]' : otherAccount.email) : '';
+              const accTag = otherEmail ? ` [${otherEmail}]` : '';
+              html += `<option value="${escapeHtml(model.id)}" ${sel}>${escapeHtml(model.display_name || model.id)}${escapeHtml(accTag)}</option>`;
+            });
+            html += '</optgroup>';
+          }
         }
 
         selectSecondary.innerHTML = html;
@@ -1555,7 +1598,7 @@
       if (radioPool) radioPool.onchange = updateExplanationAndWarnings;
       if (radioAccount) radioAccount.onchange = updateExplanationAndWarnings;
 
-      const isCurrentlyActivePrimary = currentAppConfig.fallback_secondary_enabled && ids.includes(currentAppConfig.model_primary);
+      const isCurrentlyActivePrimary = Boolean(currentAppConfig.fallback_secondary_enabled) && (ids.length === 0 || ids.includes(currentAppConfig.model_primary));
       if (btnDisable) {
         btnDisable.style.display = isCurrentlyActivePrimary ? 'inline-block' : 'none';
       }
@@ -1589,6 +1632,7 @@
 
     const updated = await res.json();
     currentAppConfig = updated;
+    renderFallbackPolicyBar();
     const candidates = getCandidateModels();
     const priDisplay = candidates.find(m => m.id === updated.model_primary)?.display_name || updated.model_primary;
     const secDisplay = candidates.find(m => m.id === updated.model_secondary)?.display_name || updated.model_secondary;
@@ -2701,7 +2745,16 @@
         refreshIcon.style.transform = 'rotate(360deg)';
       }
       try {
-        await fetch('/api/quota/refresh', { method: 'POST' });
+        const res = await fetch('/api/quota/refresh', { method: 'POST' });
+        if (res.ok) {
+          const refreshedAccounts = await res.json();
+          if (Array.isArray(refreshedAccounts)) {
+            rawAccountsData = refreshedAccounts;
+            renderAccountsGrid();
+            renderCategoryRouteChips();
+          }
+        }
+        updateLastPollTime();
         showToast('Quota refresh complete', 'info', 2000);
       } catch (e) {
         showToast(`Quota refresh failed: ${e.message}`, 'error');
@@ -2713,7 +2766,7 @@
           }
         }, 500);
       }
-      await Promise.all([fetchStatus(), fetchAccounts(), fetchMetrics(), fetchModels()]);
+      await Promise.all([fetchStatus(), fetchMetrics(), fetchModels()]);
     };
 
     if (btnRefresh) {
@@ -2722,7 +2775,8 @@
 
     // Keyboard shortcut: Press R to refresh quotas
     window.addEventListener('keydown', (e) => {
-      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+      const tag = document.activeElement?.tagName;
+      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !document.activeElement?.isContentEditable) {
         e.preventDefault();
         triggerRefresh();
       }
@@ -2848,14 +2902,51 @@
 
     // Global keyboard shortcut: 'P' to toggle Privacy Mode
     document.addEventListener('keydown', (e) => {
-      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable)) {
         return;
       }
       if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         togglePrivacyMode();
+        renderCategoryRouteChips();
       }
     });
+
+    // Global Fallback Policy Bar & Compact Models Toggle
+    const btnConfigureFallback = document.getElementById('btn-configure-fallback');
+    if (btnConfigureFallback) {
+      btnConfigureFallback.addEventListener('click', (e) => {
+        openFallbackPopover(e.currentTarget, '', '', null);
+      });
+    }
+
+    const btnClearFallback = document.getElementById('btn-clear-fallback');
+    if (btnClearFallback) {
+      btnClearFallback.addEventListener('click', async () => {
+        try {
+          await saveFallbackPolicy(currentAppConfig.model_primary, currentAppConfig.model_secondary, false);
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
+
+    const btnToggleCompact = document.getElementById('btn-toggle-compact-models');
+    if (btnToggleCompact && accountsGrid) {
+      btnToggleCompact.addEventListener('click', () => {
+        const isCompact = accountsGrid.classList.toggle('is-compact-models');
+        btnToggleCompact.setAttribute('aria-pressed', isCompact ? 'true' : 'false');
+        btnToggleCompact.textContent = isCompact ? 'Expand Models' : 'Compact Models';
+        requestAnimationFrame(() => drawPoolCircuits());
+      });
+    }
+
+    if (accountsGrid && typeof ResizeObserver !== 'undefined') {
+      const gridObserver = new ResizeObserver(() => {
+        requestAnimationFrame(() => drawPoolCircuits());
+      });
+      gridObserver.observe(accountsGrid);
+    }
 
     // Log scroll detection (pause auto-scroll when user inspects history)
     if (logsContainer) {
@@ -2897,22 +2988,83 @@
     });
   }
 
+  function updateLastPollTime() {
+    const el = document.getElementById('last-poll-time');
+    if (!el) return;
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    el.textContent = `Last synced ${hh}:${mm}:${ss} • Auto 60s`;
+  }
+
+  function renderFallbackPolicyBar() {
+    const summaryEl = document.getElementById('fallback-policy-summary');
+    const clearBtn = document.getElementById('btn-clear-fallback');
+    if (!summaryEl) return;
+
+    const enabled = Boolean(currentAppConfig?.fallback_secondary_enabled);
+    const pri = currentAppConfig?.model_primary || '';
+    const sec = currentAppConfig?.model_secondary || '';
+    const strat = currentAppConfig?.fallback_strategy === 'account_first' ? 'Account-first' : 'Pool-first';
+
+    if (enabled && pri && sec) {
+      const candidates = getCandidateModels();
+      const priName = candidates.find(m => m.id === pri)?.display_name || pri;
+      const secName = candidates.find(m => m.id === sec)?.display_name || sec;
+      summaryEl.innerHTML = `<strong>Global 429 Fallback:</strong> <code>${escapeHtml(priName)}</code> ↪ <code>${escapeHtml(secName)}</code> • ${strat}`;
+      if (clearBtn) clearBtn.classList.remove('hidden');
+    } else {
+      summaryEl.innerHTML = '<strong>Global 429 Fallback:</strong> No 429 fallback active';
+      if (clearBtn) clearBtn.classList.add('hidden');
+    }
+  }
+
+  function renderCategoryRouteChips() {
+    const container = document.getElementById('active-category-routes');
+    if (!container) return;
+
+    const cats = [
+      { key: 'claude_gpt', label: 'Claude/GPT' },
+      { key: 'gemini', label: 'Gemini' },
+      { key: 'gemini_argon', label: 'Argon' }
+    ];
+
+    const chips = cats.map(c => {
+      const acc = (rawAccountsData || []).find(a => (a.active_categories || []).includes(c.key));
+      if (!acc) return '';
+      const email = isPrivacyMode ? '[redacted]' : acc.email;
+      return `<span class="route-cat-chip"><span class="route-cat-chip-name">${c.label}:</span><span class="route-cat-chip-account${isPrivacyMode ? ' blurred-email' : ''}">${escapeHtml(email)}</span></span>`;
+    }).filter(Boolean);
+
+    container.innerHTML = chips.join('');
+  }
+
   // Application initialization
-  document.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('DOMContentLoaded', async () => {
     updatePrivacyUI();
     initListeners();
-    fetchStatus();
-    fetchAccounts();
-    fetchMetrics();
-    fetchConfig();
-    fetchModels();
     setupSSE();
+
+    await Promise.all([fetchConfig(), fetchStatus(), fetchAccounts(), fetchModels()]);
+    renderAccountsGrid();
+    renderFallbackPolicyBar();
+    renderCategoryRouteChips();
+    fetchMetrics();
 
     // Trigger one initial quota synchronization pass
     fetch('/api/quota/refresh', { method: 'POST' })
-      .then(() => {
-        fetchStatus();
-        fetchAccounts();
+      .then(async (res) => {
+        if (res.ok) {
+          const refreshed = await res.json();
+          if (Array.isArray(refreshed)) {
+            rawAccountsData = refreshed;
+            renderAccountsGrid();
+            renderCategoryRouteChips();
+          }
+        }
+        updateLastPollTime();
+        await fetchStatus();
       })
       .catch(() => {});
 

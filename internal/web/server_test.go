@@ -1194,6 +1194,39 @@ func TestStaticAssets_ReasoningAndConversationUI(t *testing.T) {
 	}
 }
 
+func TestStaticAssets_DashboardLayoutAndFallbackUI(t *testing.T) {
+	checks := []struct {
+		path    string
+		markers []string
+	}{
+		{
+			path:    "dist/index.html",
+			markers: []string{`id="fallback-policy-bar"`, `id="active-category-routes"`},
+		},
+		{
+			path:    "dist/style.css",
+			markers: []string{"subgrid", ".fallback-policy-bar"},
+		},
+		{
+			path:    "dist/app.js",
+			markers: []string{"xhigh", "renderFallbackPolicyBar", "renderCategoryRouteChips"},
+		},
+	}
+
+	for _, c := range checks {
+		data, err := embeddedDistFS.ReadFile(c.path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", c.path, err)
+		}
+		content := string(data)
+		for _, m := range c.markers {
+			if !strings.Contains(content, m) {
+				t.Errorf("%s missing expected marker %q", c.path, m)
+			}
+		}
+	}
+}
+
 type mockConvMetricsService struct {
 	domain.MetricsService
 	gotLimit int

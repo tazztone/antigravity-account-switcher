@@ -66,7 +66,7 @@
       <!-- Active Account Route Block -->
       <div class="route-block">
         <div class="route-header">
-          <span class="section-label">Active Routing Route</span>
+          <span class="section-label">Active Routing</span>
           <span id="active-status-badge" class="badge badge-success">ACTIVE</span>
         </div>
         <div class="route-email-row">
@@ -77,6 +77,7 @@
             </svg>
           </button>
         </div>
+        <div id="active-category-routes" class="route-category-chips"></div>
         <div class="route-meta">
           <span id="active-details" class="mono">Proxy port: local • HTTP 429 auto-failover armed</span>
         </div>
@@ -118,6 +119,7 @@
           <div class="text-xs text-muted" id="last-poll-time">
             Auto-polling every 60s
           </div>
+          <button id="btn-toggle-compact-models" class="btn btn-sm btn-secondary" title="Toggle compact model lists" aria-pressed="false">Compact Models</button>
           <div class="models-discovery-bar">
             <span id="models-source-badge" class="badge badge-info mono" title="Model discovery source">Discovering models...</span>
             <button id="btn-refresh-models" class="btn-icon-subtle" title="Fetch live models from Antigravity" aria-label="Refresh Models">
@@ -129,9 +131,15 @@
         </div>
       </div>
 
-      <div class="section-legend">
-        <span class="legend-icon">⚡</span>
-        <span><strong>Pool Routing & Failover:</strong> Exclusive models (<span class="model-pool-route-badge-inline">Pool Route ⚡</span>) route directly to their provider account even in standby. Click <strong>↪</strong> on any model to configure 429 fallback.</span>
+      <div id="fallback-policy-bar" class="section-legend fallback-policy-bar">
+        <div class="fallback-policy-info">
+          <span class="legend-icon">⚡</span>
+          <span id="fallback-policy-summary"><strong>Global 429 Fallback:</strong> No 429 fallback active</span>
+        </div>
+        <div class="fallback-policy-actions">
+          <button id="btn-configure-fallback" class="btn btn-sm btn-secondary" title="Configure global 429 fallback policy">Configure</button>
+          <button id="btn-clear-fallback" class="btn btn-sm btn-danger-subtle hidden" title="Clear global 429 fallback policy">Clear</button>
+        </div>
       </div>
 
       <!-- Dynamic Accounts Grid -->

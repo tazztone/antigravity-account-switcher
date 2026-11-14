@@ -185,3 +185,28 @@ func TestExtractModels_FiltersDisabledModels(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractModelVariant(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{"gemini-4-hydrogen-xhigh", "XHigh"},
+		{"gemini-4-hydrogen-high", "High"},
+		{"gemini-4-hydrogen-medium", "Medium"},
+		{"gemini-4-hydrogen-med", "Medium"},
+		{"gemini-4-hydrogen-low", "Low"},
+		{"gemini-4-hydrogen-minimal", "Minimal"},
+		{"gemini-4-hydrogen-min", "Minimal"},
+		{"gemini-4-hydrogen-think", "Thinking"},
+		{"gemini-4-hydrogen-thinking", "Thinking"},
+		{"gemini-4-hydrogen-xhigh-preview", "XHigh Preview"},
+		{"gemini-4-hydrogen", ""},
+	}
+	for _, tt := range tests {
+		got := extractModelVariant(tt.id)
+		if got != tt.want {
+			t.Errorf("extractModelVariant(%q) = %q, want %q", tt.id, got, tt.want)
+		}
+	}
+}

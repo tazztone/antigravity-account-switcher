@@ -70,7 +70,7 @@
   --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.5);
 
   /* Layout Constants */
-  --max-width: 1200px;
+  --max-width: 1440px;
   --header-height: 56px;
 
   /* Native Typography Stacks */
@@ -592,6 +592,27 @@ body {
   gap: 1rem;
 }
 
+@media (min-width: 960px) {
+  .accounts-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .account-card {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 5;
+    gap: 0.75rem;
+    z-index: 2;
+  }
+  .quota-matrix {
+    display: contents;
+  }
+  .quota-slot-tail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+  }
+}
+
 .pool-circuit-canvas {
   position: absolute;
   top: 0;
@@ -599,7 +620,7 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 10;
+  z-index: 1;
   overflow: visible;
 }
 
@@ -780,10 +801,10 @@ body {
 }
 
 .quota-group.bucket-unentitled {
-  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
   border-left: 3.5px solid transparent;
-  background: rgba(255, 255, 255, 0.015);
-  opacity: 0.6;
+  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.88;
 }
 
 .badge-unentitled {
@@ -793,14 +814,14 @@ body {
   font-weight: 500;
   padding: 0.125rem 0.375rem;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-muted);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .quota-row-unentitled {
   font-size: 0.6875rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-style: italic;
   padding: 0.375rem 0;
 }
@@ -2437,10 +2458,11 @@ body.privacy-mode .blurred-email {
 
 .model-rule-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.4rem;
-  padding: 0.22rem 0.35rem;
+  gap: 0.25rem 0.5rem;
+  padding: 0.3rem 0.45rem;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.015);
   transition: background 0.15s ease;
@@ -2452,10 +2474,10 @@ body.privacy-mode .blurred-email {
 
 .model-rule-info {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  overflow: hidden;
-  flex: 1;
+  flex: 1 1 200px;
   min-width: 0;
 }
 
@@ -2466,9 +2488,11 @@ body.privacy-mode .blurred-email {
 }
 
 .model-rule-name {
-  font-size: 0.72rem;
-  font-weight: 500;
+  font-size: 0.76rem;
+  font-weight: 600;
   color: var(--text-primary);
+  flex: 1 1 130px;
+  min-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2582,4 +2606,71 @@ body.privacy-mode .blurred-email {
   margin-top: 0.2rem;
   padding-left: 0.4rem;
   border-left: 2px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Category Routing Chips & Global Fallback Policy Bar */
+.route-category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.route-cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.6875rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.route-cat-chip-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.route-cat-chip-account {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.fallback-policy-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.fallback-policy-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fallback-policy-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.accounts-grid.is-compact-models .bucket-models-section {
+  display: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.btn-sm {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
 }

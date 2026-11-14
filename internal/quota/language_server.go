@@ -414,16 +414,20 @@ func extractModels(p *modelsPayload) ([]*domain.ModelInfo, error) {
 	return result, nil
 }
 
-// extractModelVariant extracts sub-variant tags (High, Medium, Low, Preview) from a model ID.
+// extractModelVariant extracts sub-variant tags (XHigh, High, Medium, Low, Minimal, Preview) from a model ID.
 func extractModelVariant(mid string) string {
 	lower := strings.ToLower(mid)
 	var parts []string
-	if strings.Contains(lower, "high") {
+	if strings.Contains(lower, "xhigh") {
+		parts = append(parts, "XHigh")
+	} else if strings.Contains(lower, "high") {
 		parts = append(parts, "High")
-	} else if strings.Contains(lower, "medium") {
+	} else if strings.Contains(lower, "medium") || strings.HasSuffix(lower, "-med") {
 		parts = append(parts, "Medium")
 	} else if strings.Contains(lower, "low") {
 		parts = append(parts, "Low")
+	} else if strings.Contains(lower, "minimal") || strings.HasSuffix(lower, "-min") {
+		parts = append(parts, "Minimal")
 	}
 	if strings.Contains(lower, "preview") {
 		parts = append(parts, "Preview")
@@ -431,7 +435,7 @@ func extractModelVariant(mid string) string {
 	if strings.Contains(lower, "tiered") {
 		parts = append(parts, "Tiered")
 	}
-	if strings.Contains(lower, "thinking") {
+	if strings.Contains(lower, "thinking") || strings.Contains(lower, "-think") {
 		parts = append(parts, "Thinking")
 	}
 	if strings.Contains(lower, "image") {
