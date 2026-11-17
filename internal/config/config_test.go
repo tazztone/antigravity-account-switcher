@@ -737,6 +737,43 @@ func TestFindAntigravityIcon_IncludesIDEIcon(t *testing.T) {
 	}
 }
 
+func TestFindAntigravityIcon_PrefersExactMatchOverUserFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	t.Setenv("HOME", homeDir)
+
+	userIcons := filepath.Join(homeDir, ".local", "share", "icons")
+	if err := os.MkdirAll(userIcons, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate preexisting antigravity-ide.png in user icons
+	ideIcon := filepath.Join(userIcons, "antigravity-ide.png")
+	if err := os.WriteFile(ideIcon, []byte("fake ide icon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Target binary is antigravity (not IDE)
+	binDir := filepath.Join(tmpDir, "app")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binPath := filepath.Join(binDir, "antigravity")
+	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exact antigravity.png exists next to binary
+	agIcon := filepath.Join(binDir, "antigravity.png")
+	if err := os.WriteFile(agIcon, []byte("fake white icon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	found := FindAntigravityIcon(binPath)
+	if found != agIcon {
+		t.Errorf("expected FindAntigravityIcon to return exact match %s, got fallback %s", agIcon, found)
+	}
+}
+
 func TestFindAntigravityIcon(t *testing.T) {
 	tmpDir := t.TempDir()
 	binPath := filepath.Join(tmpDir, "Antigravity-x64", "antigravity")

@@ -395,7 +395,7 @@ func FindAntigravityIcon(resolvedBin string) string {
 		names = []string{"antigravity.png", "antigravity-ide.png", "icon.png", "logo.png"}
 	}
 
-	// 1. Probe application directory and resources first
+	// 1. Probe application directory and resources first (searching primary icon name across dirs first)
 	dir := filepath.Dir(resolvedBin)
 	searchDirs := []string{
 		dir,
@@ -403,8 +403,8 @@ func FindAntigravityIcon(resolvedBin string) string {
 		filepath.Join(dir, "resources"),
 	}
 
-	for _, d := range searchDirs {
-		for _, name := range names {
+	for _, name := range names {
+		for _, d := range searchDirs {
 			p := filepath.Join(d, name)
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				return p
@@ -428,8 +428,8 @@ func FindAntigravityIcon(resolvedBin string) string {
 		}, iconDirs...)
 	}
 
-	for _, d := range iconDirs {
-		for _, name := range names {
+	for _, name := range names {
+		for _, d := range iconDirs {
 			p := filepath.Join(d, name)
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				return p
