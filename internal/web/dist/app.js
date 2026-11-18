@@ -3125,4 +3125,16 @@
       fetchMetrics();
     }, 30000);
   });
+
+  if (typeof globalThis !== 'undefined' && globalThis.__antigravityTestHooks) {
+    Object.assign(globalThis.__antigravityTestHooks, {
+      parseModelTierInfo,
+      getVisibleAccountModelRules,
+      getModelRuleCategory,
+      computeExclusiveModelMap,
+      createAccountCard,
+      setAccountsData: (accounts) => { rawAccountsData = accounts; },
+      setAppConfig: (cfg) => { currentAppConfig = cfg; }
+    });
+  }
 })();
