@@ -14,7 +14,7 @@ LDFLAGS := -s -w \
 	-X main.Commit=$(COMMIT) \
 	-X main.Date=$(DATE)
 
-.PHONY: all build build-static test test-race test-cover fmt lint tidy clean run wrap help reinstall reinstall-serve
+.PHONY: all build build-static test test-race test-cover fmt lint tidy clean run wrap help reinstall reinstall-serve restart reinstall-restart
 
 all: build
 
@@ -82,9 +82,17 @@ run:
 reinstall:
 	./scripts/reinstall.sh
 
-## reinstall-serve: Uninstalls, builds, installs, and runs serve
-reinstall-serve: reinstall
-	$(HOME)/.local/bin/antigravity-account-switcher serve
+## reinstall-serve: Uninstalls, builds, installs, stops existing serve, and runs serve in foreground
+reinstall-serve:
+	./scripts/reinstall.sh --restart --fg
+
+## restart: Safely stops and restarts running serve daemon(s) on their active port(s)
+restart:
+	./scripts/restart.sh
+
+## reinstall-restart: Uninstalls, builds, installs, and restarts running serve daemon(s)
+reinstall-restart:
+	./scripts/reinstall.sh --restart
 
 ## wrap: Executes wrapped command under switcher supervisor (e.g. make wrap CMD=agy)
 wrap:

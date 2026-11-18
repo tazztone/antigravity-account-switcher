@@ -171,6 +171,11 @@ antigravity-account-switcher serve --port 1831
 antigravity-account-switcher stop
 # Or specify port explicitly if running on a custom port
 antigravity-account-switcher stop --port 1831
+
+# Safely restart running serve daemon(s) preserving active port(s)
+./scripts/restart.sh        # or: make restart
+# Reinstall binary and restart running serve daemon(s)
+./scripts/reinstall.sh --restart  # or: make reinstall-restart
 ```
 
 Create `~/.local/bin/agy2` (auto-launches `serve` if stopped and scopes proxy variables):
@@ -187,6 +192,7 @@ exec agy "$@"
 
 > [!NOTE]
 > `CLOUD_CODE_URL` redirects internal gRPC-Web calls to the switcher; `NO_PROXY` preserves direct localhost IPC and voice speech-to-text (`speech.googleapis.com`).
+> `agy2` and `codium2` can run concurrently and share the same `serve` daemon on `http://127.0.0.1:1831`. Use `./scripts/restart.sh` (or `make restart`) and `./scripts/reinstall.sh --restart` (or `make reinstall-restart`) to restart the daemon in-place without restarting VSCodium or `agy`.
 
 ---
 
