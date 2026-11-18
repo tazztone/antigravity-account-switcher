@@ -17,6 +17,7 @@ import (
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/metrics"
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/oauth"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/proxy"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/store/sqlite"
 )
@@ -1290,5 +1291,132 @@ func TestHandleConversations(t *testing.T) {
 	srv.ServeHTTP(postRec, postReq)
 	if postRec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /api/conversations status = %d, want 405", postRec.Code)
+	}
+}
+
+type mockModelDiscoveryOAuthEngine struct {
+	oauth.OAuthEngine
+	refreshCalls int
+	newToken     string
+}
+
+func (m *mockModelDiscoveryOAuthEngine) EnsureValidToken(ctx context.Context, acc *domain.Account, safetyMargin time.Duration) (*domain.Account, error) {
+	return acc, nil
+}
+
+func (m *mockModelDiscoveryOAuthEngine) RefreshToken(ctx context.Context, refreshToken string) (*oauth.TokenResponse, error) {
+	m.refreshCalls++
+	return &oauth.TokenResponse{
+		AccessToken: m.newToken,
+		ExpiresIn:   3600,
+	}, nil
+}
+
+func TestServer_ModelsAPI_RefreshesExpiredTokenAndPersistsRules(t *testing.T) {
+	_, accRepo, quotaRepo, _, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
+	ctx := context.Background()
+
+	if err := accRepo.Create(ctx, &domain.Account{
+		ID:           "acc-refresh",
+		Email:        "refresh@example.com",
+		Status:       domain.AccountStatusActive,
+		AccessToken:  "old-token",
+		RefreshToken: "refresh-1",
+		TokenExpiry:  time.Now().Add(10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Create account: %v", err)
+	}
+
+	cloudCodeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer old-token":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "Bearer fresh-token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{"gemini-2.5-pro":{"displayName":"Gemini 2.5 Pro"}}}`))
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer cloudCodeSrv.Close()
+
+	mockOAuth := &mockModelDiscoveryOAuthEngine{newToken: "fresh-token"}
+	server, err := NewServer(
+		accRepo,
+		quotaRepo,
+		metricsSvc,
+		broadcaster,
+		eventRepo,
+		mockOAuth,
+		WithCloudCodeBaseURL(cloudCodeSrv.URL),
+	)
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/models status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if mockOAuth.refreshCalls != 1 {
+		t.Errorf("expected 1 RefreshToken call, got %d", mockOAuth.refreshCalls)
+	}
+
+	rules, err := accRepo.ListAccountModelRules(ctx, "acc-refresh")
+	if err != nil {
+		t.Fatalf("ListAccountModelRules: %v", err)
+	}
+	if len(rules) != 1 || rules[0].ModelID != "gemini-2.5-pro" || !rules[0].Discovered {
+		t.Errorf("unexpected persisted rules: %+v", rules)
+	}
+}
+
+func TestServer_ModelsAPI_SkipsDisabledAccounts(t *testing.T) {
+	_, accRepo, quotaRepo, _, metricsSvc, broadcaster, eventRepo := setupTestWeb(t)
+	ctx := context.Background()
+
+	if err := accRepo.Create(ctx, &domain.Account{
+		ID:          "acc-disabled",
+		Email:       "disabled@example.com",
+		Status:      domain.AccountStatusDisabled,
+		AccessToken: "disabled-token",
+	}); err != nil {
+		t.Fatalf("Create account: %v", err)
+	}
+
+	disabledCalled := false
+	cloudCodeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer disabled-token" {
+			disabledCalled = true
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer cloudCodeSrv.Close()
+
+	server, err := NewServer(
+		accRepo,
+		quotaRepo,
+		metricsSvc,
+		broadcaster,
+		eventRepo,
+		nil,
+		WithCloudCodeBaseURL(cloudCodeSrv.URL),
+	)
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/models status = %d, want 200", rec.Code)
+	}
+	if disabledCalled {
+		t.Error("expected disabled account not to be queried during /api/models discovery")
 	}
 }

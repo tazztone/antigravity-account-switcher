@@ -165,6 +165,21 @@ func TestUpsertAccountModels_SelfHealsStaleDiscoveredRules(t *testing.T) {
 	if err != nil || !eligible {
 		t.Errorf("expected claude-sonnet-4-6 still eligible, got %v err=%v", eligible, err)
 	}
+
+	rules, err := repo.ListAccountModelRules(ctx, "acc-stale")
+	if err != nil {
+		t.Fatalf("ListAccountModelRules: %v", err)
+	}
+	discoveredByID := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		discoveredByID[r.ModelID] = r.Discovered
+	}
+	if !discoveredByID["claude-sonnet-4-6"] {
+		t.Errorf("expected claude-sonnet-4-6 Discovered=true, got false")
+	}
+	if discoveredByID["claude-opus-5-5"] {
+		t.Errorf("expected claude-opus-5-5 Discovered=false, got true")
+	}
 }
 
 func TestIsAccountEligibleForModel_FailOpenWithoutRules(t *testing.T) {

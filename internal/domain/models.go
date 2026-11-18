@@ -44,6 +44,7 @@ type AccountModelRule struct {
 	DisplayName string    `json:"display_name"`
 	Category    string    `json:"category"`
 	Enabled     bool      `json:"enabled"`
+	Discovered  bool      `json:"discovered"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 

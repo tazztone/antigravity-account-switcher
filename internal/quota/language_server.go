@@ -459,28 +459,56 @@ func disambiguateModelName(mid, dName string, nameCounts map[string]int, usedNam
 	}
 
 	variant := extractModelVariant(mid)
+	baseName := cleanName
+	if strings.HasSuffix(cleanName, ")") {
+		if idx := strings.LastIndex(cleanName, " ("); idx > 0 {
+			baseName = strings.TrimSpace(cleanName[:idx])
+		}
+	}
+
 	candidate := cleanName
 	if variant != "" && !strings.Contains(strings.ToLower(cleanName), strings.ToLower(variant)) {
-		candidate = fmt.Sprintf("%s (%s)", cleanName, variant)
+		candidate = fmt.Sprintf("%s (%s)", baseName, variant)
 	} else if !strings.Contains(strings.ToLower(cleanName), strings.ToLower(mid)) {
-		candidate = fmt.Sprintf("%s (%s)", cleanName, mid)
+		candidate = fmt.Sprintf("%s (%s)", baseName, mid)
 	}
 
 	if usedNames[strings.ToLower(candidate)] {
-		candidate = fmt.Sprintf("%s (%s)", cleanName, mid)
+		candidate = fmt.Sprintf("%s (%s)", baseName, mid)
 	}
 	usedNames[strings.ToLower(candidate)] = true
 	return candidate
 }
 
+// CloudCodeStatusError represents a non-200 HTTP response from Cloud Code PA.
+type CloudCodeStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *CloudCodeStatusError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("upstream returned status %d: %s", e.StatusCode, e.Body)
+	}
+	return fmt.Sprintf("upstream returned status %d", e.StatusCode)
+}
+
+var cloudCodeHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 // FetchAvailableModelsFromCloudCode queries Cloud Code PA at /v1internal:fetchAvailableModels using a Bearer token.
 func FetchAvailableModelsFromCloudCode(ctx context.Context, token string) ([]*domain.ModelInfo, error) {
+	return FetchAvailableModelsFromCloudCodeWithBaseURL(ctx, "https://daily-cloudcode-pa.googleapis.com", token)
+}
+
+// FetchAvailableModelsFromCloudCodeWithBaseURL queries a Cloud Code PA base URL at /v1internal:fetchAvailableModels using a Bearer token.
+func FetchAvailableModelsFromCloudCodeWithBaseURL(ctx context.Context, baseURL, token string) ([]*domain.ModelInfo, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("token is required")
 	}
 
+	endpoint := strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/v1internal:fetchAvailableModels"
 	reqBody := []byte(`{"project":"aicode-consumers"}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -489,20 +517,22 @@ func FetchAvailableModelsFromCloudCode(ctx context.Context, token string) ([]*do
 	req.Header.Set("User-Agent", config.AntigravityUserAgent(""))
 	req.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
 
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := cloudCodeHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &CloudCodeStatusError{
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(body)),
+		}
 	}
 
 	return ParseAvailableModelsResponse(body)

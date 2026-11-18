@@ -33,6 +33,7 @@ type ServerConfig struct {
 	AppConfig            *config.Config
 	FallbackConfigSetter FallbackConfigSetter
 	ShutdownFunc         func()
+	CloudCodeBaseURL     string
 	ReadTimeout          time.Duration
 	WriteTimeout         time.Duration
 }
@@ -88,6 +89,11 @@ func WithFallbackConfigSetter(setter FallbackConfigSetter) Option {
 // WithShutdownFunc sets the shutdown callback for graceful termination via /api/shutdown.
 func WithShutdownFunc(f func()) Option {
 	return func(c *ServerConfig) { c.ShutdownFunc = f }
+}
+
+// WithCloudCodeBaseURL overrides the Cloud Code PA base URL (primarily for testing).
+func WithCloudCodeBaseURL(url string) Option {
+	return func(c *ServerConfig) { c.CloudCodeBaseURL = url }
 }
 
 // Server serves both the Web UI/REST API dashboard and the local reverse proxy.
@@ -148,6 +154,9 @@ func NewServer(
 	}
 	if cfg.FallbackConfigSetter != nil {
 		api.SetFallbackConfigSetter(cfg.FallbackConfigSetter)
+	}
+	if cfg.CloudCodeBaseURL != "" {
+		api.SetCloudCodeBaseURL(cfg.CloudCodeBaseURL)
 	}
 	if cfg.ShutdownFunc != nil {
 		api.SetShutdownFunc(cfg.ShutdownFunc)

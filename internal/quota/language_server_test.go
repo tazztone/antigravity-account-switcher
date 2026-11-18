@@ -3,6 +3,7 @@ package quota
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -208,5 +209,73 @@ func TestExtractModelVariant(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("extractModelVariant(%q) = %q, want %q", tt.id, got, tt.want)
 		}
+	}
+}
+
+func TestExtractModels_DisambiguationAvoidsStackedParens(t *testing.T) {
+	payload := &modelsPayload{
+		Models: map[string]modelPayloadItem{
+			"gemini-4-hydrogen-high": {
+				DisplayName: "Gemini 4 Hydrogen (High)",
+			},
+			"gemini-4-hydrogen-high-alt": {
+				DisplayName: "Gemini 4 Hydrogen (High)",
+			},
+		},
+	}
+
+	models, err := extractModels(payload)
+	if err != nil {
+		t.Fatalf("extractModels failed: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+
+	seen := make(map[string]bool)
+	for _, m := range models {
+		if seen[m.DisplayName] {
+			t.Errorf("duplicate display name: %s", m.DisplayName)
+		}
+		seen[m.DisplayName] = true
+		if strings.Contains(m.DisplayName, ") (") {
+			t.Errorf("stacked parentheses in display name %q", m.DisplayName)
+		}
+	}
+}
+
+func TestFetchAvailableModelsFromCloudCodeWithBaseURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer expired-token":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		case "Bearer valid-token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{"gemini-2.5-pro":{"displayName":"Gemini 2.5 Pro"}}}`))
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+
+	_, err := FetchAvailableModelsFromCloudCodeWithBaseURL(context.Background(), srv.URL, "expired-token")
+	if err == nil {
+		t.Fatal("expected error for 401 response")
+	}
+	var statusErr *CloudCodeStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected *CloudCodeStatusError, got %T (%v)", err, err)
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected StatusCode 401, got %d", statusErr.StatusCode)
+	}
+
+	models, err := FetchAvailableModelsFromCloudCodeWithBaseURL(context.Background(), srv.URL, "valid-token")
+	if err != nil {
+		t.Fatalf("unexpected error for valid token: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "gemini-2.5-pro" {
+		t.Errorf("unexpected models: %+v", models)
 	}
 }

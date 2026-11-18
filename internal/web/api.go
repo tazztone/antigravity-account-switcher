@@ -43,6 +43,14 @@ type APIHandler struct {
 	appConfig            *config.Config
 	fallbackConfigSetter FallbackConfigSetter
 	shutdownFunc         func()
+	cloudCodeBaseURL     string
+}
+
+// SetCloudCodeBaseURL overrides the Cloud Code PA base URL (primarily for testing).
+func (a *APIHandler) SetCloudCodeBaseURL(url string) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.cloudCodeBaseURL = strings.TrimSpace(url)
 }
 
 // SetConfig sets the configuration pointer for APIHandler.
@@ -1111,12 +1119,29 @@ func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, s
 		sem := make(chan struct{}, 4)
 		var wg sync.WaitGroup
 
+		a.cfgMu.RLock()
+		baseURL := a.cloudCodeBaseURL
+		a.cfgMu.RUnlock()
+		if baseURL == "" {
+			baseURL = "https://daily-cloudcode-pa.googleapis.com"
+		}
+
 		for _, acc := range accounts {
+			if acc.Status == domain.AccountStatusDisabled {
+				continue
+			}
 			wg.Add(1)
 			go func(aAcc *domain.Account) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
+
+				accCopy := *aAcc
+				if a.oauthEngine != nil && accCopy.RefreshToken != "" && accCopy.IsTokenExpired(5*time.Minute) {
+					if _, err := a.oauthEngine.EnsureValidToken(ctx, &accCopy, 5*time.Minute); err != nil {
+						slog.Warn("proactive token refresh failed during model discovery", "account", accCopy.ID, "error", err)
+					}
+				}
 
 				var ms []*domain.ModelInfo
 				src := ""
@@ -1124,13 +1149,37 @@ func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, s
 				// Note: we deliberately do not query language_server here, because language_server
 				// receives the merged multi-account union catalog through the proxy, which would
 				// falsely stamp all pool models onto the active account in account_model_rules.
-				if aAcc.AccessToken != "" {
-					if cm, err := quota.FetchAvailableModelsFromCloudCode(ctx, aAcc.AccessToken); err == nil && len(cm) > 0 {
+				if accCopy.AccessToken != "" {
+					cm, err := quota.FetchAvailableModelsFromCloudCodeWithBaseURL(ctx, baseURL, accCopy.AccessToken)
+					var statusErr *quota.CloudCodeStatusError
+					if err != nil && errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusUnauthorized && a.oauthEngine != nil && accCopy.RefreshToken != "" {
+						tokResp, refreshErr := a.oauthEngine.RefreshToken(ctx, accCopy.RefreshToken)
+						if refreshErr != nil {
+							slog.Warn("401 token refresh failed during model discovery", "account", accCopy.ID, "error", refreshErr)
+						} else {
+							expiresAt := time.Now().Add(time.Duration(tokResp.ExpiresIn) * time.Second)
+							if updErr := a.accountRepo.UpdateToken(ctx, accCopy.ID, tokResp.AccessToken, expiresAt); updErr != nil {
+								slog.Warn("failed to persist refreshed access token", "account", accCopy.ID, "error", updErr)
+							}
+							if tokResp.RefreshToken != "" && tokResp.RefreshToken != accCopy.RefreshToken {
+								if updErr := a.accountRepo.UpdateRefreshToken(ctx, accCopy.ID, tokResp.RefreshToken); updErr != nil {
+									slog.Warn("failed to persist rotated refresh token", "account", accCopy.ID, "error", updErr)
+								}
+							}
+							accCopy.AccessToken = tokResp.AccessToken
+							cm, err = quota.FetchAvailableModelsFromCloudCodeWithBaseURL(ctx, baseURL, accCopy.AccessToken)
+						}
+					}
+					if err != nil {
+						if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusForbidden {
+							slog.Warn("failed to fetch models from Cloud Code PA", "account", accCopy.ID, "error", err)
+						}
+					} else if len(cm) > 0 {
 						ms, src = cm, "cloud_code_pa"
 					}
 				}
 				if ms != nil {
-					resChan <- accModelsResult{accountID: aAcc.ID, models: ms, src: src}
+					resChan <- accModelsResult{accountID: accCopy.ID, models: ms, src: src}
 				}
 			}(acc)
 		}

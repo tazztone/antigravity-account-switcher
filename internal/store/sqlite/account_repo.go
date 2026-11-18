@@ -689,7 +689,7 @@ func (r *AccountRepository) UpsertAccountModels(ctx context.Context, accountID s
 // ListAccountModelRules returns per-model eligibility rules for an account.
 func (r *AccountRepository) ListAccountModelRules(ctx context.Context, accountID string) ([]*domain.AccountModelRule, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT account_id, model_id, display_name, category, enabled, updated_at
+		SELECT account_id, model_id, display_name, category, enabled, discovered, updated_at
 		FROM account_model_rules
 		WHERE account_id = ?
 		ORDER BY model_id ASC
@@ -702,12 +702,13 @@ func (r *AccountRepository) ListAccountModelRules(ctx context.Context, accountID
 	var result []*domain.AccountModelRule
 	for rows.Next() {
 		var rule domain.AccountModelRule
-		var enabledInt int
+		var enabledInt, discoveredInt int
 		var updatedStr string
-		if err := rows.Scan(&rule.AccountID, &rule.ModelID, &rule.DisplayName, &rule.Category, &enabledInt, &updatedStr); err != nil {
+		if err := rows.Scan(&rule.AccountID, &rule.ModelID, &rule.DisplayName, &rule.Category, &enabledInt, &discoveredInt, &updatedStr); err != nil {
 			return nil, fmt.Errorf("failed to scan account model rule: %w", err)
 		}
 		rule.Enabled = enabledInt == 1
+		rule.Discovered = discoveredInt == 1
 		rule.UpdatedAt, _ = parseDBTime(updatedStr)
 		result = append(result, &rule)
 	}
