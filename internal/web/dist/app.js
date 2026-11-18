@@ -407,46 +407,74 @@
       }).join(' ');
     }
 
-    // 2. Check for explicit standard tier in parentheses: (XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)
-    const tierMatch = baseName.match(/\s*\((XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)\)/i);
-    if (tierMatch) {
-      const tLow = tierMatch[1].toLowerCase();
-      tier = tLow === 'xhigh' ? 'XHigh' : (tLow === 'minimal' || tLow === 'min' ? 'Min' : tLow.charAt(0).toUpperCase() + tLow.slice(1));
-      baseName = baseName.replace(/\s*\((XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)\)/i, '').trim();
-    } else {
-      // 3. Check for disambiguated model ID in parentheses like (gemini-2.5-flash-lite)
-      const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
-      if (disambigMatch) {
-        const innerSlug = disambigMatch[1].toLowerCase();
-        if (innerSlug.includes('xhigh')) tier = 'XHigh';
-        else if (innerSlug.includes('high')) tier = 'High';
-        else if (innerSlug.includes('medium') || innerSlug.endsWith('-med')) tier = 'Med';
-        else if (innerSlug.includes('low')) tier = 'Low';
-        else if (innerSlug.includes('minimal') || innerSlug.endsWith('-min')) tier = 'Min';
-        else if (innerSlug.includes('2.5')) tier = '2.5';
-        else if (innerSlug.includes('3.5')) tier = '3.5';
-        else if (innerSlug.includes('3.8')) tier = '3.8';
-        else if (innerSlug.includes('thinking') || innerSlug.includes('think')) tier = 'Think';
-        else if (innerSlug.includes('preview')) tier = 'Preview';
-        else tier = 'Std';
-        baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
-      }
+    // 2. Strip trailing disambiguated model-ID slug like (gemini-2.5-flash-lite) independently first
+    const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
+    if (disambigMatch) {
+      const innerSlug = disambigMatch[1].toLowerCase();
+      if (innerSlug.includes('xhigh') && innerSlug.includes('tiered')) tier = 'XHigh Tiered';
+      else if (innerSlug.includes('high') && innerSlug.includes('tiered')) tier = 'High Tiered';
+      else if (innerSlug.includes('xhigh')) tier = 'XHigh';
+      else if (innerSlug.includes('high')) tier = 'High';
+      else if (innerSlug.includes('medium') || innerSlug.endsWith('-med')) tier = 'Med';
+      else if (innerSlug.includes('low')) tier = 'Low';
+      else if (innerSlug.includes('minimal') || innerSlug.endsWith('-min')) tier = 'Min';
+      else if (innerSlug.includes('2.5')) tier = '2.5';
+      else if (innerSlug.includes('3.5')) tier = '3.5';
+      else if (innerSlug.includes('3.8')) tier = '3.8';
+      else if (innerSlug.includes('thinking') || innerSlug.includes('think')) tier = 'Think';
+      else if (innerSlug.includes('preview')) tier = 'Preview';
+      else if (innerSlug.includes('tiered')) tier = 'Tiered';
+      else tier = 'Std';
+      baseName = baseName.replace(/\s*\([a-z0-9_.-]+\)$/i, '').trim();
+    }
+
+    // 3. Iteratively strip single- or multi-word parenthesized variant tags, e.g. (High), (High Tiered), (XHigh Tiered)
+    const variantRe = /\s*\(((?:XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image)(?:\s+(?:XHigh|High|Medium|Med|Low|Minimal|Min|Thinking|Think|Preview|Tiered|Image))*)\)$/i;
+    let variantMatch;
+    let variantTier = '';
+    while ((variantMatch = baseName.match(variantRe)) !== null) {
+      const normalized = variantMatch[1]
+        .trim()
+        .split(/\s+/)
+        .map(w => {
+          const wl = w.toLowerCase();
+          if (wl === 'xhigh') return 'XHigh';
+          if (wl === 'minimal' || wl === 'min') return 'Min';
+          if (wl === 'medium' || wl === 'med') return 'Med';
+          if (wl === 'thinking' || wl === 'think') return 'Think';
+          return wl.charAt(0).toUpperCase() + wl.slice(1);
+        })
+        .join(' ');
+      if (!variantTier) variantTier = normalized;
+      baseName = baseName.replace(variantRe, '').trim();
+    }
+    if (variantTier) {
+      tier = variantTier;
     }
 
     // 4. Fallback: inspect model_id suffix if tier is still empty
     if (!tier) {
       const mid = rawMid.toLowerCase();
-      if (mid.endsWith('-xhigh')) tier = 'XHigh';
+      if (mid.endsWith('-xhigh-tiered')) tier = 'XHigh Tiered';
+      else if (mid.endsWith('-high-tiered')) tier = 'High Tiered';
+      else if (mid.endsWith('-xhigh')) tier = 'XHigh';
       else if (mid.endsWith('-high')) tier = 'High';
       else if (mid.endsWith('-medium') || mid.endsWith('-med')) tier = 'Med';
       else if (mid.endsWith('-low')) tier = 'Low';
       else if (mid.endsWith('-minimal') || mid.endsWith('-min')) tier = 'Min';
-      else if (mid.endsWith('-thinking') || mid.endsWith('-think')) tier = 'Thinking';
+      else if (mid.endsWith('-thinking') || mid.endsWith('-think')) tier = 'Think';
       else if (mid.endsWith('-preview')) tier = 'Preview';
       else if (mid.endsWith('-tiered')) tier = 'Tiered';
     }
 
     return { baseName, tier };
+  }
+
+  function getVisibleAccountModelRules(acc) {
+    const allRules = (acc && acc.model_rules) || [];
+    const hasDiscovered = allRules.some(r => r && r.discovered === true);
+    if (!hasDiscovered) return allRules;
+    return allRules.filter(r => r && r.discovered !== false);
   }
 
   function computeExclusiveModelMap() {
@@ -460,7 +488,7 @@
 
     enabledAccounts.forEach(acc => {
       const disabledCats = acc.disabled_categories || [];
-      (acc.model_rules || []).forEach(r => {
+      getVisibleAccountModelRules(acc).forEach(r => {
         if (r.enabled === false) return;
         const g = getModelRuleCategory(r);
         const catMap = { claude: 'claude_gpt', gemini: 'gemini', argon: 'gemini_argon' };
@@ -745,14 +773,16 @@
     const disabledCats = acc.disabled_categories || [];
 
     // Model rules categorized by bucket
-    const rules = acc.model_rules || [];
+    const rules = getVisibleAccountModelRules(acc);
 
     function formatTierLabel(tier) {
       const t = tier.toLowerCase();
       if (t === 'xhigh') return 'XHigh';
+      if (t === 'xhigh tiered') return 'XHigh Tiered';
+      if (t === 'high tiered') return 'High Tiered';
       if (t === 'minimal' || t === 'min') return 'Min';
-      if (t === 'medium') return 'Med';
-      if (t === 'thinking') return 'Think';
+      if (t === 'medium' || t === 'med') return 'Med';
+      if (t === 'thinking' || t === 'think') return 'Think';
       return tier;
     }
 
@@ -869,7 +899,23 @@
 
     function buildModelGroupRows(ruleList, groupKey) {
       if (!ruleList || ruleList.length === 0) return { count: 0, html: '' };
-      const tierWeights = { 'minimal': 0, 'min': 0, 'low': 1, 'medium': 2, 'med': 2, 'high': 3, 'xhigh': 4, 'thinking': 5, 'think': 5, '2.5': 6, '3.5': 7, '3.8': 8, 'preview': 9, 'tiered': 10, 'image': 11 };
+      const tierWeights = {
+        'minimal': 0, 'min': 0,
+        'low': 1,
+        'medium': 2, 'med': 2,
+        'std': 3,
+        'high': 4,
+        'high tiered': 5,
+        'xhigh': 6,
+        'xhigh tiered': 7,
+        'thinking': 8, 'think': 8,
+        '2.5': 9, '3.5': 10, '3.8': 11,
+        'preview': 12, 'tiered': 13, 'image': 14
+      };
+      const getTierWeight = (t) => {
+        const key = (t || '').toLowerCase();
+        return key in tierWeights ? tierWeights[key] : 99;
+      };
       const baseModelMap = new Map();
       ruleList.forEach(r => {
         const { baseName, tier } = parseModelTierInfo(r);
@@ -886,7 +932,7 @@
       });
 
       baseModelMap.forEach(item => {
-        item.tiers.sort((a, b) => (tierWeights[a.tier.toLowerCase()] || 99) - (tierWeights[b.tier.toLowerCase()] || 99));
+        item.tiers.sort((a, b) => getTierWeight(a.tier) - getTierWeight(b.tier));
       });
 
       const catMap = { claude: 'claude_gpt', gemini: 'gemini', argon: 'gemini_argon' };
@@ -896,11 +942,12 @@
       const rowsHtml = Array.from(baseModelMap.values()).map(item => {
         const modelIds = item.rules.map(r => r.model_id).join(',');
 
+        const visibleTiers = item.tiers.filter(({ tier }) => !(item.rules.length === 1 && tier === 'Std'));
         let badgesHtml = '';
-        if (item.tiers.length > 0) {
+        if (visibleTiers.length > 0) {
           badgesHtml = `
             <div class="model-tier-badges">
-              ${item.tiers.map(({ tier, rule }) => `
+              ${visibleTiers.map(({ tier, rule }) => `
                 <span class="model-tier-badge"
                       title="${escapeHtml(rule.display_name || rule.model_id)}">
                   ${escapeHtml(formatTierLabel(tier))}
@@ -2766,7 +2813,7 @@
           }
         }, 500);
       }
-      await Promise.all([fetchStatus(), fetchMetrics(), fetchModels()]);
+      await Promise.all([fetchStatus(), fetchMetrics(), fetchModels().then(() => fetchAccounts())]);
     };
 
     if (btnRefresh) {
@@ -2792,7 +2839,7 @@
     window.addEventListener('message', (event) => {
       if (event.data && event.data.type === 'oauth_success') {
         showToast(`Account ${event.data.email || ''} connected successfully!`, 'success');
-        fetchAccounts();
+        fetchModels().then(() => fetchAccounts());
         fetchStatus();
       } else if (event.data && event.data.type === 'oauth_error') {
         showToast(`OAuth authorization failed: ${event.data.error}`, 'error');
@@ -3046,7 +3093,7 @@
     initListeners();
     setupSSE();
 
-    await Promise.all([fetchConfig(), fetchStatus(), fetchAccounts(), fetchModels()]);
+    await Promise.all([fetchConfig(), fetchStatus(), fetchAccounts(), fetchModels().then(() => fetchAccounts())]);
     renderAccountsGrid();
     renderFallbackPolicyBar();
     renderCategoryRouteChips();

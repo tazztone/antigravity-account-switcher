@@ -1210,7 +1210,7 @@ func TestStaticAssets_DashboardLayoutAndFallbackUI(t *testing.T) {
 		},
 		{
 			path:    "dist/app.js",
-			markers: []string{"xhigh", "renderFallbackPolicyBar", "renderCategoryRouteChips"},
+			markers: []string{"xhigh", "renderFallbackPolicyBar", "renderCategoryRouteChips", "getVisibleAccountModelRules", "High Tiered"},
 		},
 	}
 
