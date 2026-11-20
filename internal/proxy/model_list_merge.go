@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
@@ -39,7 +40,6 @@ type modelSortEntry struct {
 // contribute models missing from the base and extend the agentModelSorts ordering.
 func MergeModelListResponses(bodies [][]byte) ([]byte, error) {
 	var base *modelListDocument
-	merged := 0
 
 	for _, body := range bodies {
 		doc, err := decodeModelListDocument(body)
@@ -52,11 +52,9 @@ func MergeModelListResponses(bodies [][]byte) ([]byte, error) {
 		}
 		if base == nil {
 			base = doc
-			merged = 1
 			continue
 		}
 		base.merge(doc, models)
-		merged++
 	}
 
 	if base == nil {
@@ -108,7 +106,9 @@ func (d *modelListDocument) merge(other *modelListDocument, otherModels map[stri
 	for id, raw := range otherModels {
 		existing, ok := ownModels[id]
 		if ok && !isDisabledModelEntry(existing) {
-			// The base already exposes this model enabled: keep it as-is.
+			if !isDisabledModelEntry(raw) {
+				ownModels[id] = mergeModelQuotaInfo(existing, raw)
+			}
 			continue
 		}
 		// If both are disabled, do not overwrite base's metadata.
@@ -434,4 +434,58 @@ func isDisabledModelEntry(raw json.RawMessage) bool {
 		return false
 	}
 	return entry.Disabled
+}
+
+// mergeModelQuotaInfo upgrades existingRaw's "quotaInfo" from candidateRaw when
+// candidateRaw reports a higher remainingFraction, or when both report <= 0 and
+// candidateRaw has an earlier RFC3339 resetTime. All other fields on existingRaw
+// are preserved verbatim.
+func mergeModelQuotaInfo(existingRaw, candidateRaw json.RawMessage) json.RawMessage {
+	var existingMap, candidateMap map[string]json.RawMessage
+	if err := json.Unmarshal(existingRaw, &existingMap); err != nil || existingMap == nil {
+		return existingRaw
+	}
+	if err := json.Unmarshal(candidateRaw, &candidateMap); err != nil || candidateMap == nil {
+		return existingRaw
+	}
+	existingQuotaRaw, hasExisting := existingMap["quotaInfo"]
+	candidateQuotaRaw, hasCandidate := candidateMap["quotaInfo"]
+	if !hasExisting || !hasCandidate || len(existingQuotaRaw) == 0 || len(candidateQuotaRaw) == 0 {
+		return existingRaw
+	}
+
+	type quotaInfo struct {
+		RemainingFraction float64 `json:"remainingFraction"`
+		ResetTime         string  `json:"resetTime"`
+	}
+	var existingQuota, candidateQuota quotaInfo
+	if err := json.Unmarshal(existingQuotaRaw, &existingQuota); err != nil {
+		return existingRaw
+	}
+	if err := json.Unmarshal(candidateQuotaRaw, &candidateQuota); err != nil {
+		return existingRaw
+	}
+
+	upgrade := false
+	if candidateQuota.RemainingFraction > existingQuota.RemainingFraction {
+		upgrade = true
+	} else if existingQuota.RemainingFraction <= 0 && candidateQuota.RemainingFraction <= 0 &&
+		existingQuota.ResetTime != "" && candidateQuota.ResetTime != "" {
+		existingReset, err1 := time.Parse(time.RFC3339, existingQuota.ResetTime)
+		candidateReset, err2 := time.Parse(time.RFC3339, candidateQuota.ResetTime)
+		if err1 == nil && err2 == nil && candidateReset.Before(existingReset) {
+			upgrade = true
+		}
+	}
+
+	if !upgrade {
+		return existingRaw
+	}
+
+	existingMap["quotaInfo"] = candidateQuotaRaw
+	marshaled, err := json.Marshal(existingMap)
+	if err != nil {
+		return existingRaw
+	}
+	return marshaled
 }

@@ -542,6 +542,140 @@ func TestModelListHandler_PassesThroughClientTokenWithoutPool(t *testing.T) {
 	}
 }
 
+func TestModelListHandler_MergesQuotaAcrossPool(t *testing.T) {
+	f := newModelListFixture(t, []*domain.Account{newClaudeAccount(), newGeminiAccount()})
+
+	f.mock.ConfigureAccount("token-claude", &mocks.AccountBehavior{
+		CustomHandler: func(w http.ResponseWriter, r *http.Request) bool {
+			if strings.HasSuffix(r.URL.Path, "fetchAvailableModels") {
+				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"models": {
+						"gemini-4-hydrogen-low": {
+							"displayName": "Gemini 4 Hydrogen (Low)",
+							"quotaInfo": {"resetTime": "2026-11-20T21:00:00Z"}
+						}
+					},
+					"defaultAgentModelId": "gemini-4-hydrogen-low"
+				}`))
+				return true
+			}
+			return false
+		},
+	})
+	f.mock.ConfigureAccount("token-gemini", &mocks.AccountBehavior{
+		CustomHandler: func(w http.ResponseWriter, r *http.Request) bool {
+			if strings.HasSuffix(r.URL.Path, "fetchAvailableModels") {
+				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"models": {
+						"gemini-4-hydrogen-low": {
+							"displayName": "Gemini 4 Hydrogen (Low)",
+							"quotaInfo": {"remainingFraction": 0.75, "resetTime": "2026-11-20T22:00:00Z"}
+						}
+					},
+					"defaultAgentModelId": "gemini-4-hydrogen-low"
+				}`))
+				return true
+			}
+			return false
+		},
+	})
+
+	req, err := http.NewRequest(http.MethodPost, f.server.URL+modelListPath, strings.NewReader(`{"project":"aicode-consumers"}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("model list request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	var parsed struct {
+		Models map[string]struct {
+			QuotaInfo struct {
+				RemainingFraction float64 `json:"remainingFraction"`
+				ResetTime         string  `json:"resetTime"`
+			} `json:"quotaInfo"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode response: %v (%s)", err, body)
+	}
+	if got := parsed.Models["gemini-4-hydrogen-low"].QuotaInfo.RemainingFraction; got != 0.75 {
+		t.Errorf("merged remainingFraction = %v, want 0.75", got)
+	}
+}
+
+func TestModelListHandler_InvalidatesCacheOnStatusChange(t *testing.T) {
+	acc1 := newClaudeAccount()
+	acc2 := newGeminiAccount()
+	acc2.Status = domain.AccountStatusExhausted
+	f := newModelListFixture(t, []*domain.Account{acc1, acc2})
+	configureTwoPlanPool(f)
+
+	if _, payload := f.fetchModels(t, nil); len(payload.Models) != 2 {
+		t.Fatalf("initial merged models = %v, want 2", modelIDs(payload.Models))
+	}
+	callsAfterFirst := f.mock.RequestCount()
+
+	// Transition acc2 from exhausted to active (e.g. background quota poller restoration)
+	if err := f.repo.UpdateStatus(f.ctx, acc2.ID, domain.AccountStatusActive); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	_, _ = f.fetchModels(t, nil)
+	if got := f.mock.RequestCount(); got != callsAfterFirst+2 {
+		t.Errorf("upstream calls after status change = %d, want %d (cache must be invalidated)", got, callsAfterFirst+2)
+	}
+}
+
+func TestModelListHandler_InvalidatesCacheOn429Failover(t *testing.T) {
+	acc1 := newClaudeAccount()
+	acc2 := newGeminiAccount()
+	f := newModelListFixture(t, []*domain.Account{acc1, acc2})
+	configureTwoPlanPool(f)
+
+	// Populate model list cache
+	if _, payload := f.fetchModels(t, nil); len(payload.Models) != 2 {
+		t.Fatalf("initial merged models = %v, want 2", modelIDs(payload.Models))
+	}
+	modelListCallsBefore := len(f.mock.RequestsForPath(modelListPath))
+
+	// Trigger a 429 failover on a generation request
+	f.mock.SetFailoverTrigger("token-claude", 1)
+	genReq, err := http.NewRequest(
+		http.MethodPost,
+		f.server.URL+"/v1internal:generateContent",
+		strings.NewReader(`{"model":"claude-sonnet-4-6","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`),
+	)
+	if err != nil {
+		t.Fatalf("new generation request: %v", err)
+	}
+	genReq.Header.Set("Content-Type", "application/json")
+	genResp, err := http.DefaultClient.Do(genReq)
+	if err != nil {
+		t.Fatalf("generation request: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, genResp.Body)
+	_ = genResp.Body.Close()
+
+	// Next fetchAvailableModels call must miss the cache and fan out fresh upstream
+	_, _ = f.fetchModels(t, nil)
+	modelListCallsAfter := len(f.mock.RequestsForPath(modelListPath))
+	if modelListCallsAfter != modelListCallsBefore+2 {
+		t.Errorf("model list upstream calls after 429 failover = %d, want %d (cache must be invalidated)", modelListCallsAfter, modelListCallsBefore+2)
+	}
+}
+
 // equalStrings reports sorted-slice equality.
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {

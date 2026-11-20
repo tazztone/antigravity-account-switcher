@@ -940,6 +940,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				if h.failoverEngine != nil {
 					action, targetModel, nextAcc, failoverErr := h.failoverEngine.HandleExhaustion(ctx, currentAcc, currentModel)
+					if failoverErr != nil || action != ActionNone {
+						h.InvalidateModelListCache()
+					}
 					if failoverErr != nil || nextAcc == nil {
 						// Entire account pool is exhausted! Forward upstream 429 response verbatim
 						forwardTerminal()

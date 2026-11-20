@@ -202,8 +202,9 @@ func enabledModelListAccounts(accounts []*domain.Account) []*domain.Account {
 	return enabled
 }
 
-// accountSetHash identifies a pool composition by its sorted account IDs and the
-// active account ID, so switching the active account immediately refreshes the base.
+// accountSetHash identifies a pool composition by its sorted account IDs, each account's
+// status, and the active account ID, so switching the active account or transitioning
+// an account between active and exhausted immediately refreshes the base.
 func accountSetHash(accounts []*domain.Account) string {
 	ids := make([]string, 0, len(accounts))
 	activeID := ""
@@ -211,7 +212,7 @@ func accountSetHash(accounts []*domain.Account) string {
 		activeID = accounts[0].ID
 	}
 	for _, acc := range accounts {
-		ids = append(ids, acc.ID)
+		ids = append(ids, acc.ID+":"+string(acc.Status))
 	}
 	sort.Strings(ids)
 	payload := activeID + ":" + strings.Join(ids, "\x00")

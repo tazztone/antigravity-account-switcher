@@ -376,3 +376,166 @@ func TestMergeModelListResponses_PreservesUnknownPayloadFields(t *testing.T) {
 		t.Errorf("field only present in a later response was dropped: betaFlag = %s", doc["betaFlag"])
 	}
 }
+
+func TestMergeModelListResponses_PrefersHighestQuotaFraction(t *testing.T) {
+	base := []byte(`{
+		"models": {
+			"gemini-4-hydrogen-low": {
+				"displayName": "Gemini 4 Hydrogen (Low)",
+				"recommended": true,
+				"modelExperiments": ["exp-base"],
+				"quotaInfo": {"resetTime": "2026-11-20T21:00:00Z"}
+			}
+		}
+	}`)
+	other := []byte(`{
+		"models": {
+			"gemini-4-hydrogen-low": {
+				"displayName": "Gemini 4 Hydrogen Other",
+				"recommended": false,
+				"modelExperiments": ["exp-other"],
+				"quotaInfo": {"remainingFraction": 0.62, "resetTime": "2026-11-20T22:00:00Z"}
+			}
+		}
+	}`)
+
+	merged, err := MergeModelListResponses([][]byte{base, other})
+	if err != nil {
+		t.Fatalf("MergeModelListResponses: %v", err)
+	}
+
+	models := decodeMergedModelList(t, merged)
+	var entry struct {
+		DisplayName      string   `json:"displayName"`
+		Recommended      bool     `json:"recommended"`
+		ModelExperiments []string `json:"modelExperiments"`
+		QuotaInfo        struct {
+			RemainingFraction float64 `json:"remainingFraction"`
+			ResetTime         string  `json:"resetTime"`
+		} `json:"quotaInfo"`
+	}
+	if err := json.Unmarshal(models["gemini-4-hydrogen-low"], &entry); err != nil {
+		t.Fatalf("unmarshal model entry: %v", err)
+	}
+	if entry.DisplayName != "Gemini 4 Hydrogen (Low)" || !entry.Recommended || !reflect.DeepEqual(entry.ModelExperiments, []string{"exp-base"}) {
+		t.Errorf("base metadata was not preserved: %+v", entry)
+	}
+	if entry.QuotaInfo.RemainingFraction != 0.62 {
+		t.Errorf("quotaInfo.remainingFraction = %v, want 0.62", entry.QuotaInfo.RemainingFraction)
+	}
+	if entry.QuotaInfo.ResetTime != "2026-11-20T22:00:00Z" {
+		t.Errorf("quotaInfo.resetTime = %q, want 2026-11-20T22:00:00Z", entry.QuotaInfo.ResetTime)
+	}
+}
+
+func TestMergeModelListResponses_ZeroQuotaPrefersEarlierResetTime(t *testing.T) {
+	base := []byte(`{
+		"models": {
+			"gemini-4-hydrogen-low": {
+				"displayName": "Gemini 4 Hydrogen (Low)",
+				"quotaInfo": {"resetTime": "2026-11-20T21:00:00Z"}
+			}
+		}
+	}`)
+	other := []byte(`{
+		"models": {
+			"gemini-4-hydrogen-low": {
+				"displayName": "Gemini 4 Hydrogen (Low)",
+				"quotaInfo": {"resetTime": "2026-11-20T19:30:00Z"}
+			}
+		}
+	}`)
+
+	merged, err := MergeModelListResponses([][]byte{base, other})
+	if err != nil {
+		t.Fatalf("MergeModelListResponses: %v", err)
+	}
+
+	models := decodeMergedModelList(t, merged)
+	var entry struct {
+		QuotaInfo struct {
+			RemainingFraction float64 `json:"remainingFraction"`
+			ResetTime         string  `json:"resetTime"`
+		} `json:"quotaInfo"`
+	}
+	if err := json.Unmarshal(models["gemini-4-hydrogen-low"], &entry); err != nil {
+		t.Fatalf("unmarshal model entry: %v", err)
+	}
+	if entry.QuotaInfo.ResetTime != "2026-11-20T19:30:00Z" {
+		t.Errorf("quotaInfo.resetTime = %q, want earlier 2026-11-20T19:30:00Z", entry.QuotaInfo.ResetTime)
+	}
+}
+
+func TestMergeModelListResponses_IgnoresDisabledEntryQuotaInfo(t *testing.T) {
+	base := []byte(`{
+		"models": {
+			"gemini-4-hydrogen-low": {
+				"displayName": "Gemini 4 Hydrogen (Low)",
+				"quotaInfo": {"resetTime": "2026-11-20T21:00:00Z"}
+			}
+		}
+	}`)
+	other := []byte(`{
+		"models": {
+			"gemini-4-hydrogen-low": {
+				"displayName": "Gemini 4 Hydrogen (Low)",
+				"disabled": true,
+				"quotaInfo": {"remainingFraction": 1.0, "resetTime": "2026-11-20T19:00:00Z"}
+			}
+		}
+	}`)
+
+	merged, err := MergeModelListResponses([][]byte{base, other})
+	if err != nil {
+		t.Fatalf("MergeModelListResponses: %v", err)
+	}
+
+	models := decodeMergedModelList(t, merged)
+	var entry struct {
+		QuotaInfo struct {
+			RemainingFraction float64 `json:"remainingFraction"`
+			ResetTime         string  `json:"resetTime"`
+		} `json:"quotaInfo"`
+	}
+	if err := json.Unmarshal(models["gemini-4-hydrogen-low"], &entry); err != nil {
+		t.Fatalf("unmarshal model entry: %v", err)
+	}
+	if entry.QuotaInfo.RemainingFraction != 0 {
+		t.Errorf("disabled entry quotaInfo overrode enabled entry: remainingFraction = %v, want 0", entry.QuotaInfo.RemainingFraction)
+	}
+	if entry.QuotaInfo.ResetTime != "2026-11-20T21:00:00Z" {
+		t.Errorf("quotaInfo.resetTime = %q, want 2026-11-20T21:00:00Z", entry.QuotaInfo.ResetTime)
+	}
+}
+
+func TestMergeModelListResponses_PreservesEntriesWithoutQuotaInfo(t *testing.T) {
+	base := []byte(`{
+		"models": {
+			"gemini-2.5-pro": {
+				"displayName": "Gemini 2.5 Pro"
+			}
+		}
+	}`)
+	other := []byte(`{
+		"models": {
+			"gemini-2.5-pro": {
+				"displayName": "Gemini 2.5 Pro",
+				"quotaInfo": {"resetTime": "2026-11-20T21:00:00Z"}
+			}
+		}
+	}`)
+
+	merged, err := MergeModelListResponses([][]byte{base, other})
+	if err != nil {
+		t.Fatalf("MergeModelListResponses: %v", err)
+	}
+
+	models := decodeMergedModelList(t, merged)
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(models["gemini-2.5-pro"], &rawMap); err != nil {
+		t.Fatalf("unmarshal model entry: %v", err)
+	}
+	if _, hasQuota := rawMap["quotaInfo"]; hasQuota {
+		t.Errorf("expected entry without quotaInfo to remain untouched, got %s", models["gemini-2.5-pro"])
+	}
+}
