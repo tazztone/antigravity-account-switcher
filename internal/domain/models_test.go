@@ -37,3 +37,57 @@ func TestIsInternalOrPreviewModel(t *testing.T) {
 		}
 	}
 }
+
+func TestModelInfo_IsInternalOrPreview(t *testing.T) {
+	var nilInfo *domain.ModelInfo
+	if nilInfo.IsInternalOrPreview() {
+		t.Error("expected nil ModelInfo.IsInternalOrPreview() to be false")
+	}
+	internal := &domain.ModelInfo{ID: "chat_20706"}
+	if !internal.IsInternalOrPreview() {
+		t.Error("expected chat_20706 to be internal")
+	}
+	regular := &domain.ModelInfo{ID: "gemini-2.5-pro"}
+	if regular.IsInternalOrPreview() {
+		t.Error("expected gemini-2.5-pro not to be internal")
+	}
+}
+
+func TestCategorizeModelID(t *testing.T) {
+	cases := []struct {
+		model string
+		want  domain.ModelCategory
+	}{
+		{"", domain.CategoryUnknown},
+		{"   ", domain.CategoryUnknown},
+		{"models/claude-3-5-sonnet", domain.CategoryClaudeGPT},
+		{"MODELS/o3-mini", domain.CategoryClaudeGPT},
+		{"MODELS/O1_preview", domain.CategoryClaudeGPT},
+		{"o1", domain.CategoryClaudeGPT},
+		{"o3", domain.CategoryClaudeGPT},
+		{"o4", domain.CategoryClaudeGPT},
+		{"gpt-4o", domain.CategoryClaudeGPT},
+		{"anthropic-claude-opus", domain.CategoryClaudeGPT},
+		{"openai-codex", domain.CategoryClaudeGPT},
+		{"chatgpt-4o-latest", domain.CategoryClaudeGPT},
+		{"haiku-3.5", domain.CategoryClaudeGPT},
+		{"3p-partner-model", domain.CategoryClaudeGPT},
+		{"gemini-4-argon", domain.CategoryGeminiArgon},
+		{"MODELS/GEMINI-ARGON-PRO", domain.CategoryGeminiArgon},
+		{"gemini-2.5-pro", domain.CategoryGemini},
+		{"gemma-3-27b", domain.CategoryGemini},
+		{"flash-lite", domain.CategoryGemini},
+		{"pro-model", domain.CategoryGemini},
+		{"ultra-model", domain.CategoryGemini},
+		{"unknown-custom-model", domain.CategoryUnknown},
+		// >64B heap path
+		{"MODELS/very-long-model-identifier-exceeding-sixty-four-bytes-for-heap-path-claude", domain.CategoryClaudeGPT},
+		{"very-long-model-identifier-exceeding-sixty-four-bytes-for-heap-path-gemini-pro", domain.CategoryGemini},
+	}
+
+	for _, tc := range cases {
+		if got := domain.CategorizeModelID(tc.model); got != tc.want {
+			t.Errorf("CategorizeModelID(%q) = %v; want %v", tc.model, got, tc.want)
+		}
+	}
+}

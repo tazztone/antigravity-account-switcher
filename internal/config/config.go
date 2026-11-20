@@ -133,8 +133,7 @@ func Load() (*Config, error) {
 
 	// Environment variable overrides
 	if envPort := os.Getenv("ANTIGRAVITY_PORT"); envPort != "" {
-		var p int
-		if _, err := fmt.Sscanf(envPort, "%d", &p); err == nil && p > 0 {
+		if p, err := strconv.Atoi(strings.TrimSpace(envPort)); err == nil && p >= 1 && p <= 65535 {
 			cfg.Port = p
 		}
 	}
@@ -243,10 +242,17 @@ func (c *Config) Validate() error {
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
 			return fmt.Errorf("invalid upstream_url %q: scheme must be http or https", c.UpstreamURL)
 		}
+		if parsed.Host == "" {
+			return fmt.Errorf("invalid upstream_url %q: host cannot be empty", c.UpstreamURL)
+		}
 	}
 	if c.QuotaInterval != "" {
-		if _, err := time.ParseDuration(c.QuotaInterval); err != nil {
+		d, err := time.ParseDuration(c.QuotaInterval)
+		if err != nil {
 			return fmt.Errorf("invalid quota_interval %q: %w", c.QuotaInterval, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("invalid quota_interval %q: must be greater than 0", c.QuotaInterval)
 		}
 	}
 	if c.FallbackSecondaryEnabled {
@@ -333,7 +339,7 @@ func CandidateAntigravityPaths() []string {
 // 5. PATH lookups (`antigravity-ide`, `antigravity`, then `agy`)
 func ResolveAntigravityBin(explicitOverride string) (string, error) {
 	if explicitOverride != "" {
-		if _, err := os.Stat(explicitOverride); err == nil {
+		if fi, err := os.Stat(explicitOverride); err == nil && !fi.IsDir() {
 			return filepath.Abs(explicitOverride)
 		}
 		// Check if it's a command in PATH
@@ -344,7 +350,7 @@ func ResolveAntigravityBin(explicitOverride string) (string, error) {
 	}
 
 	if env := os.Getenv("ANTIGRAVITY_BIN"); env != "" {
-		if _, err := os.Stat(env); err == nil {
+		if fi, err := os.Stat(env); err == nil && !fi.IsDir() {
 			return filepath.Abs(env)
 		}
 		if path, err := exec.LookPath(env); err == nil {
@@ -354,7 +360,7 @@ func ResolveAntigravityBin(explicitOverride string) (string, error) {
 
 	cfg, _ := Load()
 	if cfg != nil && cfg.AntigravityBin != "" {
-		if _, err := os.Stat(cfg.AntigravityBin); err == nil {
+		if fi, err := os.Stat(cfg.AntigravityBin); err == nil && !fi.IsDir() {
 			return filepath.Abs(cfg.AntigravityBin)
 		}
 		if path, err := exec.LookPath(cfg.AntigravityBin); err == nil {

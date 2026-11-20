@@ -855,3 +855,20 @@ func TestCLI_StopCommand_SuccessfulShutdown(t *testing.T) {
 		t.Error("expected shutdown endpoint to be called")
 	}
 }
+
+func TestCLI_ExecuteStop_ThreeCandidatePortsNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("ANTIGRAVITY_CONFIG_DIR", tmpDir)
+	// Use an unused port in config so candidatePorts has 3 distinct ports (cfg.Port, 8080, 1831).
+	t.Setenv("ANTIGRAVITY_PORT", "19999")
+
+	var stdout, stderr bytes.Buffer
+	code := executeStop([]string{"--timeout", "100ms"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected executeStop exit code 1, got %d", code)
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, "19999, 8080, 1831") {
+		t.Errorf("expected all 3 candidate ports in error output, got: %q", errOut)
+	}
+}

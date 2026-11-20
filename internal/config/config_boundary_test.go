@@ -348,3 +348,76 @@ func TestConfig_ConcurrentAccess_Race(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestConfig_LoadEnvPortValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("ANTIGRAVITY_CONFIG_DIR", tmpDir)
+
+	cases := []struct {
+		name     string
+		envPort  string
+		wantPort int
+	}{
+		{"valid port", "9091", 9091},
+		{"valid port with whitespace", " 9092 ", 9092},
+		{"trailing junk rejected", "8080abc", DefaultPort},
+		{"out of range high rejected", "65536", DefaultPort},
+		{"zero rejected", "0", DefaultPort},
+		{"negative rejected", "-1", DefaultPort},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ANTIGRAVITY_PORT", tc.envPort)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() failed: %v", err)
+			}
+			if cfg.Port != tc.wantPort {
+				t.Errorf("ANTIGRAVITY_PORT=%q: got port %d, want %d", tc.envPort, cfg.Port, tc.wantPort)
+			}
+		})
+	}
+}
+
+func TestConfig_ValidateUpstreamHostAndQuotaInterval(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty host rejected", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.UpstreamURL = "https://"
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected error for UpstreamURL with empty host")
+		}
+	})
+
+	t.Run("zero quota interval rejected", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.QuotaInterval = "0s"
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected error for QuotaInterval 0s")
+		}
+	})
+
+	t.Run("negative quota interval rejected", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.QuotaInterval = "-5m"
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected error for negative QuotaInterval")
+		}
+	})
+}
+
+func TestResolveAntigravityBin_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ANTIGRAVITY_CONFIG_DIR", dir)
+
+	if _, err := ResolveAntigravityBin(dir); err == nil {
+		t.Error("expected ResolveAntigravityBin(dir) to reject directory override")
+	}
+
+	t.Setenv("ANTIGRAVITY_BIN", dir)
+	if got, err := ResolveAntigravityBin(""); err == nil && got == dir {
+		t.Errorf("expected ResolveAntigravityBin to ignore directory ANTIGRAVITY_BIN, got %q", got)
+	}
+}

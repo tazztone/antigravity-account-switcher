@@ -55,7 +55,6 @@ func CategorizeModelID(model string) ModelCategory {
 	if m == "" {
 		return CategoryUnknown
 	}
-	m = strings.TrimPrefix(m, "models/")
 
 	// Fast stack-allocated ASCII lowercase (0 heap allocs)
 	var buf [64]byte
@@ -79,6 +78,7 @@ func CategorizeModelID(model string) ModelCategory {
 	} else {
 		lower = strings.ToLower(m)
 	}
+	lower = strings.TrimPrefix(lower, "models/")
 
 	// 1. Claude & GPT Family Check (evaluated first to prevent "pro" collision)
 	if strings.Contains(lower, "claude") ||

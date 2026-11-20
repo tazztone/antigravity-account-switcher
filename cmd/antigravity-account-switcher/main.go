@@ -219,6 +219,10 @@ func runServe(args []string) {
 		fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *maxBodyMB)
 		os.Exit(1)
 	}
+	if *pollInterval <= 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: invalid poll-interval %v: must be greater than 0\n", *pollInterval)
+		os.Exit(1)
+	}
 
 	cfg.Port = *port
 	cfg.UpstreamURL = *targetURL
@@ -393,12 +397,18 @@ func executeStop(args []string, stdout, stderr io.Writer) int {
 	if *port > 0 {
 		candidatePorts = []int{*port}
 	} else {
-		cfg, err := config.Load()
-		if err == nil && cfg != nil && cfg.Port > 0 {
-			candidatePorts = []int{cfg.Port}
-		} else {
-			candidatePorts = []int{config.DefaultPort, 1831}
+		seen := make(map[int]bool)
+		addCandidate := func(p int) {
+			if p > 0 && !seen[p] {
+				seen[p] = true
+				candidatePorts = append(candidatePorts, p)
+			}
 		}
+		if cfg, err := config.Load(); err == nil && cfg != nil {
+			addCandidate(cfg.Port)
+		}
+		addCandidate(config.DefaultPort)
+		addCandidate(1831)
 	}
 
 	client := &http.Client{
@@ -427,10 +437,17 @@ func executeStop(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if !found {
-		if len(candidatePorts) == 1 {
+		switch len(candidatePorts) {
+		case 1:
 			fmt.Fprintf(stderr, "No active Antigravity Account Switcher server found on port %d.\n", candidatePorts[0])
-		} else {
+		case 2:
 			fmt.Fprintf(stderr, "No active Antigravity Account Switcher server found on ports %d or %d.\n", candidatePorts[0], candidatePorts[1])
+		default:
+			portStrs := make([]string, len(candidatePorts))
+			for i, p := range candidatePorts {
+				portStrs[i] = fmt.Sprintf("%d", p)
+			}
+			fmt.Fprintf(stderr, "No active Antigravity Account Switcher server found on ports %s.\n", strings.Join(portStrs, ", "))
 		}
 		return 1
 	}
@@ -514,6 +531,10 @@ func runWrap(args []string) {
 	}
 	if *maxBodyMB <= 0 {
 		fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *maxBodyMB)
+		os.Exit(1)
+	}
+	if *pollInterval <= 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: invalid poll-interval %v: must be greater than 0\n", *pollInterval)
 		os.Exit(1)
 	}
 	if *port > 0 {
@@ -994,6 +1015,10 @@ func runLaunch(args []string) {
 		fmt.Fprintf(os.Stderr, "Configuration error: invalid max-body-mb %d: must be greater than 0\n", *maxBodyMB)
 		os.Exit(1)
 	}
+	if *pollInterval <= 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: invalid poll-interval %v: must be greater than 0\n", *pollInterval)
+		os.Exit(1)
+	}
 
 	cfg.Port = *port
 	cfg.UpstreamURL = *targetURL
@@ -1336,9 +1361,15 @@ func runUninstallDesktop(args []string) {
 
 // runRefreshQuotas triggers immediate quota fetching for all accounts.
 func runRefreshQuotas(args []string) {
+	cfg, _ := config.Load()
+	defaultTarget := proxy.DefaultTargetURL
+	if cfg != nil && cfg.UpstreamURL != "" {
+		defaultTarget = cfg.UpstreamURL
+	}
+
 	fs := flag.NewFlagSet("refresh-quotas", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
-	targetURL := fs.String("target-url", proxy.DefaultTargetURL, "Google Cloud Code PA upstream target")
+	targetURL := fs.String("target-url", defaultTarget, "Google Cloud Code PA upstream target")
 	_ = fs.Parse(args)
 
 	db, err := sqlite.Open(*dbPath)
@@ -1350,8 +1381,18 @@ func runRefreshQuotas(args []string) {
 
 	accRepo := sqlite.NewAccountRepository(db)
 	quotaRepo := sqlite.NewQuotaRepository(db)
+	oauthService := oauth.NewOAuthService(accRepo)
 
-	poller, err := quota.NewPoller(accRepo, quotaRepo, quota.WithBaseURL(*targetURL))
+	poller, err := quota.NewPoller(accRepo, quotaRepo,
+		quota.WithBaseURL(*targetURL),
+		quota.WithTokenRefresher(quota.TokenRefresherFunc(func(ctx context.Context, rt string) (string, time.Time, error) {
+			resp, err := oauthService.RefreshToken(ctx, rt)
+			if err != nil {
+				return "", time.Time{}, err
+			}
+			return resp.AccessToken, time.Now().UTC().Add(time.Duration(resp.ExpiresIn) * time.Second), nil
+		})),
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize poller: %v\n", err)
 		os.Exit(1)
