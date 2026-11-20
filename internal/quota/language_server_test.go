@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaultModelCatalog(t *testing.T) {
@@ -278,4 +280,57 @@ func TestFetchAvailableModelsFromCloudCodeWithBaseURL(t *testing.T) {
 	if len(models) != 1 || models[0].ID != "gemini-2.5-pro" {
 		t.Errorf("unexpected models: %+v", models)
 	}
+}
+
+func TestCloudCodeStatusError_Error(t *testing.T) {
+	withBody := &CloudCodeStatusError{StatusCode: 403, Body: "forbidden"}
+	if !strings.Contains(withBody.Error(), "403") || !strings.Contains(withBody.Error(), "forbidden") {
+		t.Errorf("unexpected Error() with body: %q", withBody.Error())
+	}
+	withoutBody := &CloudCodeStatusError{StatusCode: 500}
+	if !strings.Contains(withoutBody.Error(), "500") {
+		t.Errorf("unexpected Error() without body: %q", withoutBody.Error())
+	}
+}
+
+func TestDoLSRequest_SuccessAndNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-codeium-csrf-token") != "test-csrf" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/ok" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// Extract port from srv.URL ("http://127.0.0.1:<port>")
+	var port int
+	_, _ = fmt.Sscanf(srv.URL, "http://127.0.0.1:%d", &port)
+	if port == 0 {
+		t.Fatalf("failed to parse port from %s", srv.URL)
+	}
+
+	body, err := doLSRequest(context.Background(), "test-csrf", []int{port}, "/ok", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("doLSRequest(/ok) failed: %v", err)
+	}
+	if !strings.Contains(string(body), `"status":"ok"`) {
+		t.Errorf("unexpected body: %s", string(body))
+	}
+
+	if _, err := doLSRequest(context.Background(), "test-csrf", []int{port}, "/fail", []byte(`{}`)); err == nil {
+		t.Error("expected error on 500 response")
+	}
+}
+
+func TestDiscoverAvailableModels_EmptyToken(t *testing.T) {
+	// Exercises DiscoverAvailableModels fallback path when no local LS or token is present.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = DiscoverAvailableModels(ctx, "")
 }

@@ -170,17 +170,19 @@ func FindLocalLanguageServer() (csrf string, ports []int, err error) {
 	return csrf, ports, nil
 }
 
+var lsHTTPClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		Proxy: nil, // Bypass ambient HTTP_PROXY
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Localhost self-signed TLS cert
+		},
+	},
+}
+
 // doLSRequest makes an HTTP request to language_server trying all candidate ports.
 func doLSRequest(ctx context.Context, csrf string, ports []int, endpoint string, reqBody []byte) ([]byte, error) {
-	client := &http.Client{
-		Timeout: 2500 * time.Millisecond,
-		Transport: &http.Transport{
-			Proxy: nil, // Bypass ambient HTTP_PROXY
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Localhost self-signed TLS cert
-			},
-		},
-	}
+	client := lsHTTPClient
 
 	schemes := []string{"https", "http"}
 	for _, port := range ports {

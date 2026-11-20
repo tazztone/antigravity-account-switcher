@@ -130,6 +130,9 @@ func NewPoller(
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = DefaultPollInterval
+	}
 
 	client := cfg.HTTPClient
 	if client == nil {
@@ -199,7 +202,9 @@ func (p *Poller) IsRunning() bool {
 }
 
 func (p *Poller) loop(ctx context.Context, done chan struct{}) {
+	var wg sync.WaitGroup
 	defer func() {
+		wg.Wait()
 		p.stateMu.Lock()
 		p.running = false
 		p.stateMu.Unlock()
@@ -211,7 +216,9 @@ func (p *Poller) loop(ctx context.Context, done chan struct{}) {
 
 	// Early discovery loop: probe every 1.5s during the first 20s to detect
 	// Antigravity language_server as soon as Antigravity 2.0 finishes launching.
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for i := 0; i < 12; i++ {
 			select {
 			case <-ctx.Done():
@@ -277,8 +284,15 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	return nil
 }
 
+type atomicBucketReplacer interface {
+	ReplaceBucketsForAccount(ctx context.Context, accountID string, buckets []*domain.QuotaBucket) error
+}
+
 // PollAccount polls quota for a specific account, updates buckets, and checks for reset.
 func (p *Poller) PollAccount(ctx context.Context, accountID string) ([]*domain.QuotaBucket, error) {
+	p.pollMu.Lock()
+	defer p.pollMu.Unlock()
+
 	acc, err := p.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("account not found: %w", err)
@@ -380,9 +394,15 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 
 	// 3. Upsert buckets to SQLite
 	if len(buckets) > 0 {
-		_ = p.quotaRepo.DeleteByAccountID(ctx, acc.ID)
-		if err := p.quotaRepo.UpsertBuckets(ctx, buckets); err != nil {
-			return fmt.Errorf("failed to upsert quota buckets: %w", err)
+		if replacer, ok := p.quotaRepo.(atomicBucketReplacer); ok {
+			if err := replacer.ReplaceBucketsForAccount(ctx, acc.ID, buckets); err != nil {
+				return fmt.Errorf("failed to replace quota buckets: %w", err)
+			}
+		} else {
+			_ = p.quotaRepo.DeleteByAccountID(ctx, acc.ID)
+			if err := p.quotaRepo.UpsertBuckets(ctx, buckets); err != nil {
+				return fmt.Errorf("failed to upsert quota buckets: %w", err)
+			}
 		}
 	}
 
@@ -432,31 +452,44 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		// Attempt one forced refresh
-		if p.tokenRefresher != nil && acc.RefreshToken != "" {
-			newAccess, newExpiry, refErr := p.tokenRefresher.RefreshToken(ctx, acc.RefreshToken)
-			if refErr == nil {
-				_ = p.accountRepo.UpdateToken(ctx, acc.ID, newAccess, newExpiry)
-				acc.AccessToken = newAccess
-				acc.TokenExpiry = newExpiry
-
-				// Retry request once
-				retryReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
-				retryReq.Header.Set("Authorization", "Bearer "+acc.AccessToken)
-				retryReq.Header.Set("Content-Type", "application/json")
-				retryReq.Header.Set("User-Agent", ua)
-				retryReq.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
-				resp2, err2 := p.client.Do(retryReq)
-				if err2 == nil {
-					defer resp2.Body.Close()
-					if resp2.StatusCode == http.StatusOK {
-						return p.parseQuotaResponse(acc.ID, resp2.Body)
-					}
-				}
-			}
+		if p.tokenRefresher == nil || acc.RefreshToken == "" {
+			_ = p.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusError)
+			return nil, fmt.Errorf("unauthorized quota request (401)")
 		}
-		_ = p.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusError)
-		return nil, fmt.Errorf("unauthorized quota request (401)")
+		// Attempt one forced refresh
+		newAccess, newExpiry, refErr := p.tokenRefresher.RefreshToken(ctx, acc.RefreshToken)
+		if refErr != nil {
+			errLower := strings.ToLower(refErr.Error())
+			if strings.Contains(errLower, "invalid_grant") || strings.Contains(errLower, "revoked") {
+				_ = p.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusError)
+			}
+			return nil, fmt.Errorf("token refresh failed on 401: %w", refErr)
+		}
+		if newAccess == "" {
+			return nil, fmt.Errorf("token refresh returned empty access token on 401")
+		}
+		_ = p.accountRepo.UpdateToken(ctx, acc.ID, newAccess, newExpiry)
+		acc.AccessToken = newAccess
+		acc.TokenExpiry = newExpiry
+
+		// Retry request once and dispatch through the same downstream status handlers
+		retryReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+		retryReq.Header.Set("Authorization", "Bearer "+acc.AccessToken)
+		retryReq.Header.Set("Content-Type", "application/json")
+		retryReq.Header.Set("User-Agent", ua)
+		retryReq.Header.Set("X-Goog-Api-Client", "gl-go/1.23.0 gdcl/0.5")
+		resp2, err2 := p.client.Do(retryReq)
+		if err2 != nil {
+			return nil, fmt.Errorf("quota HTTP retry failed: %w", err2)
+		}
+		_ = resp.Body.Close()
+		resp = resp2
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			_ = p.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusError)
+			return nil, fmt.Errorf("unauthorized quota request (401)")
+		}
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
@@ -693,6 +726,10 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 				if fraction == 0 && b.RemainingFracAlt > 0 {
 					fraction = b.RemainingFracAlt
 				}
+				amount := b.RemainingAmount
+				if amount == 0 && b.RemainingAmtAlt > 0 {
+					amount = b.RemainingAmtAlt
+				}
 
 				resetTime := parseResetTime(b.ResetTime, b.ResetTimeAlt)
 
@@ -702,7 +739,7 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 					DisplayName:       displayName,
 					Window:            window,
 					RemainingFraction: fraction,
-					RemainingAmount:   b.RemainingAmount,
+					RemainingAmount:   amount,
 					ResetTime:         resetTime,
 					UpdatedAt:         now,
 				})

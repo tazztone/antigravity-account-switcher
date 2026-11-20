@@ -715,3 +715,149 @@ func TestPoller_FetchQuotaSummary_RequestHeadersAndProjectBody(t *testing.T) {
 		t.Errorf("expected X-Goog-Api-Client header to be set, got empty")
 	}
 }
+
+func TestPoller_401RefreshRetryDispatch(t *testing.T) {
+	cases := []struct {
+		name           string
+		retryStatus    int
+		wantStatus     domain.AccountStatus
+		wantBucketsMin int
+		wantErr        bool
+	}{
+		{"401->refresh->403 consumer", http.StatusForbidden, domain.AccountStatusActive, 1, false},
+		{"401->refresh->429 exhausted", http.StatusTooManyRequests, domain.AccountStatusExhausted, 0, true},
+		{"401->refresh->401 error", http.StatusUnauthorized, domain.AccountStatusError, 0, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.WriteHeader(tc.retryStatus)
+			}))
+			defer srv.Close()
+
+			acc := &domain.Account{
+				ID:           "acc-401",
+				Email:        "401@example.com",
+				AccessToken:  "old-tok",
+				RefreshToken: "rt-tok",
+				TokenExpiry:  time.Now().Add(1 * time.Hour),
+				Status:       domain.AccountStatusActive,
+			}
+			db, err := sqlite.Open(":memory:")
+			if err != nil {
+				t.Fatalf("sqlite.Open: %v", err)
+			}
+			defer db.Close()
+			accRepo := sqlite.NewAccountRepository(db)
+			quotaRepo := sqlite.NewQuotaRepository(db)
+			_ = accRepo.Create(context.Background(), acc)
+			refresher := TokenRefresherFunc(func(ctx context.Context, rt string) (string, time.Time, error) {
+				return "new-tok", time.Now().Add(1 * time.Hour), nil
+			})
+
+			p, err := NewPoller(accRepo, quotaRepo, WithBaseURL(srv.URL), WithTokenRefresher(refresher))
+			if err != nil {
+				t.Fatalf("NewPoller: %v", err)
+			}
+
+			_, pollErr := p.PollAccount(context.Background(), acc.ID)
+			if tc.wantErr && pollErr == nil {
+				t.Errorf("expected error, got nil")
+			}
+			updatedAcc, _ := accRepo.GetByID(context.Background(), acc.ID)
+			if updatedAcc.Status != tc.wantStatus {
+				t.Errorf("got status %q, want %q", updatedAcc.Status, tc.wantStatus)
+			}
+			if tc.wantBucketsMin > 0 {
+				buckets, _ := quotaRepo.GetByAccountID(context.Background(), acc.ID)
+				if len(buckets) < tc.wantBucketsMin {
+					t.Errorf("expected >= %d buckets, got %d", tc.wantBucketsMin, len(buckets))
+				}
+			}
+		})
+	}
+}
+
+func TestPoller_WithNonPositivePollIntervalDoesNotPanic(t *testing.T) {
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+	accRepo := sqlite.NewAccountRepository(db)
+	quotaRepo := sqlite.NewQuotaRepository(db)
+
+	for _, interval := range []time.Duration{0, -5 * time.Second} {
+		p, err := NewPoller(accRepo, quotaRepo, WithPollInterval(interval))
+		if err != nil {
+			t.Fatalf("NewPoller(%v): %v", interval, err)
+		}
+		if err := p.Start(context.Background()); err != nil {
+			t.Fatalf("Start(%v): %v", interval, err)
+		}
+		if err := p.Stop(); err != nil {
+			t.Fatalf("Stop(%v): %v", interval, err)
+		}
+	}
+}
+
+func TestPoller_ConcurrentPollAccountAndPollOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"groups":{"claude":{"buckets":[{"bucketId":"claude-5h","window":"5h","remainingFraction":0.8,"remaining_amount":80}]}}}`))
+	}))
+	defer srv.Close()
+
+	acc := &domain.Account{
+		ID:          "acc-conc",
+		Email:       "conc@example.com",
+		AccessToken: "tok",
+		TokenExpiry: time.Now().Add(1 * time.Hour),
+		Status:      domain.AccountStatusActive,
+	}
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+	accRepo := sqlite.NewAccountRepository(db)
+	quotaRepo := sqlite.NewQuotaRepository(db)
+	_ = accRepo.Create(context.Background(), acc)
+	p, err := NewPoller(accRepo, quotaRepo, WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				_, _ = p.PollAccount(context.Background(), acc.ID)
+			} else {
+				_ = p.PollOnce(context.Background())
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestParseQuotaResponse_GroupsSnakeCaseRemainingAmount(t *testing.T) {
+	p := &Poller{}
+	body := strings.NewReader(`{"groups":[{"name":"claude","buckets":[{"bucket_id":"claude-5h","window":"5h","remaining_fraction":0.75,"remaining_amount":150}]}]}`)
+	buckets, err := p.parseQuotaResponse("acc-1", body)
+	if err != nil {
+		t.Fatalf("parseQuotaResponse: %v", err)
+	}
+	if len(buckets) != 1 || buckets[0].RemainingAmount != 150 {
+		t.Fatalf("expected 1 bucket with RemainingAmount=150, got %+v", buckets)
+	}
+}
