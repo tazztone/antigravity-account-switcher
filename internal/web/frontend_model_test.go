@@ -118,6 +118,7 @@ const paidAcc = {
   email: 'paid@example.com',
   status: 'active',
   is_active: true,
+  active_models: [],
   active_categories: ['claude_gpt', 'gemini_argon'],
   disabled_categories: [],
   buckets: [],
@@ -137,7 +138,8 @@ const freeAcc = {
   email: 'free@example.com',
   status: 'active',
   is_active: false,
-  active_categories: ['gemini'],
+  active_categories: [],
+  active_models: ['gemini-4-hydrogen-sonar'],
   disabled_categories: [],
   buckets: [],
   model_rules: [
@@ -171,10 +173,14 @@ assert.ok(hydrogenSection.includes('Pool Route ⚡'), 'expected Pool Route badge
 const orchestratorSection = paidCard.innerHTML.split('Orchestrator')[1] || '';
 assert.ok(!orchestratorSection.includes('model-tier-badge'), 'solo Orchestrator must not render a spurious Std badge');
 
-// Verify stale discovered=false model is hidden on freeAcc card
+// Verify stale discovered=false model is hidden on freeAcc card and model priority pin renders
 const freeCard = hooks.createAccountCard(freeAcc, exclusiveMap);
 assert.ok(freeCard.innerHTML.includes('Gemini 4 Hydrogen Sonar'), 'expected live model on free card');
 assert.ok(freeCard.innerHTML.includes('Models (1)'), 'expected stale discovered=false model hidden from Models count');
+assert.ok(freeCard.innerHTML.includes('model-rule-row is-model-pinned'), 'expected is-model-pinned row class on pinned model');
+assert.ok(freeCard.innerHTML.includes('model-pin-btn is-pinned'), 'expected is-pinned button class on pinned model');
+assert.ok(freeCard.innerHTML.includes('● Priority'), 'expected active Priority pill label');
+assert.ok(freeCard.innerHTML.includes('ROUTING (1 MODEL)'), 'expected ROUTING (1 MODEL) header badge when only model pin is active');
 `
 
 	tmpDir := t.TempDir()

@@ -234,6 +234,7 @@ type AccountWithBuckets struct {
 	*domain.Account
 	Buckets          []*domain.QuotaBucket      `json:"buckets"`
 	ActiveCategories []string                   `json:"active_categories"`
+	ActiveModels     []string                   `json:"active_models"`
 	ModelRules       []*domain.AccountModelRule `json:"model_rules"`
 	CategoryModes    map[string]string          `json:"category_modes,omitempty"`
 }
@@ -282,6 +283,15 @@ func (a *APIHandler) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) == 3 && parts[1] == "models" && parts[2] == "select" {
+		if r.Method == http.MethodPost {
+			a.selectAccountModels(w, r, accountID)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
@@ -318,6 +328,7 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	activeCats, _ := a.accountRepo.GetActiveCategoriesByAccount(ctx)
+	activeModelsMap, _ := a.accountRepo.GetActiveModelsByAccount(ctx)
 	categoryModes := make(map[string]string)
 	if modes, err := a.accountRepo.GetAllCategoryRoutingModes(ctx); err == nil {
 		for k, v := range modes {
@@ -342,10 +353,15 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 		for _, c := range activeCats[acc.ID] {
 			cats = append(cats, c.String())
 		}
+		models := activeModelsMap[acc.ID]
+		if models == nil {
+			models = []string{}
+		}
 		result = append(result, &AccountWithBuckets{
 			Account:          acc,
 			Buckets:          b,
 			ActiveCategories: cats,
+			ActiveModels:     models,
 			ModelRules:       rules,
 			CategoryModes:    categoryModes,
 		})
@@ -389,6 +405,10 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 			cats = append(cats, c.String())
 		}
 	}
+	models := []string{}
+	if m, err := a.accountRepo.GetActiveModelsByAccount(ctx); err == nil && m[id] != nil {
+		models = m[id]
+	}
 	categoryModes := make(map[string]string)
 	if modes, err := a.accountRepo.GetAllCategoryRoutingModes(ctx); err == nil {
 		for k, v := range modes {
@@ -399,8 +419,95 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 		Account:          acc,
 		Buckets:          buckets,
 		ActiveCategories: cats,
+		ActiveModels:     models,
 		ModelRules:       rules,
 		CategoryModes:    categoryModes,
+	})
+}
+
+func (a *APIHandler) selectAccountModels(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := r.Context()
+	if a.accountRepo == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "account repository unavailable", nil)
+		return
+	}
+
+	var req struct {
+		ModelID  string   `json:"model_id"`
+		ModelIDs []string `json:"model_ids"`
+		Active   *bool    `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid JSON payload", err)
+		return
+	}
+
+	seen := make(map[string]struct{})
+	var ids []string
+	addID := func(raw string) {
+		norm := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(raw)), "models/")
+		if norm == "" {
+			return
+		}
+		if _, ok := seen[norm]; !ok {
+			seen[norm] = struct{}{}
+			ids = append(ids, norm)
+		}
+	}
+	addID(req.ModelID)
+	for _, m := range req.ModelIDs {
+		addID(m)
+	}
+	if len(ids) == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "model_id or model_ids is required", nil)
+		return
+	}
+
+	active := true
+	if req.Active != nil {
+		active = *req.Active
+	}
+
+	if active {
+		if err := a.accountRepo.SetActiveForModels(ctx, id, ids); err != nil {
+			if errors.Is(err, domain.ErrAccountNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to pin models", err)
+			return
+		}
+		for _, mid := range ids {
+			if cat := domain.CategorizeModelID(mid); cat != domain.CategoryUnknown {
+				_ = a.accountRepo.SetAccountCategoryDisabled(ctx, id, cat, false)
+			}
+		}
+	} else {
+		if err := a.accountRepo.ClearActiveForModels(ctx, id, ids); err != nil {
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to unpin models", err)
+			return
+		}
+	}
+
+	if a.broadcaster != nil {
+		a.broadcaster.Broadcast(&domain.ProxyEvent{
+			Type:      domain.EventTypeAccountSwitched,
+			AccountID: id,
+			Message:   fmt.Sprintf("Model priority updated on account %s", id),
+			Details: map[string]any{
+				"account_id": id,
+				"model_ids":  ids,
+				"active":     active,
+			},
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":    true,
+		"account_id": id,
+		"model_ids":  ids,
+		"active":     active,
 	})
 }
 

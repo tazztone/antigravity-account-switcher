@@ -1015,15 +1015,47 @@
           `;
         }
 
+        const activeModels = Array.isArray(acc.active_models) ? acc.active_models : [];
+        const isPinnedHere = item.rules.some(r => activeModels.includes(r.model_id));
+        const pinnedOtherAcc = !isPinnedHere
+          ? (rawAccountsData || []).find(other => other.id !== acc.id && Array.isArray(other.active_models) && item.rules.some(r => other.active_models.includes(r.model_id)))
+          : null;
+
+        let pinBtnClass = 'model-pin-btn';
+        let pinBtnText = '○ Priority';
+        let pinBtnTitle = `Click to prioritize ${item.baseName} on this account`;
+        if (isPinnedHere) {
+          pinBtnClass += ' is-pinned';
+          pinBtnText = '● Priority';
+          pinBtnTitle = `Priority active: ${item.baseName} routes to this account first. Click to unpin and follow bucket.`;
+        } else if (pinnedOtherAcc) {
+          pinBtnClass += ' is-pinned-elsewhere';
+          const otherEmail = isPrivacyMode ? 'another account' : (pinnedOtherAcc.email || 'another account');
+          pinBtnTitle = `Prioritized on ${otherEmail}. Click to move ${item.baseName} priority to this account.`;
+        }
+
+        const pinBtnHtml = `
+          <button type="button" class="${pinBtnClass}"
+                  data-model-ids="${escapeHtml(modelIds)}"
+                  data-base-name="${escapeHtml(item.baseName)}"
+                  data-pinned="${isPinnedHere ? 'true' : 'false'}"
+                  title="${escapeHtml(pinBtnTitle)}">
+            ${pinBtnText}
+          </button>
+        `;
+
         return `
-          <div class="model-rule-row" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
+          <div class="model-rule-row${isPinnedHere ? ' is-model-pinned' : ''}" data-model-ids="${escapeHtml(modelIds)}" data-group="${groupKey}">
             <div class="model-rule-info" title="${escapeHtml(item.baseName + '\nModels: ' + modelIds)}">
               <span class="model-rule-bullet">▪</span>
               <span class="model-rule-name">${escapeHtml(item.baseName)}</span>
               ${badgesHtml}
               ${exclusiveBadgeHtml}
             </div>
-            ${fallbackHtml}
+            <div class="model-rule-actions">
+              ${pinBtnHtml}
+              ${fallbackHtml}
+            </div>
           </div>
         `;
       }).join('');
@@ -1141,6 +1173,10 @@
     } else if (activeEntitledCount > 0) {
       statusBadgeClass = 'badge-success';
       statusText = `ROUTING (${activeEntitledCount}/${entitledCats.length})`;
+    } else if (Array.isArray(acc.active_models) && acc.active_models.length > 0) {
+      const pinnedGroupCount = acc.active_models.length;
+      statusBadgeClass = 'badge-success';
+      statusText = `ROUTING (${pinnedGroupCount} MODEL${pinnedGroupCount > 1 ? 'S' : ''})`;
     } else if (isAllExhausted || (buckets.length === 0 && acc.status === 'exhausted')) {
       statusBadgeClass = 'badge-danger';
       statusText = 'EXHAUSTED';
@@ -1233,6 +1269,41 @@
         }
       });
     });
+
+    // Bind model priority pin buttons
+    card.querySelectorAll('.model-pin-btn').forEach(pinBtn => {
+      pinBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const nextActive = pinBtn.dataset.pinned !== 'true';
+        handleToggleModelPriority(acc.id, pinBtn.dataset.modelIds, nextActive, pinBtn.dataset.baseName);
+      });
+    });
+
+async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, baseName) {
+  const modelIDs = String(modelIDsCsv || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!modelIDs.length) return;
+  try {
+    const res = await fetch(`/api/accounts/${encodeURIComponent(accountID)}/models/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_ids: modelIDs, active: Boolean(nextActive) })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${res.status}`);
+    }
+    showToast(
+      nextActive
+        ? `Prioritized ${baseName || modelIDs[0]} on this account`
+        : `Unpinned ${baseName || modelIDs[0]} (following bucket)`,
+      'success'
+    );
+    await fetchAccounts();
+  } catch (err) {
+    showToast(`Failed to update model priority: ${err.message}`, 'error');
+  }
+}
 
     // Bind fallback popovers across model rows
     card.querySelectorAll('.model-fallback-btn').forEach(fallbackBtn => {

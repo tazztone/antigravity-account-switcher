@@ -83,4 +83,33 @@ func TestServer_API_ModelRulesAndCategorySelect(t *testing.T) {
 			}
 		}
 	}
+
+	// 4. POST /api/accounts/acc-1/models/select -> pin gemini-3.8-flash
+	pinReq := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/models/select", bytes.NewBufferString(`{"model_ids":["gemini-3.8-flash","gemini-3.8-flash-high"],"active":true}`))
+	pinRec := httptest.NewRecorder()
+	server.api.HandleAccounts(pinRec, pinReq)
+	if pinRec.Code != http.StatusOK {
+		t.Fatalf("POST models/select failed (%d): %s", pinRec.Code, pinRec.Body.String())
+	}
+
+	// Verify active_models appears in GET /api/accounts
+	listRec2 := httptest.NewRecorder()
+	server.api.HandleAccounts(listRec2, httptest.NewRequest(http.MethodGet, "/api/accounts", nil))
+	var accounts2 []AccountWithBuckets
+	if err := json.Unmarshal(listRec2.Body.Bytes(), &accounts2); err != nil {
+		t.Fatalf("unmarshal accounts2: %v", err)
+	}
+	for _, a := range accounts2 {
+		if a.ID == "acc-1" && len(a.ActiveModels) != 2 {
+			t.Fatalf("expected 2 active_models on acc-1, got %v", a.ActiveModels)
+		}
+	}
+
+	// 5. Unpin gemini-3.8-flash on acc-1
+	unpinReq := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/models/select", bytes.NewBufferString(`{"model_ids":["gemini-3.8-flash"],"active":false}`))
+	unpinRec := httptest.NewRecorder()
+	server.api.HandleAccounts(unpinRec, unpinReq)
+	if unpinRec.Code != http.StatusOK {
+		t.Fatalf("POST models/select unpin failed (%d): %s", unpinRec.Code, unpinRec.Body.String())
+	}
 }

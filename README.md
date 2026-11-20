@@ -355,6 +355,7 @@ The embedded web server exposes local JSON and SSE endpoints (`http://127.0.0.1:
 | `/api/accounts/{id}/select` | `POST` | Pins an account globally or for a specific category (`claude_gpt`, `gemini`, `gemini_argon`). |
 | `/api/accounts/{id}/categories` | `PUT` | Updates category opt-out exclusions (`disabled_categories`). |
 | `/api/accounts/{id}/models` | `PUT` | Toggles model enablement rules per account. |
+| `/api/accounts/{id}/models/select` | `POST` | Pins or unpins per-model priority routing (`model_ids`, `active`) on an account. |
 | `/api/quota/refresh` | `POST` | Triggers immediate live quota polling pass across all accounts (10s deadline). |
 | `/api/metrics` | `GET` | Token telemetry & daily aggregates; supports localized queries via `?tz=Europe/Rome` or `?tz_offset=-120`. |
 | `/api/conversations` | `GET` | Per-conversation aggregated token usage, latest model, and reasoning mode (`?limit=50`). |

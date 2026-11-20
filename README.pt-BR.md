@@ -355,6 +355,7 @@ O servidor web embutido expõe endpoints locais de gerenciamento JSON e SSE (`ht
 | `/api/accounts/{id}/select` | `POST` | Fixa uma conta globalmente ou para uma categoria específica (`claude_gpt`, `gemini`, `gemini_argon`). |
 | `/api/accounts/{id}/categories` | `PUT` | Atualiza exclusões de categorias (`disabled_categories`). |
 | `/api/accounts/{id}/models` | `PUT` | Atualiza regras de ativação por modelo na conta. |
+| `/api/accounts/{id}/models/select` | `POST` | Fixa ou remove prioridade de roteamento por modelo (`model_ids`, `active`) na conta. |
 | `/api/quota/refresh` | `POST` | Dispara atualização forçada e imediata de cota junto ao Google para todas as contas (timeout de 10s). |
 | `/api/metrics` | `GET` | Métricas de tokens e agregados diários; suporta histórico localizado via `?tz=America/Sao_Paulo` ou `?tz_offset=-180`. |
 | `/api/conversations` | `GET` | Uso agregado de tokens por conversa, último modelo e modo de raciocínio (`?limit=50`). |
