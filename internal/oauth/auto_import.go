@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
@@ -52,7 +53,10 @@ func AutoImportExistingAccount(ctx context.Context, repo domain.AccountRepositor
 	}
 
 	existing, err := repo.List(ctx)
-	if err == nil && len(existing) > 0 {
+	if err != nil {
+		return nil, fmt.Errorf("failed to list existing accounts: %w", err)
+	}
+	if len(existing) > 0 {
 		// Already has accounts, no auto-import needed
 		return nil, nil
 	}
@@ -68,8 +72,11 @@ func AutoImportExistingAccount(ctx context.Context, repo domain.AccountRepositor
 	}
 
 	var acp ACPTokenFile
-	if err := json.Unmarshal(data, &acp); err != nil || acp.RefreshToken == "" {
+	if err := json.Unmarshal(data, &acp); err != nil {
 		return nil, fmt.Errorf("invalid token file format: %w", err)
+	}
+	if strings.TrimSpace(acp.RefreshToken) == "" {
+		return nil, errors.New("token file missing refresh_token")
 	}
 
 	// Exchange refresh token for fresh access token
@@ -83,11 +90,19 @@ func AutoImportExistingAccount(ctx context.Context, repo domain.AccountRepositor
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch userinfo for imported token: %w", err)
 	}
+	if strings.TrimSpace(userInfo.Email) == "" {
+		return nil, errors.New("userinfo response missing email")
+	}
+
+	refreshToken := acp.RefreshToken
+	if strings.TrimSpace(resp.RefreshToken) != "" {
+		refreshToken = resp.RefreshToken
+	}
 
 	acc := &domain.Account{
 		ID:           uuid.New().String(),
 		Email:        userInfo.Email,
-		RefreshToken: acp.RefreshToken,
+		RefreshToken: refreshToken,
 		AccessToken:  resp.AccessToken,
 		TokenExpiry:  time.Now().UTC().Add(time.Duration(resp.ExpiresIn) * time.Second),
 		IsActive:     true,

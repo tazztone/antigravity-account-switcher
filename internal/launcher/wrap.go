@@ -33,6 +33,7 @@ type Config struct {
 	ModelPrimary             string
 	ModelSecondary           string
 	FallbackSecondaryEnabled bool
+	fallbackConfigured       bool
 	FallbackStrategy         string
 	MaxBodyMB                int
 	Stdin                    io.Reader
@@ -59,6 +60,7 @@ func WithModelFallback(primary, secondary string, enabled bool) Option {
 		c.ModelPrimary = primary
 		c.ModelSecondary = secondary
 		c.FallbackSecondaryEnabled = enabled
+		c.fallbackConfigured = true
 	}
 }
 
@@ -128,16 +130,36 @@ func BuildScopedEnv(baseEnv []string, proxyURL string) []string {
 		"https_proxy":    true,
 		"HTTP_PROXY":     true,
 		"HTTPS_PROXY":    true,
+		"no_proxy":       true,
+		"NO_PROXY":       true,
 		"cloud_code_url": true,
 		"CLOUD_CODE_URL": true,
 		"appimage":       true,
 		"APPIMAGE":       true,
 	}
 
-	result := make([]string, 0, len(baseEnv)+5)
+	seenNoProxy := map[string]bool{
+		"localhost":             true,
+		"127.0.0.1":             true,
+		"::1":                   true,
+		"speech.googleapis.com": true,
+	}
+	noProxyList := []string{"localhost", "127.0.0.1", "::1", "speech.googleapis.com"}
+
+	result := make([]string, 0, len(baseEnv)+7)
 	for _, envVar := range baseEnv {
 		parts := strings.SplitN(envVar, "=", 2)
 		if len(parts) > 0 {
+			if strings.EqualFold(parts[0], "NO_PROXY") && len(parts) == 2 {
+				for _, entry := range strings.Split(parts[1], ",") {
+					trimmed := strings.TrimSpace(entry)
+					if trimmed != "" && !seenNoProxy[trimmed] {
+						seenNoProxy[trimmed] = true
+						noProxyList = append(noProxyList, trimmed)
+					}
+				}
+				continue
+			}
 			if keysToOmit[parts[0]] || keysToOmit[strings.ToUpper(parts[0])] || keysToOmit[strings.ToLower(parts[0])] {
 				continue
 			}
@@ -145,13 +167,14 @@ func BuildScopedEnv(baseEnv []string, proxyURL string) []string {
 		result = append(result, envVar)
 	}
 
+	joinedNoProxy := strings.Join(noProxyList, ",")
 	result = append(result,
 		"HTTP_PROXY="+proxyURL,
 		"HTTPS_PROXY="+proxyURL,
 		"http_proxy="+proxyURL,
 		"https_proxy="+proxyURL,
-		"NO_PROXY=localhost,127.0.0.1,::1,speech.googleapis.com",
-		"no_proxy=localhost,127.0.0.1,::1,speech.googleapis.com",
+		"NO_PROXY="+joinedNoProxy,
+		"no_proxy="+joinedNoProxy,
 		"CLOUD_CODE_URL="+proxyURL,
 	)
 
@@ -236,7 +259,9 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		if cfg.ModelSecondary != "" {
 			appCfg.ModelSecondary = cfg.ModelSecondary
 		}
-		appCfg.FallbackSecondaryEnabled = cfg.FallbackSecondaryEnabled
+		if cfg.fallbackConfigured {
+			appCfg.FallbackSecondaryEnabled = cfg.FallbackSecondaryEnabled
+		}
 		if cfg.FallbackStrategy != "" {
 			appCfg.FallbackStrategy = cfg.FallbackStrategy
 		}
@@ -340,7 +365,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 
 	// 3. Start web/proxy server
 	if err := server.Start(); err != nil {
-		if strings.Contains(err.Error(), "address already in use") && cfg.Port > 0 {
+		if isAddrInUse(err) && cfg.Port > 0 && cfg.Server == nil {
 			fmt.Printf("Notice: Port %d is already in use, falling back to ephemeral port...\n", cfg.Port)
 			serverOpts := []web.Option{
 				web.WithPort(0),
@@ -408,7 +433,9 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 
 	// 4. Construct child process (re-resolving binary if unlinked by auto-updater)
 	targetBin := cmdArgs[0]
-	if _, err := exec.LookPath(targetBin); err != nil {
+	if resolved, err := exec.LookPath(targetBin); err == nil {
+		targetBin = resolved
+	} else {
 		base := strings.ToLower(filepath.Base(targetBin))
 		base = strings.TrimSuffix(base, ".exe")
 		if base == "antigravity" || base == "agy" || base == "antigravity-ide" {
@@ -418,6 +445,8 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		}
 	}
 	childCmd := exec.CommandContext(ctx, targetBin, cmdArgs[1:]...)
+	childCmd.Cancel = func() error { return terminateProcess(childCmd.Process) }
+	childCmd.WaitDelay = 5 * time.Second
 	scopedEnv := BuildScopedEnv(os.Environ(), proxyURL)
 
 	// Ensure APPIMAGE is defined for Electron auto-updater (AppImageUpdater) to work seamlessly.
@@ -462,11 +491,6 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 				if childCmd.Process != nil && sig != nil {
 					_ = childCmd.Process.Signal(sig)
 				}
-			case <-ctx.Done():
-				if childCmd.Process != nil {
-					_ = childCmd.Process.Signal(syscall.SIGTERM)
-				}
-				return
 			}
 		}
 	}()

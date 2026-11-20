@@ -137,7 +137,7 @@ Actions=new-empty-window;
 Name=New Empty Window
 Exec=%s launch --new-window
 Icon=%s
-`, name, comment, switcherBin, destIcon, defaultWMClass, defaultMimeType, switcherBin, destIcon)
+`, name, comment, quoteDesktopExecPath(switcherBin), destIcon, defaultWMClass, defaultMimeType, quoteDesktopExecPath(switcherBin), destIcon)
 
 	if err := os.WriteFile(desktopFile, []byte(content), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to write desktop file to %s: %w", desktopFile, err)
@@ -199,4 +199,14 @@ func UninstallDesktop() error {
 	}
 
 	return nil
+}
+
+// quoteDesktopExecPath wraps path in double quotes (escaping " and \) if it contains whitespace.
+func quoteDesktopExecPath(p string) string {
+	if !strings.ContainsAny(p, " \t") {
+		return p
+	}
+	escaped := strings.ReplaceAll(p, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }

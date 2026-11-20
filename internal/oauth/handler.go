@@ -310,7 +310,11 @@ func DefaultBrowserOpener(targetURL string) error {
 	default:
 		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // OAuthEngine defines the full interface for the OAuth2 subsystem.
@@ -324,10 +328,27 @@ type OAuthEngine interface {
 
 // OAuthService coordinates the loopback authentication flow, token refreshing, and persistence.
 type OAuthService struct {
-	cfg         Config
-	accountRepo domain.AccountRepository
-	stateStore  *StateStore
-	client      *http.Client
+	cfg          Config
+	accountRepo  domain.AccountRepository
+	stateStore   *StateStore
+	client       *http.Client
+	refreshMu    sync.Mutex
+	accountLocks map[string]*sync.Mutex
+}
+
+func (s *OAuthService) lockAccount(accountID string) func() {
+	s.refreshMu.Lock()
+	if s.accountLocks == nil {
+		s.accountLocks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := s.accountLocks[accountID]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.accountLocks[accountID] = mu
+	}
+	s.refreshMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // NewOAuthService constructs a new OAuthService.
@@ -433,6 +454,10 @@ func (s *OAuthService) StartLoopbackFlow(ctx context.Context, opener BrowserOpen
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("error") == "" && r.URL.Query().Get("state") != state {
+			http.Error(w, "Invalid or missing OAuth state", http.StatusBadRequest)
+			return
+		}
 		acc, err := s.HandleCallbackRequest(r)
 		if err != nil {
 			s.renderErrorHTML(w, err.Error())
@@ -760,24 +785,42 @@ func (s *OAuthService) EnsureValidToken(ctx context.Context, acc *domain.Account
 		return acc, nil
 	}
 
+	unlock := s.lockAccount(acc.ID)
+	defer unlock()
+
+	if s.accountRepo != nil {
+		if fresh, err := s.accountRepo.GetByID(ctx, acc.ID); err == nil && fresh != nil && !fresh.IsTokenExpired(safetyMargin) {
+			*acc = *fresh
+			return acc, nil
+		}
+	}
+
 	tokenResp, err := s.RefreshToken(ctx, acc.RefreshToken)
 	if err != nil {
-		if errors.Is(err, domain.ErrInvalidRefreshToken) {
+		if errors.Is(err, domain.ErrInvalidRefreshToken) && s.accountRepo != nil {
 			_ = s.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusError)
 		}
 		return nil, fmt.Errorf("failed to refresh token for account %s: %w", acc.Email, err)
 	}
 
-	newExpiry := time.Now().UTC().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-	if err := s.accountRepo.UpdateToken(ctx, acc.ID, tokenResp.AccessToken, newExpiry); err != nil {
-		return nil, fmt.Errorf("failed to update access token in database: %w", err)
+	expiresIn := tokenResp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	newExpiry := time.Now().UTC().Add(time.Duration(expiresIn) * time.Second)
+	if s.accountRepo != nil {
+		if err := s.accountRepo.UpdateToken(ctx, acc.ID, tokenResp.AccessToken, newExpiry); err != nil {
+			return nil, fmt.Errorf("failed to update access token in database: %w", err)
+		}
 	}
 
 	acc.AccessToken = tokenResp.AccessToken
 	acc.TokenExpiry = newExpiry
 
 	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != acc.RefreshToken {
-		_ = s.accountRepo.UpdateRefreshToken(ctx, acc.ID, tokenResp.RefreshToken)
+		if s.accountRepo != nil {
+			_ = s.accountRepo.UpdateRefreshToken(ctx, acc.ID, tokenResp.RefreshToken)
+		}
 		acc.RefreshToken = tokenResp.RefreshToken
 	}
 
