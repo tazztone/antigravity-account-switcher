@@ -166,4 +166,18 @@ type AccountRepository interface {
 
 	// SetAccountCategoryDisabled updates the exclusion state for a model category on an account.
 	SetAccountCategoryDisabled(ctx context.Context, accountID string, category ModelCategory, disabled bool) error
+
+	// GetActiveForModel retrieves the priority-pinned account for a specific model ID
+	// if one is pinned and currently eligible/available to serve traffic.
+	GetActiveForModel(ctx context.Context, modelID string) (*Account, error)
+
+	// SetActiveForModels atomically pins one or more model IDs to the specified account.
+	SetActiveForModels(ctx context.Context, accountID string, modelIDs []string) error
+
+	// ClearActiveForModels removes priority pins for the specified model IDs
+	// (scoped to accountID when non-empty, or unconditionally when accountID is empty).
+	ClearActiveForModels(ctx context.Context, accountID string, modelIDs []string) error
+
+	// GetActiveModelsByAccount returns a map of account ID to sorted pinned model IDs.
+	GetActiveModelsByAccount(ctx context.Context) (map[string][]string, error)
 }

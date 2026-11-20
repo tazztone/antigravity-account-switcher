@@ -151,6 +151,20 @@ CREATE INDEX IF NOT EXISTS idx_token_metrics_conversation ON token_metrics(conve
 CREATE INDEX IF NOT EXISTS idx_token_metrics_model ON token_metrics(model, timestamp);
 `,
 	},
+	{
+		Version:     7,
+		Description: "active_model_accounts",
+		SQL: `
+-- 11. Per-model priority account routing pins
+CREATE TABLE IF NOT EXISTS active_model_accounts (
+    model_id   TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_active_model_accounts_account ON active_model_accounts(account_id);
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.

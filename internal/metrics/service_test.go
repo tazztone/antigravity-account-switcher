@@ -108,6 +108,22 @@ func (m *mockAccountRepo) SetAccountCategoryDisabled(ctx context.Context, accoun
 	return nil
 }
 
+func (m *mockAccountRepo) GetActiveForModel(ctx context.Context, modelID string) (*domain.Account, error) {
+	return nil, domain.ErrNoActiveAccount
+}
+
+func (m *mockAccountRepo) SetActiveForModels(ctx context.Context, accountID string, modelIDs []string) error {
+	return nil
+}
+
+func (m *mockAccountRepo) ClearActiveForModels(ctx context.Context, accountID string, modelIDs []string) error {
+	return nil
+}
+
+func (m *mockAccountRepo) GetActiveModelsByAccount(ctx context.Context) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+
 type mockMetricsRepo struct {
 	summaryRes        *domain.AggregatedMetrics
 	summariesRes      map[string]*domain.AggregatedMetrics

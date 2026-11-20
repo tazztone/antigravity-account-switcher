@@ -511,3 +511,119 @@ func TestGetActiveForCategory_SkipsDisabledOrErroredPinAndFallback(t *testing.T)
 		t.Errorf("solo mode: expected ErrNoActiveAccount, got %v", err)
 	}
 }
+
+func TestAccountRepository_ModelPriorityPins(t *testing.T) {
+	_, accRepo, quotaRepo, _, _ := setupTestStore(t)
+	ctx := context.Background()
+
+	accA := &domain.Account{ID: "acc-a", Email: "a@example.com", RefreshToken: "rt-a", Status: domain.AccountStatusActive}
+	accB := &domain.Account{ID: "acc-b", Email: "b@example.com", RefreshToken: "rt-b", Status: domain.AccountStatusActive}
+	if err := accRepo.Create(ctx, accA); err != nil {
+		t.Fatalf("create accA: %v", err)
+	}
+	if err := accRepo.Create(ctx, accB); err != nil {
+		t.Fatalf("create accB: %v", err)
+	}
+
+	// Unpinned model returns ErrNoActiveAccount
+	if _, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash"); err != domain.ErrNoActiveAccount {
+		t.Fatalf("expected ErrNoActiveAccount for unpinned model, got %v", err)
+	}
+
+	// Pin models to accB with mixed case and models/ prefix
+	if err := accRepo.SetActiveForModels(ctx, accB.ID, []string{"models/Gemini-3.8-Flash", "gemini-3.8-flash-high"}); err != nil {
+		t.Fatalf("SetActiveForModels: %v", err)
+	}
+
+	got, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash")
+	if err != nil || got.ID != accB.ID {
+		t.Fatalf("expected accB for pinned model, got %+v, err=%v", got, err)
+	}
+
+	byAcc, err := accRepo.GetActiveModelsByAccount(ctx)
+	if err != nil {
+		t.Fatalf("GetActiveModelsByAccount: %v", err)
+	}
+	if len(byAcc[accB.ID]) != 2 || byAcc[accB.ID][0] != "gemini-3.8-flash" || byAcc[accB.ID][1] != "gemini-3.8-flash-high" {
+		t.Fatalf("unexpected GetActiveModelsByAccount result: %+v", byAcc)
+	}
+
+	// Exhaust accB's gemini bucket -> GetActiveForModel returns ErrNoActiveAccount, but pin remains saved
+	future := time.Now().UTC().Add(1 * time.Hour)
+	if err := quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{{
+		AccountID:         accB.ID,
+		BucketID:          "gemini-5h",
+		Window:            "5h",
+		RemainingFraction: 0.0,
+		ResetTime:         future,
+	}}); err != nil {
+		t.Fatalf("upsert quota: %v", err)
+	}
+	if _, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash"); err != domain.ErrNoActiveAccount {
+		t.Fatalf("expected ErrNoActiveAccount when pinned account exhausted, got %v", err)
+	}
+	byAccAfterExhaust, _ := accRepo.GetActiveModelsByAccount(ctx)
+	if len(byAccAfterExhaust[accB.ID]) != 2 {
+		t.Fatalf("expected pin to remain saved during exhaustion, got %+v", byAccAfterExhaust)
+	}
+
+	// Restore quota -> GetActiveForModel automatically snaps back to accB
+	if err := quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{{
+		AccountID:         accB.ID,
+		BucketID:          "gemini-5h",
+		Window:            "5h",
+		RemainingFraction: 0.8,
+		ResetTime:         future,
+	}}); err != nil {
+		t.Fatalf("restore quota: %v", err)
+	}
+	got, err = accRepo.GetActiveForModel(ctx, "gemini-3.8-flash")
+	if err != nil || got.ID != accB.ID {
+		t.Fatalf("expected accB after quota recovery, got %+v, err=%v", got, err)
+	}
+
+	// Disabled model rule on accB -> GetActiveForModel returns ErrNoActiveAccount
+	if err := accRepo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
+		AccountID: accB.ID,
+		ModelID:   "gemini-3.8-flash",
+		Enabled:   false,
+	}); err != nil {
+		t.Fatalf("UpdateAccountModelRule: %v", err)
+	}
+	if _, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash"); err != domain.ErrNoActiveAccount {
+		t.Fatalf("expected ErrNoActiveAccount when model rule disabled, got %v", err)
+	}
+
+	// Re-pinning re-enables the disabled rule
+	if err := accRepo.SetActiveForModels(ctx, accB.ID, []string{"gemini-3.8-flash"}); err != nil {
+		t.Fatalf("re-pin SetActiveForModels: %v", err)
+	}
+	if got, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash"); err != nil || got.ID != accB.ID {
+		t.Fatalf("expected accB after re-pinning, got %+v, err=%v", got, err)
+	}
+
+	// ClearActiveForModels scoped to accA should not remove accB's pin
+	if err := accRepo.ClearActiveForModels(ctx, accA.ID, []string{"gemini-3.8-flash"}); err != nil {
+		t.Fatalf("ClearActiveForModels(accA): %v", err)
+	}
+	if got, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash"); err != nil || got.ID != accB.ID {
+		t.Fatalf("expected accB pin preserved when clearing with accA, got %+v, err=%v", got, err)
+	}
+
+	// ClearActiveForModels scoped to accB removes the pin
+	if err := accRepo.ClearActiveForModels(ctx, accB.ID, []string{"gemini-3.8-flash"}); err != nil {
+		t.Fatalf("ClearActiveForModels(accB): %v", err)
+	}
+	if _, err := accRepo.GetActiveForModel(ctx, "gemini-3.8-flash"); err != domain.ErrNoActiveAccount {
+		t.Fatalf("expected ErrNoActiveAccount after clear, got %v", err)
+	}
+
+	// Cascade delete on account deletion removes remaining pins
+	if err := accRepo.Delete(ctx, accB.ID); err != nil {
+		t.Fatalf("Delete(accB): %v", err)
+	}
+	byAccFinal, _ := accRepo.GetActiveModelsByAccount(ctx)
+	if len(byAccFinal[accB.ID]) != 0 {
+		t.Fatalf("expected cascade delete of pins, got %+v", byAccFinal)
+	}
+}

@@ -826,6 +826,11 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		return r.GetNextAvailableForCategory(ctx, category, excludeID)
 	}
 
+	// Prefer a priority-pinned account for this model if healthy and not excluded.
+	if pinned, err := r.GetActiveForModel(ctx, modelID); err == nil && pinned != nil && pinned.ID != excludeID {
+		return pinned, nil
+	}
+
 	// Base candidate query mirrors GetNextAvailableForCategory (category quota +
 	// status), then adds the per-account model eligibility constraint.
 	next, err := r.GetNextAvailableForCategory(ctx, category, excludeID)
@@ -892,6 +897,157 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		return nil, domain.ErrNoAvailableAccount
 	}
 	return acc, err
+}
+
+func normalizeRepoModelID(modelID string) string {
+	norm := strings.ToLower(strings.TrimSpace(modelID))
+	return strings.TrimPrefix(norm, "models/")
+}
+
+// GetActiveForModel retrieves the priority-pinned account for a specific model ID
+// if one is pinned and currently eligible/available to serve traffic.
+func (r *AccountRepository) GetActiveForModel(ctx context.Context, modelID string) (*domain.Account, error) {
+	normModel := normalizeRepoModelID(modelID)
+	if normModel == "" {
+		return nil, domain.ErrNoActiveAccount
+	}
+
+	query := `
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
+		FROM accounts a
+		JOIN active_model_accounts ama ON a.id = ama.account_id
+		WHERE ama.model_id = ?
+	`
+	acc, err := r.scanAccount(r.db.QueryRowContext(ctx, query, normModel))
+	if err != nil {
+		if errors.Is(err, domain.ErrAccountNotFound) {
+			return nil, domain.ErrNoActiveAccount
+		}
+		return nil, err
+	}
+
+	eligible, err := r.IsAccountEligibleForModel(ctx, acc.ID, normModel)
+	if err != nil {
+		return nil, err
+	}
+	if !eligible {
+		return nil, domain.ErrNoActiveAccount
+	}
+
+	cat := domain.CategorizeModelID(normModel)
+	if cat != domain.CategoryUnknown {
+		avail, err := r.IsAccountAvailableForCategory(ctx, acc.ID, cat)
+		if err != nil {
+			return nil, err
+		}
+		if !avail {
+			mode, mErr := r.GetCategoryRoutingMode(ctx, cat)
+			if mErr != nil || mode != domain.RoutingModeSolo || acc.Status != domain.AccountStatusActive {
+				return nil, domain.ErrNoActiveAccount
+			}
+		}
+	}
+
+	return acc, nil
+}
+
+// SetActiveForModels atomically pins one or more model IDs to the specified account.
+func (r *AccountRepository) SetActiveForModels(ctx context.Context, accountID string, modelIDs []string) error {
+	if _, err := r.GetByID(ctx, accountID); err != nil {
+		return err
+	}
+
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	seen := make(map[string]struct{}, len(modelIDs))
+	for _, raw := range modelIDs {
+		norm := normalizeRepoModelID(raw)
+		if norm == "" {
+			continue
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO active_model_accounts (model_id, account_id, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(model_id) DO UPDATE SET
+				account_id = excluded.account_id,
+				updated_at = excluded.updated_at
+		`, norm, accountID, nowStr); err != nil {
+			return fmt.Errorf("failed to pin model %s: %w", norm, err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE account_model_rules
+			SET enabled = 1, updated_at = ?
+			WHERE account_id = ? AND model_id = ? AND enabled = 0
+		`, nowStr, accountID, norm); err != nil {
+			return fmt.Errorf("failed to re-enable model rule %s: %w", norm, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit model pins: %w", err)
+	}
+	return nil
+}
+
+// ClearActiveForModels removes priority pins for the specified model IDs
+// (scoped to accountID when non-empty, or unconditionally when accountID is empty).
+func (r *AccountRepository) ClearActiveForModels(ctx context.Context, accountID string, modelIDs []string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, raw := range modelIDs {
+		norm := normalizeRepoModelID(raw)
+		if norm == "" {
+			continue
+		}
+		var execErr error
+		if accountID != "" {
+			_, execErr = tx.ExecContext(ctx, `DELETE FROM active_model_accounts WHERE model_id = ? AND account_id = ?`, norm, accountID)
+		} else {
+			_, execErr = tx.ExecContext(ctx, `DELETE FROM active_model_accounts WHERE model_id = ?`, norm)
+		}
+		if execErr != nil {
+			return fmt.Errorf("failed to clear model pin %s: %w", norm, execErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit model unpins: %w", err)
+	}
+	return nil
+}
+
+// GetActiveModelsByAccount returns a map of account ID to sorted pinned model IDs.
+func (r *AccountRepository) GetActiveModelsByAccount(ctx context.Context) (map[string][]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT account_id, model_id FROM active_model_accounts ORDER BY account_id, model_id`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active_model_accounts: %w", err)
+	}
+	defer rows.Close()
+
+	res := make(map[string][]string)
+	for rows.Next() {
+		var accID, modelID string
+		if err := rows.Scan(&accID, &modelID); err != nil {
+			return nil, fmt.Errorf("failed to scan active_model_accounts: %w", err)
+		}
+		res[accID] = append(res[accID], modelID)
+	}
+	return res, rows.Err()
 }
 
 // HasArgonEntitlement reports whether the account has Argon entitlement, evidenced
