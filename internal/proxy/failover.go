@@ -1142,6 +1142,38 @@ func (f *FailoverEngine) hasNextAccountForCategoryLocked(ctx context.Context, ex
 	return false
 }
 
+// IsAccountExhausted reports whether the account is currently marked exhausted in memory
+// for the given category or model.
+func (f *FailoverEngine) IsAccountExhausted(accountID string, category ModelCategory, model string) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if category != CategoryUnknown && f.isCategoryExhaustedLocked(accountID, category) {
+		return true
+	}
+	if norm := NormalizeModelName(model); norm != "" && f.isModelExhaustedLocked(accountID, norm) {
+		return true
+	}
+	return false
+}
+
+func (f *FailoverEngine) isCategoryExhaustedLocked(accountID string, cat ModelCategory) bool {
+	now := time.Now().UTC()
+	for _, b := range f.quotaCache[accountID] {
+		if b.category == cat && b.remainingFraction <= 0 && (b.resetTime.IsZero() || b.resetTime.After(now)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *FailoverEngine) isModelExhaustedLocked(accountID string, model string) bool {
+	cat := CategorizeModel(NormalizeModelName(model))
+	if cat == CategoryUnknown {
+		return false
+	}
+	return f.isCategoryExhaustedLocked(accountID, cat)
+}
+
 // RotateAccount handles failover for an account that received HTTP 429 / RESOURCE_EXHAUSTED.
 // Retained for backward compatibility and direct rotation invocations.
 func (f *FailoverEngine) RotateAccount(ctx context.Context, exhaustedAcc *domain.Account) (*domain.Account, error) {
@@ -1197,32 +1229,40 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	normModel := NormalizeModelName(failedModel)
 	blockRotation := isSoloMode
 
+	alreadyMarked := (category != CategoryUnknown && f.isCategoryExhaustedLocked(exhaustedAcc.ID, category)) ||
+		(normModel != "" && f.isModelExhaustedLocked(exhaustedAcc.ID, normModel))
+
 	// 1. Anti-stampede check: reuse the account another concurrent request
-	// already rotated to for this category, as long as it can serve the failed model.
+	// already rotated to for this category, as long as exhaustedAcc was already marked
+	// and currentActive can serve the failed model.
 	var target *domain.Account
 	var err error
+	var currentActive *domain.Account
+	var currentActiveAvail bool
 	if !blockRotation {
-		var currentActive *domain.Account
 		if category != CategoryUnknown {
 			currentActive, err = f.accountRepo.GetActiveForCategory(ctx, category)
 		} else {
 			currentActive, err = f.accountRepo.GetActive(ctx)
 		}
-		avail := false
 		if err == nil && currentActive != nil && currentActive.ID != exhaustedAcc.ID {
 			if category != CategoryUnknown {
 				if ca, aErr := f.accountRepo.IsAccountAvailableForCategory(ctx, currentActive.ID, category); aErr == nil {
-					avail = ca
+					currentActiveAvail = ca
 				} else {
-					avail = currentActive.IsAvailable()
+					currentActiveAvail = currentActive.IsAvailable()
 				}
 			} else {
-				avail = currentActive.IsAvailable()
+				currentActiveAvail = currentActive.IsAvailable()
 			}
-		}
-		if avail && f.eligibleForModel(ctx, currentActive.ID, failedModel) {
-			delete(f.accountStates, currentActive.ID)
-			return currentActive, nil
+			if currentActiveAvail && f.eligibleForModel(ctx, currentActive.ID, failedModel) {
+				if alreadyMarked {
+					delete(f.accountStates, currentActive.ID)
+					return currentActive, nil
+				}
+			} else {
+				currentActiveAvail = false
+			}
 		}
 	}
 
@@ -1297,6 +1337,9 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	}
 
 	nextAcc := target
+	if nextAcc == nil && currentActiveAvail && currentActive != nil && currentActive.ID != exhaustedAcc.ID {
+		nextAcc = currentActive
+	}
 	if nextAcc == nil {
 		if modelConstrained {
 			nextAcc, err = f.accountRepo.GetNextAvailableForModel(ctx, category, normModel, exhaustedAcc.ID)
@@ -1329,14 +1372,16 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 		return nil, domain.ErrNoAvailableAccount
 	}
 
-	// 4. Set next account active atomically for this category
-	if category != CategoryUnknown {
-		if err := f.accountRepo.SetActiveForCategory(ctx, category, nextAcc.ID); err != nil {
-			return nil, fmt.Errorf("failed to set active account for category %s to %s: %w", category.String(), nextAcc.ID, err)
-		}
-	} else {
-		if err := f.accountRepo.SetActive(ctx, nextAcc.ID); err != nil {
-			return nil, fmt.Errorf("failed to set active account to %s: %w", nextAcc.ID, err)
+	// 4. Set next account active atomically for this category (only when rotating the category owner)
+	if currentActive == nil || currentActive.ID == exhaustedAcc.ID {
+		if category != CategoryUnknown {
+			if err := f.accountRepo.SetActiveForCategory(ctx, category, nextAcc.ID); err != nil {
+				return nil, fmt.Errorf("failed to set active account for category %s to %s: %w", category.String(), nextAcc.ID, err)
+			}
+		} else {
+			if err := f.accountRepo.SetActive(ctx, nextAcc.ID); err != nil {
+				return nil, fmt.Errorf("failed to set active account to %s: %w", nextAcc.ID, err)
+			}
 		}
 	}
 

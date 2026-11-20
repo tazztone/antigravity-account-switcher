@@ -621,21 +621,40 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isPassThrough := false
 
 	if isCloudCode {
-		// Resolve active account specifically for that model category
+		// Tier 1: Check per-model priority pin first (in Pool mode)
 		var acc *domain.Account
 		var accErr error
-		if origCategory != CategoryUnknown {
-			acc, accErr = h.accountRepo.GetActiveForCategory(ctx, origCategory)
-		} else {
-			// CategoryUnknown (e.g. /v1internal:retrieveUserQuotaSummary or unmodeled endpoints)
-			// Prefer active account assigned to primary IDE assistant category (Claude & GPT)
-			acc, accErr = h.accountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
-			if accErr != nil || acc == nil {
-				acc, accErr = h.accountRepo.GetActive(ctx)
+		if origModel != "" && origCategory != CategoryUnknown {
+			if pinnedAcc, pErr := h.accountRepo.GetActiveForModel(ctx, origModel); pErr == nil && pinnedAcc != nil {
+				exhaustedInMem := h.failoverEngine != nil && h.failoverEngine.IsAccountExhausted(pinnedAcc.ID, origCategory, origModel)
+				if !exhaustedInMem {
+					mode, mErr := h.accountRepo.GetCategoryRoutingMode(ctx, origCategory)
+					if mErr == nil && mode == domain.RoutingModeSolo {
+						if catAcc, cErr := h.accountRepo.GetActiveForCategory(ctx, origCategory); cErr == nil && catAcc != nil && catAcc.ID == pinnedAcc.ID {
+							acc = pinnedAcc
+						}
+					} else {
+						acc = pinnedAcc
+					}
+				}
 			}
-			if acc != nil && !acc.IsActive {
-				if active, gErr := h.accountRepo.GetActive(ctx); gErr != nil || active == nil {
-					_ = h.accountRepo.SetActive(ctx, acc.ID)
+		}
+
+		// Tier 2: Resolve active account specifically for that model category
+		if acc == nil {
+			if origCategory != CategoryUnknown {
+				acc, accErr = h.accountRepo.GetActiveForCategory(ctx, origCategory)
+			} else {
+				// CategoryUnknown (e.g. /v1internal:retrieveUserQuotaSummary or unmodeled endpoints)
+				// Prefer active account assigned to primary IDE assistant category (Claude & GPT)
+				acc, accErr = h.accountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
+				if accErr != nil || acc == nil {
+					acc, accErr = h.accountRepo.GetActive(ctx)
+				}
+				if acc != nil && !acc.IsActive {
+					if active, gErr := h.accountRepo.GetActive(ctx); gErr != nil || active == nil {
+						_ = h.accountRepo.SetActive(ctx, acc.ID)
+					}
 				}
 			}
 		}

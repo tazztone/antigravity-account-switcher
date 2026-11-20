@@ -414,3 +414,84 @@ func TestModelEligibility_SoloMode_BlocksCrossAccountDispatch(t *testing.T) {
 		t.Fatalf("Solo mode violation: request was rerouted to pool-token!")
 	}
 }
+
+func TestProxy_ModelPriorityPin_OverridesCategoryBucket(t *testing.T) {
+	f := newTwoAccountPool(t, nil)
+	f.seedModels(t, "acc-trial",
+		&domain.ModelInfo{ID: "gemini-3.8-flash-med", DisplayName: "Gemini 3.8 Flash (Med)", Category: "gemini"},
+	)
+
+	// Account paid is active for CategoryGemini; Account trial is pinned for gemini-3.8-flash-med.
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
+		t.Fatalf("SetActiveForCategory: %v", err)
+	}
+	if err := f.repo.SetActiveForModels(f.ctx, "acc-trial", []string{"gemini-3.8-flash-med"}); err != nil {
+		t.Fatalf("SetActiveForModels: %v", err)
+	}
+
+	// gemini-3.8-flash-med must route to acc-trial (model priority pin).
+	recFlash := f.requestModel(t, "gemini-3.8-flash-med")
+	if recFlash.Code != http.StatusOK {
+		t.Fatalf("expected 200 for flash-med, got %d: %s", recFlash.Code, recFlash.Body.String())
+	}
+	if !strings.Contains(recFlash.Body.String(), "trial-token") {
+		t.Errorf("expected gemini-3.8-flash-med to route to trial-token, got: %s", recFlash.Body.String())
+	}
+
+	// gemini-2.5-pro must still route to acc-paid (category bucket).
+	recPro := f.requestModel(t, "gemini-2.5-pro")
+	if recPro.Code != http.StatusOK {
+		t.Fatalf("expected 200 for gemini-2.5-pro, got %d: %s", recPro.Code, recPro.Body.String())
+	}
+	if !strings.Contains(recPro.Body.String(), "paid-token") {
+		t.Errorf("expected gemini-2.5-pro to route to paid-token, got: %s", recPro.Body.String())
+	}
+}
+
+func TestProxy_ModelPriorityPin_FailsOverToCategoryActiveOn429AndPreservesPin(t *testing.T) {
+	f := newTwoAccountPool(t, func(token, body string) (int, string) {
+		if token == "trial-token" {
+			return http.StatusTooManyRequests, `{"error":{"code":429,"message":"RESOURCE_EXHAUSTED","status":"RESOURCE_EXHAUSTED"}}`
+		}
+		return http.StatusOK, `{"token":"` + token + `"}`
+	})
+
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
+		t.Fatalf("SetActiveForCategory: %v", err)
+	}
+	if err := f.repo.SetActiveForModels(f.ctx, "acc-trial", []string{"gemini-3.8-flash"}); err != nil {
+		t.Fatalf("SetActiveForModels: %v", err)
+	}
+
+	// First request hits 429 on acc-trial and replays on acc-paid.
+	rec1 := f.requestModel(t, "gemini-3.8-flash")
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+	if !strings.Contains(rec1.Body.String(), "paid-token") {
+		t.Errorf("expected failover to paid-token, got: %s", rec1.Body.String())
+	}
+
+	// CategoryGemini must remain pinned to acc-paid.
+	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-paid" {
+		t.Errorf("expected CategoryGemini to remain acc-paid, got %q", got)
+	}
+
+	// Model pin must remain saved on acc-trial for post-reset recovery.
+	pins, err := f.repo.GetActiveModelsByAccount(f.ctx)
+	if err != nil {
+		t.Fatalf("GetActiveModelsByAccount: %v", err)
+	}
+	if len(pins["acc-trial"]) != 1 || pins["acc-trial"][0] != "gemini-3.8-flash" {
+		t.Errorf("expected model pin preserved on acc-trial, got %+v", pins)
+	}
+
+	// Subsequent request while acc-trial is in cooldown must route directly to acc-paid.
+	rec2 := f.requestModel(t, "gemini-3.8-flash")
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 on second request, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "paid-token") {
+		t.Errorf("expected second request to route to paid-token, got: %s", rec2.Body.String())
+	}
+}
