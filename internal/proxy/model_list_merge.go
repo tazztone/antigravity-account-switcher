@@ -407,6 +407,14 @@ func groupModelIDs(raw json.RawMessage) []string {
 // findSortEntry returns the ordering entry with the given display name.
 func findSortEntry(entries []*modelSortEntry, displayName string) *modelSortEntry {
 	if displayName == "" {
+		for _, entry := range entries {
+			if entry.displayName == "" {
+				return entry
+			}
+		}
+		if len(entries) > 0 {
+			return entries[0]
+		}
 		return nil
 	}
 	for _, entry := range entries {

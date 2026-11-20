@@ -388,21 +388,29 @@ func (f *FailoverEngine) MarkModelExhausted(accountID string, model string, rese
 	f.markModelExhaustedLocked(accountID, model, resetTime)
 }
 
+// EffectiveSecondaryModel returns the configured secondary model under a read lock.
+func (f *FailoverEngine) EffectiveSecondaryModel() string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.effectiveSecondaryModel()
+}
+
 func (f *FailoverEngine) ensureQuotaBucketsPrefetched(ctx context.Context, accountID string) {
-	if accountID == "" || f.quotaRepo == nil {
+	if accountID == "" {
 		return
 	}
 	f.mu.RLock()
+	quotaRepo := f.quotaRepo
 	cached := f.quotaCache != nil
 	_, exists := f.quotaCache[accountID]
 	f.mu.RUnlock()
-	if cached && exists {
+	if quotaRepo == nil || (cached && exists) {
 		return
 	}
 
 	qCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	dbBuckets, err := f.quotaRepo.GetByAccountID(qCtx, accountID)
+	dbBuckets, err := quotaRepo.GetByAccountID(qCtx, accountID)
 	if err != nil || len(dbBuckets) == 0 {
 		f.mu.Lock()
 		if f.quotaCache == nil {
@@ -747,10 +755,11 @@ func (f *FailoverEngine) PredictiveCheck(
 
 	// If cache is missing, or primary was previously exhausted, or in-memory bucket indicates exhaustion,
 	// re-query quota buckets from persistence to verify whether upstream quota has been restored.
-	needDBQuery := (!ok || cachedPrimaryExhausted || (state != nil && state.primaryExhausted)) && f.quotaRepo != nil
+	quotaRepo := f.quotaRepo
+	needDBQuery := (!ok || cachedPrimaryExhausted || (state != nil && state.primaryExhausted)) && quotaRepo != nil
 	if needDBQuery {
 		f.mu.RUnlock()
-		dbBuckets, qErr := f.quotaRepo.GetByAccountID(ctx, acc.ID)
+		dbBuckets, qErr := quotaRepo.GetByAccountID(ctx, acc.ID)
 		if qErr == nil {
 			f.UpdateQuotaCache(acc.ID, dbBuckets)
 		} else {
@@ -758,7 +767,9 @@ func (f *FailoverEngine) PredictiveCheck(
 			if f.quotaCache == nil {
 				f.quotaCache = make(map[string][]cachedQuotaBucket)
 			}
-			f.quotaCache[acc.ID] = []cachedQuotaBucket{}
+			if _, ok := f.quotaCache[acc.ID]; !ok {
+				f.quotaCache[acc.ID] = []cachedQuotaBucket{}
+			}
 			f.mu.Unlock()
 		}
 		f.mu.RLock()
@@ -780,6 +791,7 @@ func (f *FailoverEngine) PredictiveCheck(
 			}
 			f.mu.Unlock()
 			f.mu.RLock()
+			buckets = f.quotaCache[acc.ID]
 			state = f.accountStates[acc.ID]
 		} else {
 			primaryExhausted = true
@@ -800,6 +812,7 @@ func (f *FailoverEngine) PredictiveCheck(
 					}
 					f.mu.Unlock()
 					f.mu.RLock()
+					buckets = f.quotaCache[acc.ID]
 					state = f.accountStates[acc.ID]
 					primaryExhausted = false
 					break
@@ -846,6 +859,13 @@ func (f *FailoverEngine) PredictiveCheck(
 		f.mu.RUnlock()
 		return false, requestedModel, nil
 	}
+
+	f.mu.RUnlock()
+	if !f.eligibleForModel(ctx, acc.ID, modelSec) {
+		return false, requestedModel, nil
+	}
+	f.mu.RLock()
+	state = f.accountStates[acc.ID]
 
 	shouldEmitEvent := false
 	if state == nil || !state.fallbackLogged {
@@ -956,11 +976,11 @@ func (f *FailoverEngine) HandleExhaustion(
 			avail = currentActive.IsAvailable()
 		}
 	}
-	if avail && f.eligibleForModel(ctx, currentActive.ID, failedModel) {
-		target := failedModel
-		if isPrimary || isSecondary {
-			target = primary
-		}
+	target := failedModel
+	if f.fallbackSecondaryEnabled && (isPrimary || isSecondary) {
+		target = primary
+	}
+	if avail && f.eligibleForModel(ctx, currentActive.ID, target) {
 		return ActionRotateAccount, target, currentActive, nil
 	}
 
@@ -991,13 +1011,21 @@ func (f *FailoverEngine) HandleExhaustion(
 	}
 
 	hasSecondaryQuota := f.hasSecondaryQuotaLocked(ctx, acc, state)
+	triedPrimaryRotation := false
 
 	// In pool_first strategy (default), rotate across all accounts that can serve the primary model
 	// before degrading model quality.
 	if isPrimary && f.fallbackStrategy != config.FallbackStrategyAccountFirst {
-		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
-		if rotErr == nil && next != nil {
-			return ActionRotateAccount, primary, next, nil
+		canRotate := true
+		if hasSecondaryQuota {
+			canRotate = f.hasNextAccountForCategoryLocked(ctx, acc.ID, failedCat, failedModel)
+		}
+		if canRotate {
+			triedPrimaryRotation = true
+			next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+			if rotErr == nil && next != nil {
+				return ActionRotateAccount, primary, next, nil
+			}
 		}
 		// All accounts in pool are exhausted for primary model; proceed to secondary fallback
 	}
@@ -1077,10 +1105,20 @@ func (f *FailoverEngine) HandleExhaustion(
 		f.markModelExhaustedLocked(acc.ID, secondary, secReset)
 	}
 
-	next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+	var next *domain.Account
+	var rotErr error
+	if !triedPrimaryRotation {
+		next, rotErr = f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+	} else {
+		rotErr = domain.ErrNoAvailableAccount
+	}
 	if rotErr != nil {
 		if isPrimary {
-			nextSec, secErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, secondary, &eventsToEmit)
+			secCat := f.secondaryCat
+			if secCat == CategoryUnknown {
+				secCat = failedCat
+			}
+			nextSec, secErr := f.rotateAccountForCategoryLocked(ctx, acc, secCat, secondary, &eventsToEmit)
 			if secErr == nil && nextSec != nil {
 				return ActionRotateAccount, secondary, nextSec, nil
 			}
@@ -1089,6 +1127,19 @@ func (f *FailoverEngine) HandleExhaustion(
 	}
 
 	return ActionRotateAccount, primary, next, nil
+}
+
+func (f *FailoverEngine) hasNextAccountForCategoryLocked(ctx context.Context, excludeID string, cat ModelCategory, modelID string) bool {
+	if modelID != "" {
+		if next, err := f.accountRepo.GetNextAvailableForModel(ctx, cat, modelID, excludeID); err == nil && next != nil {
+			return true
+		}
+		return false
+	}
+	if next, err := f.accountRepo.GetNextAvailableForCategory(ctx, cat, excludeID); err == nil && next != nil {
+		return true
+	}
+	return false
 }
 
 // RotateAccount handles failover for an account that received HTTP 429 / RESOURCE_EXHAUSTED.

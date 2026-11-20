@@ -284,8 +284,6 @@ func (h *ProxyHandler) fetchModelListForAccount(
 		newAccess, newExpiry, refErr := h.tokenRefresher.RefreshToken(ctx, acc.RefreshToken)
 		if refErr == nil && newAccess != "" {
 			_ = h.accountRepo.UpdateToken(ctx, acc.ID, newAccess, newExpiry)
-			acc.AccessToken = newAccess
-			acc.TokenExpiry = newExpiry
 
 			retryReq, rErr := http.NewRequestWithContext(ctx, r.Method, destURL.String(), bytes.NewReader(body))
 			if rErr == nil {

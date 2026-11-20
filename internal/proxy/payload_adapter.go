@@ -157,7 +157,7 @@ func GetPayloadAdapter(category ModelCategory) PayloadAdapter {
 	switch category {
 	case CategoryClaudeGPT:
 		return defaultClaudeAdapter
-	case CategoryGemini:
+	case CategoryGemini, CategoryGeminiArgon:
 		return defaultGeminiAdapter
 	default:
 		return defaultNoopAdapter

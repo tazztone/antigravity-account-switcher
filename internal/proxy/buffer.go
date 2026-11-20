@@ -41,7 +41,11 @@ func NewBufferedRequestWithLimit(req *http.Request, maxBytes int64) (*BufferedRe
 	limitReader := io.LimitReader(req.Body, maxBytes+1)
 	var body []byte
 	if req.ContentLength > 0 && req.ContentLength <= maxBytes {
-		buf := bytes.NewBuffer(make([]byte, 0, req.ContentLength))
+		initCap := req.ContentLength
+		if initCap > 1<<20 {
+			initCap = 1 << 20
+		}
+		buf := bytes.NewBuffer(make([]byte, 0, initCap))
 		if _, err := buf.ReadFrom(limitReader); err != nil {
 			_ = req.Body.Close()
 			return nil, err

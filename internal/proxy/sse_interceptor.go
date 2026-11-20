@@ -83,7 +83,7 @@ func StreamAndInterceptSSEWithMeta(
 	// Resilience: In defer, if capturedUsage != nil, persist asynchronously
 	// with a detached context so mid-stream disconnects never drop token metrics.
 	defer func() {
-		if capturedUsage != nil && metricsRepo != nil {
+		if capturedUsage != nil && (metricsRepo != nil || eventBroadcaster != nil) {
 			totTokens := capturedUsage.TotalTokenCount
 			if totTokens == 0 {
 				totTokens = capturedUsage.PromptTokenCount + capturedUsage.CandidatesTokenCount
@@ -112,9 +112,11 @@ func StreamAndInterceptSSEWithMeta(
 			}
 
 			go func(m *domain.TokenMetric, u *RawUsageMetadata, mVer string) {
-				detachedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = metricsRepo.Record(detachedCtx, m)
+				if metricsRepo != nil {
+					detachedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_ = metricsRepo.Record(detachedCtx, m)
+					cancel()
+				}
 
 				if eventBroadcaster != nil {
 					details := map[string]any{

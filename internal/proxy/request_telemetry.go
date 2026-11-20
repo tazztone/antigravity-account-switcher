@@ -225,6 +225,7 @@ func ExtractRequestTelemetry(headers http.Header, body []byte, effectiveModel, o
 	}
 
 	// Tiered ConversationID resolution.
+	sessID := firstNonEmpty(sessionIDSnake, convID, labels["session_id"], labels["conversation_id"], headerConvID(headers))
 	switch {
 	case out.RootCascadeID != "":
 		out.ConversationID = out.RootCascadeID
@@ -232,8 +233,8 @@ func ExtractRequestTelemetry(headers http.Header, body []byte, effectiveModel, o
 	case out.CascadeID != "":
 		out.ConversationID = out.CascadeID
 		out.ConversationSource = "cascade_id"
-	case sessionIDSnake != "" || convID != "" || labels["session_id"] != "" || labels["conversation_id"] != "" || headerConvID(headers) != "":
-		out.ConversationID = firstNonEmpty(sessionIDSnake, convID, labels["session_id"], labels["conversation_id"], headerConvID(headers))
+	case sessID != "":
+		out.ConversationID = sessID
 		out.ConversationSource = "session_id"
 	case turn != nil:
 		if h := hashFirstTurn(turn); h != "" {

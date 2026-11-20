@@ -395,23 +395,34 @@ func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bidirectional full-duplex tunnel
-	go func() {
-		defer destConn.Close()
-		defer clientConn.Close()
-		if rw != nil && rw.Reader.Buffered() > 0 {
-			buf := make([]byte, rw.Reader.Buffered())
-			_, _ = rw.Reader.Read(buf)
-			_, _ = destConn.Write(buf)
+	// Bidirectional full-duplex tunnel with half-close propagation
+	defer destConn.Close()
+	defer clientConn.Close()
+
+	if rw != nil && rw.Reader.Buffered() > 0 {
+		if _, err := io.CopyN(destConn, rw.Reader, int64(rw.Reader.Buffered())); err != nil {
+			return
 		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
 		_, _ = io.Copy(destConn, clientConn)
+		if cw, ok := destConn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
 	}()
 
 	go func() {
-		defer destConn.Close()
-		defer clientConn.Close()
+		defer wg.Done()
 		_, _ = io.Copy(clientConn, destConn)
+		if cw, ok := clientConn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
 	}()
+	wg.Wait()
 }
 
 // rewriteRequestModel rewrites the model in request URL path, query string,
@@ -721,6 +732,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		maxAttempts = 0 // Pass-through doesn't rotate accounts
 	}
 
+	refreshedAccounts := make(map[string]bool)
 	for attempt := 0; attempt <= maxAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return
@@ -800,14 +812,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Check for expired/invalid credentials: HTTP 401 Unauthorized
-		if !isPassThrough && currentAcc != nil && resp.StatusCode == http.StatusUnauthorized && h.tokenRefresher != nil && currentAcc.RefreshToken != "" {
+		if !isPassThrough && currentAcc != nil && resp.StatusCode == http.StatusUnauthorized && h.tokenRefresher != nil && currentAcc.RefreshToken != "" && !refreshedAccounts[currentAcc.ID] {
+			refreshedAccounts[currentAcc.ID] = true
 			newAccess, newExpiry, refErr := h.tokenRefresher.RefreshToken(ctx, currentAcc.RefreshToken)
-			if refErr == nil {
+			if refErr == nil && newAccess != "" {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512*1024))
 				_ = resp.Body.Close()
 				_ = h.accountRepo.UpdateToken(ctx, currentAcc.ID, newAccess, newExpiry)
-				currentAcc.AccessToken = newAccess
-				currentAcc.TokenExpiry = newExpiry
+				accCopy := *currentAcc
+				accCopy.AccessToken = newAccess
+				accCopy.TokenExpiry = newExpiry
+				currentAcc = &accCopy
 				continue // Retry upstream request with renewed token
 			}
 		}
@@ -827,7 +842,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					bytes.Contains(bodyBytes, []byte("thoughtSignature")) ||
 					bytes.Contains(bodyBytes, []byte("Invalid `signature` in `thinking` block"))
 
-				if isThoughtSigErr && CategorizeModel(currentModel) == CategoryGemini {
+				if isThoughtSigErr && (CategorizeModel(currentModel) == CategoryGemini || CategorizeModel(currentModel) == CategoryGeminiArgon) {
 					// Attempt in-flight sanitization using skip_thought_signature_validator
 					if sanitized, sErr := SanitizeGeminiSignatures(currentBody); sErr == nil && !bytes.Equal(sanitized, currentBody) {
 						_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512*1024))
@@ -850,6 +865,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// If thought signature error persists or cross-model error occurred, trigger failover/rotation
 				if isThoughtSigErr || currentModel != origModel {
 					isExhausted = true
+				}
+				if !isExhausted && len(bodyBytes) > 0 {
+					origBody := resp.Body
+					resp.Body = struct {
+						io.Reader
+						io.Closer
+					}{
+						Reader: io.MultiReader(bytes.NewReader(bodyBytes), origBody),
+						Closer: origBody,
+					}
 				}
 			} else if resp.StatusCode == http.StatusForbidden {
 				bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, 64*1024))
@@ -929,7 +954,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						// Account rotated: switch to nextAcc
 						currentAcc = nextAcc
 						targetToUse := origModel
-						if targetModel != "" && targetModel != origModel && targetModel == h.failoverEngine.effectiveSecondaryModel() {
+						if targetModel != "" && targetModel != origModel && targetModel == h.failoverEngine.EffectiveSecondaryModel() {
 							targetToUse = targetModel
 						}
 						currentModel = targetToUse
@@ -989,6 +1014,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		copyResponseHeaders(w.Header(), resp.Header)
 
 		isRespSSE := isSSE || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+		if isRespSSE && strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+			w.Header().Del("Content-Encoding")
+			w.Header().Del("Content-Length")
+		}
 
 		w.WriteHeader(resp.StatusCode)
 
