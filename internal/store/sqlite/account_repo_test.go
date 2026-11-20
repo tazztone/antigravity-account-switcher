@@ -412,3 +412,102 @@ func TestConcurrent_MultiGoroutineOperations(t *testing.T) {
 		t.Errorf("expected %d events, got %d", concurrency, len(events))
 	}
 }
+
+func TestGetNextAvailableForModel_IgnoresPrunedUndiscoveredModel(t *testing.T) {
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	accRepo := sqlite.NewAccountRepository(db)
+	ctx := context.Background()
+
+	acc := &domain.Account{ID: "acc-model-1", Email: "m1@example.com", RefreshToken: "rt1", Status: domain.AccountStatusActive}
+	if err := accRepo.Create(ctx, acc); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// First discover two models so discovered=1 exists, then prune model-a (leaving discovered=0, enabled=1).
+	if err := accRepo.UpsertAccountModels(ctx, acc.ID, []*domain.ModelInfo{
+		{ID: "claude-sonnet-4-6", DisplayName: "Sonnet", Category: "claude_gpt"},
+		{ID: "claude-opus-4-6", DisplayName: "Opus", Category: "claude_gpt"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels(initial): %v", err)
+	}
+	if err := accRepo.UpsertAccountModels(ctx, acc.ID, []*domain.ModelInfo{
+		{ID: "claude-opus-4-6", DisplayName: "Opus", Category: "claude_gpt"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels(prune): %v", err)
+	}
+
+	if _, err := accRepo.GetNextAvailableForModel(ctx, domain.CategoryClaudeGPT, "claude-sonnet-4-6", ""); err == nil {
+		t.Error("expected error for pruned undiscovered model, got nil")
+	}
+	got, err := accRepo.GetNextAvailableForModel(ctx, domain.CategoryClaudeGPT, "claude-opus-4-6", "")
+	if err != nil || got.ID != acc.ID {
+		t.Errorf("expected %s for discovered model, got %+v, err=%v", acc.ID, got, err)
+	}
+}
+
+func TestIsAccountAvailableForCategory_ExhaustedWithElapsedReset(t *testing.T) {
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	accRepo := sqlite.NewAccountRepository(db)
+	quotaRepo := sqlite.NewQuotaRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	accElapsed := &domain.Account{ID: "acc-el", Email: "el@example.com", RefreshToken: "rt1", Status: domain.AccountStatusExhausted}
+	accZero := &domain.Account{ID: "acc-zr", Email: "zr@example.com", RefreshToken: "rt2", Status: domain.AccountStatusExhausted}
+	_ = accRepo.Create(ctx, accElapsed)
+	_ = accRepo.Create(ctx, accZero)
+
+	_ = quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{
+		{AccountID: "acc-el", BucketID: "claude-5h", Window: "5h", RemainingFraction: 0.0, ResetTime: now.Add(-1 * time.Minute)},
+		{AccountID: "acc-zr", BucketID: "claude-5h", Window: "5h", RemainingFraction: 0.0, ResetTime: time.Time{}},
+	})
+
+	okElapsed, err := accRepo.IsAccountAvailableForCategory(ctx, "acc-el", domain.CategoryClaudeGPT)
+	if err != nil || !okElapsed {
+		t.Errorf("expected elapsed reset account to be available, got ok=%v, err=%v", okElapsed, err)
+	}
+	okZero, err := accRepo.IsAccountAvailableForCategory(ctx, "acc-zr", domain.CategoryClaudeGPT)
+	if err != nil || okZero {
+		t.Errorf("expected zero reset account NOT to be available, got ok=%v, err=%v", okZero, err)
+	}
+}
+
+func TestGetActiveForCategory_SkipsDisabledOrErroredPinAndFallback(t *testing.T) {
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	accRepo := sqlite.NewAccountRepository(db)
+	ctx := context.Background()
+
+	accDisabled := &domain.Account{ID: "acc-dis", Email: "dis@example.com", RefreshToken: "rt1", Status: domain.AccountStatusDisabled, IsActive: true}
+	accActive := &domain.Account{ID: "acc-act", Email: "act@example.com", RefreshToken: "rt2", Status: domain.AccountStatusActive}
+	_ = accRepo.Create(ctx, accDisabled)
+	_ = accRepo.Create(ctx, accActive)
+
+	// Pool mode: pinned disabled account must rotate to accActive.
+	_ = accRepo.SetActiveForCategory(ctx, domain.CategoryClaudeGPT, accDisabled.ID)
+	got, err := accRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT)
+	if err != nil || got.ID != accActive.ID {
+		t.Fatalf("pool mode: expected rotation to %s, got %+v, err=%v", accActive.ID, got, err)
+	}
+
+	// Solo mode: pinned error account must return ErrNoActiveAccount.
+	_ = accRepo.UpdateStatus(ctx, accActive.ID, domain.AccountStatusError)
+	_ = accRepo.SetCategoryRoutingMode(ctx, domain.CategoryClaudeGPT, domain.RoutingModeSolo)
+	if _, err := accRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT); err != domain.ErrNoActiveAccount {
+		t.Errorf("solo mode: expected ErrNoActiveAccount, got %v", err)
+	}
+}

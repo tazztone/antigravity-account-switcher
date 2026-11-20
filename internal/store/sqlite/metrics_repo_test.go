@@ -295,3 +295,33 @@ func TestMetricsRepository_ConversationSummaries(t *testing.T) {
 		t.Errorf("unexpected conv-1 latest fields: model=%q mode=%q", summaries[1].LatestModel, summaries[1].LatestReasoningMode)
 	}
 }
+
+func TestMetricsRepository_GetDailyHistoryInLocation_DST(t *testing.T) {
+	_, accRepo, _, metricsRepo, _ := setupTestStore(t)
+	ctx := context.Background()
+
+	_ = accRepo.Create(ctx, &domain.Account{ID: "acc-dst", Email: "dst@example.com", RefreshToken: "rt", Status: domain.AccountStatusActive})
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	nowNY := time.Now().In(loc)
+	todayNY := nowNY.Format("2006-01-02")
+
+	if err := metricsRepo.Record(ctx, &domain.TokenMetric{
+		AccountID:   "acc-dst",
+		Model:       "gemini-2.5-pro",
+		TotalTokens: 300,
+		Timestamp:   nowNY,
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	history, err := metricsRepo.GetDailyHistoryInLocation(ctx, "acc-dst", 7, loc)
+	if err != nil {
+		t.Fatalf("GetDailyHistoryInLocation: %v", err)
+	}
+	if len(history) != 1 || history[0].Date != todayNY || history[0].TotalTokens != 300 {
+		t.Errorf("expected 1 entry for %s with 300 tokens, got %+v", todayNY, history)
+	}
+}

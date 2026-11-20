@@ -584,3 +584,38 @@ func TestService_IntegrationWithRealSQLite(t *testing.T) {
 		t.Errorf("expected 450 total tokens today across pool, got %d", payload.Summary.Today.TotalTokens)
 	}
 }
+
+func TestService_EmptyAccountsAndNilLocation(t *testing.T) {
+	accRepo := &mockAccountRepo{accounts: []*domain.Account{}}
+	metricsRepo := &mockMetricsRepo{
+		dailyHistoryRes: []*domain.DailyTokenUsage{
+			{Date: time.Now().UTC().Format("2006-01-02"), TotalTokens: 100},
+		},
+	}
+	svc := NewService(metricsRepo, accRepo)
+	ctx := context.Background()
+
+	breakdown, err := svc.GetAccountBreakdown(ctx, "today")
+	if err != nil {
+		t.Fatalf("GetAccountBreakdown(empty): %v", err)
+	}
+	if len(breakdown) != 0 {
+		t.Errorf("expected 0 breakdown entries, got %d", len(breakdown))
+	}
+
+	daily, err := svc.GetDailyUsageInLocation(ctx, "", 3, true, nil)
+	if err != nil {
+		t.Fatalf("GetDailyUsageInLocation(nil loc): %v", err)
+	}
+	if len(daily) != 3 {
+		t.Errorf("expected 3 days, got %d", len(daily))
+	}
+
+	convs, err := svc.GetConversationSummaries(ctx, 10)
+	if err != nil {
+		t.Fatalf("GetConversationSummaries: %v", err)
+	}
+	if len(convs) != 0 {
+		t.Errorf("expected 0 conversations, got %d", len(convs))
+	}
+}

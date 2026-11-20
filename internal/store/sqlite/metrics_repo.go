@@ -46,7 +46,7 @@ func (r *MetricsRepository) Record(ctx context.Context, m *domain.TokenMetric) e
 		m.TotalTokens,
 		m.CachedContentTokens,
 		m.ThoughtsTokens,
-		m.Timestamp.Format(time.RFC3339),
+		m.Timestamp.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to record token metric: %w", err)
@@ -287,12 +287,9 @@ func (r *MetricsRepository) GetDailyHistoryInLocation(ctx context.Context, accou
 	startOfWindow := time.Date(earliestDay.Year(), earliestDay.Month(), earliestDay.Day(), 0, 0, 0, 0, loc)
 	sinceStr := startOfWindow.UTC().Format(time.RFC3339)
 
-	_, offsetSec := now.Zone()
-	modifier := fmt.Sprintf("%+d seconds", offsetSec)
-
 	query := `
 		SELECT
-			strftime('%Y-%m-%d', timestamp, ?) AS day,
+			strftime('%Y-%m-%dT%H:00:00Z', timestamp) AS hour_bucket,
 			COALESCE(SUM(prompt_tokens), 0),
 			COALESCE(SUM(candidates_tokens), 0),
 			COALESCE(SUM(total_tokens), 0),
@@ -302,33 +299,49 @@ func (r *MetricsRepository) GetDailyHistoryInLocation(ctx context.Context, accou
 		FROM token_metrics
 		WHERE (? = '' OR account_id = ?)
 		  AND timestamp >= ?
-		GROUP BY day
-		ORDER BY day ASC
+		GROUP BY hour_bucket
+		ORDER BY hour_bucket ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, modifier, accountID, accountID, sinceStr)
+	rows, err := r.db.QueryContext(ctx, query, accountID, accountID, sinceStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query daily token history: %w", err)
 	}
 	defer rows.Close()
 
-	var history []*domain.DailyTokenUsage
+	byDay := make(map[string]*domain.DailyTokenUsage)
+	var dayOrder []string
 	for rows.Next() {
-		var u domain.DailyTokenUsage
-		err := rows.Scan(
-			&u.Date,
-			&u.PromptTokens,
-			&u.CandidatesTokens,
-			&u.TotalTokens,
-			&u.CachedContentTokens,
-			&u.ThoughtsTokens,
-			&u.RequestCount,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan daily usage row: %w", err)
+		var hourStr string
+		var prompt, candidates, total, cached, thoughts, count int64
+		if err := rows.Scan(&hourStr, &prompt, &candidates, &total, &cached, &thoughts, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan daily token history: %w", err)
 		}
-		history = append(history, &u)
+		t, err := time.Parse(time.RFC3339, hourStr)
+		if err != nil {
+			continue
+		}
+		dayKey := t.In(loc).Format("2006-01-02")
+		u, exists := byDay[dayKey]
+		if !exists {
+			u = &domain.DailyTokenUsage{Date: dayKey}
+			byDay[dayKey] = u
+			dayOrder = append(dayOrder, dayKey)
+		}
+		u.PromptTokens += prompt
+		u.CandidatesTokens += candidates
+		u.TotalTokens += total
+		u.CachedContentTokens += cached
+		u.ThoughtsTokens += thoughts
+		u.RequestCount += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
-	return history, rows.Err()
+	history := make([]*domain.DailyTokenUsage, 0, len(dayOrder))
+	for _, dayKey := range dayOrder {
+		history = append(history, byDay[dayKey])
+	}
+	return history, nil
 }

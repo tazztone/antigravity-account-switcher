@@ -55,6 +55,10 @@ func (r *QuotaRepository) UpsertBuckets(ctx context.Context, buckets []*domain.Q
 		if updatedAt.IsZero() {
 			updatedAt = now
 		}
+		resetStr := ""
+		if !b.ResetTime.IsZero() {
+			resetStr = b.ResetTime.UTC().Format(time.RFC3339)
+		}
 
 		_, err := stmt.ExecContext(ctx,
 			b.AccountID,
@@ -63,7 +67,7 @@ func (r *QuotaRepository) UpsertBuckets(ctx context.Context, buckets []*domain.Q
 			string(b.Window),
 			b.RemainingFraction,
 			b.RemainingAmount,
-			b.ResetTime.UTC().Format(time.RFC3339),
+			resetStr,
 			updatedAt.UTC().Format(time.RFC3339),
 		)
 		if err != nil {
@@ -134,7 +138,65 @@ func (r *QuotaRepository) DeleteByAccountID(ctx context.Context, accountID strin
 	return nil
 }
 
-// GetExhaustedAccountsPastReset returns account IDs marked 'exhausted' where all quota buckets
+// ReplaceBucketsForAccount atomically deletes existing buckets for accountID and inserts the new buckets.
+func (r *QuotaRepository) ReplaceBucketsForAccount(ctx context.Context, accountID string, buckets []*domain.QuotaBucket) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM quota_buckets WHERE account_id = ?`, accountID); err != nil {
+		return fmt.Errorf("failed to delete quota buckets: %w", err)
+	}
+
+	if len(buckets) > 0 {
+		query := `
+			INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, remaining_amount, reset_time, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(account_id, bucket_id) DO UPDATE SET
+				display_name = excluded.display_name,
+				window = excluded.window,
+				remaining_fraction = excluded.remaining_fraction,
+				remaining_amount = excluded.remaining_amount,
+				reset_time = excluded.reset_time,
+				updated_at = excluded.updated_at
+		`
+		stmt, err := tx.PrepareContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("failed to prepare upsert statement: %w", err)
+		}
+		defer stmt.Close()
+
+		now := time.Now().UTC()
+		for _, b := range buckets {
+			updatedAt := b.UpdatedAt
+			if updatedAt.IsZero() {
+				updatedAt = now
+			}
+			resetStr := ""
+			if !b.ResetTime.IsZero() {
+				resetStr = b.ResetTime.UTC().Format(time.RFC3339)
+			}
+			if _, err := stmt.ExecContext(ctx,
+				b.AccountID,
+				b.BucketID,
+				b.DisplayName,
+				string(b.Window),
+				b.RemainingFraction,
+				b.RemainingAmount,
+				resetStr,
+				updatedAt.UTC().Format(time.RFC3339),
+			); err != nil {
+				return fmt.Errorf("failed to upsert bucket %s/%s: %w", b.AccountID, b.BucketID, err)
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetExhaustedAccountsPastReset returns account IDs marked 'exhausted' where all exhausted quota buckets
 // have passed their reset time.
 func (r *QuotaRepository) GetExhaustedAccountsPastReset(ctx context.Context, now time.Time) ([]string, error) {
 	nowStr := now.UTC().Format(time.RFC3339)
@@ -145,7 +207,9 @@ func (r *QuotaRepository) GetExhaustedAccountsPastReset(ctx context.Context, now
 		  AND EXISTS (SELECT 1 FROM quota_buckets qb WHERE qb.account_id = a.id)
 		  AND NOT EXISTS (
 			  SELECT 1 FROM quota_buckets qb
-			  WHERE qb.account_id = a.id AND qb.reset_time > ?
+			  WHERE qb.account_id = a.id
+			    AND qb.remaining_fraction <= 0.0
+			    AND (qb.reset_time = '' OR qb.reset_time = '0001-01-01T00:00:00Z' OR qb.reset_time > ?)
 		  )
 		ORDER BY a.updated_at ASC
 	`

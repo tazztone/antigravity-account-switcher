@@ -199,3 +199,69 @@ func TestQuotaRepository_GetExhaustedAccountsPastReset(t *testing.T) {
 		t.Errorf("expected acc-reset-1, got %s", resetAccounts[0])
 	}
 }
+
+func TestGetExhaustedAccountsPastReset_HealthyFutureBucketAndZeroReset(t *testing.T) {
+	_, accRepo, quotaRepo, _, _ := setupTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Account A: exhausted 5h bucket past reset + healthy weekly bucket with future reset -> MUST recover.
+	accA := &domain.Account{ID: "acc-a", Email: "a@example.com", RefreshToken: "rt-a", Status: domain.AccountStatusExhausted}
+	if err := accRepo.Create(ctx, accA); err != nil {
+		t.Fatalf("Create accA: %v", err)
+	}
+	if err := quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{
+		{AccountID: "acc-a", BucketID: "claude-5h", Window: "5h", RemainingFraction: 0.0, ResetTime: now.Add(-1 * time.Hour)},
+		{AccountID: "acc-a", BucketID: "claude-weekly", Window: "weekly", RemainingFraction: 0.69, ResetTime: now.Add(5 * 24 * time.Hour)},
+	}); err != nil {
+		t.Fatalf("UpsertBuckets accA: %v", err)
+	}
+
+	// Account B: exhausted bucket with zero ResetTime -> must NOT recover.
+	accB := &domain.Account{ID: "acc-b", Email: "b@example.com", RefreshToken: "rt-b", Status: domain.AccountStatusExhausted}
+	if err := accRepo.Create(ctx, accB); err != nil {
+		t.Fatalf("Create accB: %v", err)
+	}
+	if err := quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{
+		{AccountID: "acc-b", BucketID: "claude-5h", Window: "5h", RemainingFraction: 0.0, ResetTime: time.Time{}},
+	}); err != nil {
+		t.Fatalf("UpsertBuckets accB: %v", err)
+	}
+
+	got, err := quotaRepo.GetExhaustedAccountsPastReset(ctx, now)
+	if err != nil {
+		t.Fatalf("GetExhaustedAccountsPastReset: %v", err)
+	}
+	if len(got) != 1 || got[0] != "acc-a" {
+		t.Fatalf("expected [acc-a], got %v", got)
+	}
+}
+
+func TestReplaceBucketsForAccount(t *testing.T) {
+	_, accRepo, quotaRepo, _, _ := setupTestStore(t)
+	ctx := context.Background()
+
+	acc := &domain.Account{ID: "acc-rep", Email: "rep@example.com", RefreshToken: "rt", Status: domain.AccountStatusActive}
+	if err := accRepo.Create(ctx, acc); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := quotaRepo.UpsertBuckets(ctx, []*domain.QuotaBucket{
+		{AccountID: "acc-rep", BucketID: "old-bucket", Window: "5h", RemainingFraction: 0.2},
+	}); err != nil {
+		t.Fatalf("UpsertBuckets: %v", err)
+	}
+
+	if err := quotaRepo.ReplaceBucketsForAccount(ctx, "acc-rep", []*domain.QuotaBucket{
+		{AccountID: "acc-rep", BucketID: "new-bucket", Window: "5h", RemainingFraction: 0.9},
+	}); err != nil {
+		t.Fatalf("ReplaceBucketsForAccount: %v", err)
+	}
+
+	got, err := quotaRepo.GetByAccountID(ctx, "acc-rep")
+	if err != nil {
+		t.Fatalf("GetByAccountID: %v", err)
+	}
+	if len(got) != 1 || got[0].BucketID != "new-bucket" || got[0].RemainingFraction != 0.9 {
+		t.Fatalf("expected only new-bucket with 0.9, got %+v", got)
+	}
+}

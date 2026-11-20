@@ -85,7 +85,7 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 		acc.Status = domain.AccountStatusActive
 	}
 
-	expiryStr := acc.TokenExpiry.Format(time.RFC3339)
+	expiryStr := acc.TokenExpiry.UTC().Format(time.RFC3339)
 	if acc.TokenExpiry.IsZero() {
 		expiryStr = "1970-01-01T00:00:00Z"
 	}
@@ -111,8 +111,8 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 		expiryStr,
 		acc.IsActive,
 		string(acc.Status),
-		acc.CreatedAt.Format(time.RFC3339),
-		acc.UpdatedAt.Format(time.RFC3339),
+		acc.CreatedAt.UTC().Format(time.RFC3339),
+		acc.UpdatedAt.UTC().Format(time.RFC3339),
 		disabledCats,
 	)
 	if err != nil {
@@ -261,7 +261,7 @@ func (r *AccountRepository) UpdateStatus(ctx context.Context, id string, status 
 // UpdateToken updates the access token and expiry time for an account.
 func (r *AccountRepository) UpdateToken(ctx context.Context, id string, accessToken string, expiry time.Time) error {
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	expiryStr := expiry.Format(time.RFC3339)
+	expiryStr := expiry.UTC().Format(time.RFC3339)
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE accounts
 		SET access_token = ?, token_expiry = ?, updated_at = ?
@@ -359,7 +359,7 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	row := r.db.QueryRowContext(ctx, query, catStr)
 	acc, err := r.scanAccount(row)
 	if err == nil {
-		if acc.IsCategoryDisabled(category) {
+		if acc.IsCategoryDisabled(category) || acc.Status == domain.AccountStatusDisabled || acc.Status == domain.AccountStatusError {
 			mode, _ := r.GetCategoryRoutingMode(ctx, category)
 			if mode != domain.RoutingModeSolo {
 				next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
@@ -411,7 +411,10 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 		}
 		if category != domain.CategoryGeminiArgon {
 			globalActive, gErr := r.GetActive(ctx)
-			if gErr == nil && globalActive != nil {
+			if gErr == nil && globalActive != nil &&
+				!globalActive.IsCategoryDisabled(category) &&
+				globalActive.Status != domain.AccountStatusDisabled &&
+				globalActive.Status != domain.AccountStatusError {
 				_, _ = r.db.ExecContext(ctx, `
 					INSERT OR IGNORE INTO active_category_accounts (category, account_id)
 					VALUES (?, ?)
@@ -519,7 +522,7 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 					WHERE qb.account_id = a.id
 					  AND (
 						qb.remaining_fraction > 0.0
-						OR (qb.reset_time != '' AND qb.reset_time <= ?)
+						OR (qb.reset_time != '' AND qb.reset_time != '0001-01-01T00:00:00Z' AND qb.reset_time <= ?)
 					  )
 	` + bucketCategoryPredicate + `
 				)
@@ -855,7 +858,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 					WHERE qb.account_id = a.id
 					  AND (
 						qb.remaining_fraction > 0.0
-						OR (qb.reset_time != '' AND qb.reset_time <= ?)
+						OR (qb.reset_time != '' AND qb.reset_time != '0001-01-01T00:00:00Z' AND qb.reset_time <= ?)
 					  )
 	` + bucketCategoryPredicate + `
 				)
@@ -876,7 +879,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 			)
 			OR EXISTS (
 				SELECT 1 FROM account_model_rules mr
-				WHERE mr.account_id = a.id AND mr.model_id = ? AND mr.enabled = 1
+				WHERE mr.account_id = a.id AND mr.model_id = ? AND mr.enabled = 1 AND mr.discovered = 1
 			)
 		  )
 		ORDER BY a.updated_at ASC
@@ -972,13 +975,17 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 		// Exhausted accounts stay usable for a category only when quota rows
 		// positively show a healthy bucket for it (a 429 in one category must not
 		// lock the account out of the others).
+		nowStr := time.Now().UTC().Format(time.RFC3339)
 		query := `
 			SELECT COUNT(1) FROM quota_buckets qb
 			WHERE qb.account_id = ?
-			  AND qb.remaining_fraction > 0.0
+			  AND (
+				qb.remaining_fraction > 0.0
+				OR (qb.reset_time != '' AND qb.reset_time != '0001-01-01T00:00:00Z' AND qb.reset_time <= ?)
+			  )
 		` + bucketCategoryPredicate
 		var healthy int
-		if err := r.db.QueryRowContext(ctx, query, accountID, catStr, catStr, catStr).Scan(&healthy); err != nil {
+		if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr, catStr).Scan(&healthy); err != nil {
 			return false, fmt.Errorf("failed to inspect quota buckets for account %s: %w", accountID, err)
 		}
 		return healthy > 0, nil

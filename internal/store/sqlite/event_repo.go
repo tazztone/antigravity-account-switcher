@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -39,10 +40,10 @@ func (r *EventRepository) Record(ctx context.Context, event *domain.ProxyEvent) 
 	`
 	res, err := r.db.ExecContext(ctx, query,
 		string(event.Type),
-		event.AccountID,
+		sql.NullString{String: event.AccountID, Valid: event.AccountID != ""},
 		event.Message,
 		detailsStr,
-		event.Timestamp.Format(time.RFC3339),
+		event.Timestamp.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to record proxy event: %w", err)

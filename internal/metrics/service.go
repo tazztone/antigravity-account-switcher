@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -75,10 +76,16 @@ func (s *Service) GetAccountBreakdown(ctx context.Context, period domain.MetricP
 	if err != nil {
 		return nil, fmt.Errorf("failed to list accounts for metrics breakdown: %w", err)
 	}
+	if len(accounts) == 0 {
+		return []*domain.AccountMetricsSummary{}, nil
+	}
 
 	var summariesByAccount map[string]*domain.AggregatedMetrics
 	if getter, ok := s.metricsRepo.(domain.AccountSummariesRepository); ok {
 		summariesByAccount, err = getter.GetAccountSummaries(ctx, string(norm))
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return nil, err
+		}
 	}
 	if summariesByAccount == nil || err != nil {
 		summariesByAccount = make(map[string]*domain.AggregatedMetrics)
