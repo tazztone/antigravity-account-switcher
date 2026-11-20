@@ -1119,7 +1119,8 @@
     const entitledCats = ['claude_gpt', 'gemini'];
     if (hasArgonAccess) entitledCats.push('gemini_argon');
     const enabledEntitledCats = entitledCats.filter(c => !disabledCats.includes(c));
-    const allEntitledActive = entitledCats.length > 0 && entitledCats.every(c => activeCats.includes(c));
+    const activeEntitledCount = activeCats.filter(c => entitledCats.includes(c)).length;
+    const allEntitledActive = entitledCats.length > 0 && activeEntitledCount === entitledCats.length;
 
     const isAllExhausted = enabledEntitledCats.length > 0 && enabledEntitledCats.every(c => {
       if (c === 'claude_gpt') return isClaudeExhausted;
@@ -1137,9 +1138,9 @@
     } else if (acc.status === 'disabled') {
       statusBadgeClass = 'badge-neutral';
       statusText = 'DISABLED';
-    } else if (activeCats.length > 0) {
+    } else if (activeEntitledCount > 0) {
       statusBadgeClass = 'badge-success';
-      statusText = `ROUTING (${activeCats.length}/${entitledCats.length})`;
+      statusText = `ROUTING (${activeEntitledCount}/${entitledCats.length})`;
     } else if (isAllExhausted || (buckets.length === 0 && acc.status === 'exhausted')) {
       statusBadgeClass = 'badge-danger';
       statusText = 'EXHAUSTED';
@@ -1744,6 +1745,8 @@
           const strat = document.getElementById('strategy-pool-first')?.checked ? 'pool_first' : 'account_first';
           await saveFallbackPolicy(pri, sec, true, strat);
           closeFallbackPopover();
+        } catch (err) {
+          showToast(err.message || 'Failed to update fallback policy', 'error');
         } finally {
           btnSave.disabled = false;
           btnSave.textContent = 'Save Policy';
@@ -1758,6 +1761,8 @@
         try {
           await saveFallbackPolicy(currentAppConfig.model_primary, currentAppConfig.model_secondary, false);
           closeFallbackPopover();
+        } catch (err) {
+          showToast(err.message || 'Failed to update fallback policy', 'error');
         } finally {
           btnDisable.disabled = false;
           btnDisable.textContent = 'Remove Fallback';
@@ -2235,7 +2240,9 @@
 
     if (email) {
       const color = getAccountColor(email);
-      const idTooltip = acc ? `Account: ${escapeHtml(email)} (${escapeHtml(acc.id.slice(0, 8))})` : `Account: ${escapeHtml(email)}`;
+      const idTooltip = isPrivacyMode
+        ? '[Protected in Privacy Mode]'
+        : (acc ? `Account: ${escapeHtml(email)} (${escapeHtml(acc.id.slice(0, 8))})` : `Account: ${escapeHtml(email)}`);
       return `
         <span class="account-chip" title="${idTooltip}">
           <span class="account-avatar-dot" style="background: ${color}"></span>
@@ -2603,7 +2610,8 @@
         drawerContent = `<div class="drawer-message">${formatLogMessage(event.message || '')}</div>`;
       }
 
-      const isoTime = event.timestamp ? new Date(event.timestamp).toISOString() : '';
+      const d = event.timestamp ? new Date(event.timestamp) : null;
+      const isoTime = d ? (isNaN(d.getTime()) ? String(event.timestamp || '') : d.toISOString()) : '';
       const accDetail = event.account_id ? ` • Account ID: ${escapeHtml(event.account_id)}` : '';
       const pathDetail = event.details && event.details.request_path ? ` • Path: ${escapeHtml(event.details.request_path)}` : '';
 
@@ -2619,7 +2627,8 @@
       if (copyBtn) {
         copyBtn.addEventListener('click', (ce) => {
           ce.stopPropagation();
-          const jsonStr = JSON.stringify(event, null, 2);
+          const raw = JSON.stringify(event, null, 2);
+          const jsonStr = isPrivacyMode ? redactEmails(raw) : raw;
           copyToClipboard(jsonStr, 'Event JSON');
         });
       }
@@ -2698,9 +2707,52 @@
         }
       };
 
+      const seenEventKeys = new Set();
+      const eventKey = (evt) => (evt && evt.id > 0)
+        ? `id:${evt.id}`
+        : `${evt?.timestamp || ''}|${evt?.type || ''}|${evt?.account_id || ''}|${evt?.message || ''}`;
+
+      let sseRefreshTimer = null;
+      let pendingStatusAccounts = false;
+      let pendingMetrics = false;
+      let pendingConfig = false;
+      const scheduleSSERefresh = () => {
+        if (sseRefreshTimer) clearTimeout(sseRefreshTimer);
+        sseRefreshTimer = setTimeout(() => {
+          if (pendingStatusAccounts) {
+            fetchStatus();
+            fetchAccounts();
+            pendingStatusAccounts = false;
+          }
+          if (pendingMetrics) {
+            fetchMetrics();
+            pendingMetrics = false;
+          }
+          if (pendingConfig) {
+            fetchConfig();
+            pendingConfig = false;
+          }
+        }, 250);
+      };
+
+      eventSource.addEventListener('history', function (e) {
+        try {
+          const event = JSON.parse(e.data);
+          const key = eventKey(event);
+          if (seenEventKeys.has(key)) return;
+          seenEventKeys.add(key);
+          appendLog(event);
+        } catch (err) {
+          console.warn('Failed to parse SSE history payload:', err);
+        }
+      });
+
       eventSource.onmessage = function (e) {
         try {
           const event = JSON.parse(e.data);
+          const key = eventKey(event);
+          if (seenEventKeys.has(key)) return;
+          seenEventKeys.add(key);
           appendLog(event);
 
           if (
@@ -2709,12 +2761,14 @@
             event.type === 'quota_restored' ||
             event.type === 'quota_exhausted'
           ) {
-            fetchStatus();
-            fetchAccounts();
+            pendingStatusAccounts = true;
+            scheduleSSERefresh();
           } else if (event.type === 'tokens_captured') {
-            fetchMetrics();
+            pendingMetrics = true;
+            scheduleSSERefresh();
           } else if (event.type === 'model_fallback') {
-            fetchConfig();
+            pendingConfig = true;
+            scheduleSSERefresh();
           }
         } catch (err) {
           console.warn('Failed to parse SSE payload:', err);
@@ -2837,8 +2891,12 @@
 
     // Listen for OAuth postMessage events from callback window
     window.addEventListener('message', (event) => {
+      if (event.origin && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(event.origin)) {
+        return;
+      }
       if (event.data && event.data.type === 'oauth_success') {
-        showToast(`Account ${event.data.email || ''} connected successfully!`, 'success');
+        const emailLabel = isPrivacyMode ? redactEmails(event.data.email || '') : (event.data.email || '');
+        showToast(`Account ${emailLabel} connected successfully!`, 'success');
         fetchModels().then(() => fetchAccounts());
         fetchStatus();
       } else if (event.data && event.data.type === 'oauth_error') {
@@ -2924,7 +2982,10 @@
           const t = formatTimeOnly(evt.timestamp);
           const type = (evt.type || 'INFO').toUpperCase();
           const acc = resolveAccount(evt.account_id);
-          const accStr = acc ? `[${acc.email}]` : (evt.account_id ? `[${evt.account_id.slice(0, 8)}]` : '');
+          let accStr = acc ? `[${acc.email}]` : (evt.account_id ? `[${evt.account_id.slice(0, 8)}]` : '');
+          if (isPrivacyMode && accStr) {
+            accStr = redactEmails(accStr);
+          }
           const model = extractEventModel(evt);
           const modelStr = model ? `[${model}]` : '';
           const reasoning = extractEventReasoning(evt);

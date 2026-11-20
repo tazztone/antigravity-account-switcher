@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -103,10 +104,12 @@ type Server struct {
 	proxyHandler http.Handler
 	distFS       fs.FS
 
-	mu         sync.Mutex
-	httpServer *http.Server
-	listener   net.Listener
-	addr       string
+	mu             sync.Mutex
+	httpServer     *http.Server
+	listener       net.Listener
+	addr           string
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 }
 
 // NewServer constructs an initialized Server.
@@ -162,17 +165,30 @@ func NewServer(
 		api.SetShutdownFunc(cfg.ShutdownFunc)
 	}
 
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	api.SetShutdownContext(shutdownCtx)
+
 	return &Server{
-		cfg:          cfg,
-		api:          api,
-		proxyHandler: cfg.ProxyHandler,
-		distFS:       sub,
+		cfg:            cfg,
+		api:            api,
+		proxyHandler:   cfg.ProxyHandler,
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
+		distFS:         sub,
 	}, nil
 }
 
 // ServeHTTP routes incoming requests to API, Proxy, or Static UI assets.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+
+	if (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete) &&
+		(strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/oauth/")) {
+		if !isAllowedMutationOrigin(r) {
+			writeErrorJSON(w, http.StatusForbidden, "cross-origin request blocked", nil)
+			return
+		}
+	}
 
 	// 1. API Endpoints
 	if path == "/api/status" {
@@ -183,7 +199,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.api.HandleShutdown(w, r)
 		return
 	}
-	if strings.HasPrefix(path, "/api/accounts") {
+	if path == "/api/accounts" || strings.HasPrefix(path, "/api/accounts/") {
 		s.api.HandleAccounts(w, r)
 		return
 	}
@@ -270,13 +286,35 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	// Attempt to open the requested file from embedded FS
 	f, err := s.distFS.Open(reqPath)
 	if err == nil {
+		fi, statErr := f.Stat()
 		_ = f.Close()
-		s.serveEmbeddedFile(w, r, reqPath)
-		return
+		if statErr == nil && !fi.IsDir() {
+			s.serveEmbeddedFile(w, r, reqPath)
+			return
+		}
 	}
 
 	// Single Page Application fallback: serve index.html
 	s.serveEmbeddedFile(w, r, "index.html")
+}
+
+func isAllowedMutationOrigin(r *http.Request) bool {
+	if secSite := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); secSite == "cross-site" {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "127.0.0.1" || host == "localhost" || host == "::1"
 }
 
 func (s *Server) serveEmbeddedFile(w http.ResponseWriter, r *http.Request, filename string) {
@@ -346,6 +384,9 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the HTTP server.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
 	s.mu.Lock()
 	if s.httpServer == nil {
 		s.mu.Unlock()

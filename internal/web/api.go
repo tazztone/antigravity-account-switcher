@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	_ "time/tzdata"
 
@@ -44,6 +45,25 @@ type APIHandler struct {
 	fallbackConfigSetter FallbackConfigSetter
 	shutdownFunc         func()
 	cloudCodeBaseURL     string
+	shutdownCtx          context.Context
+	oauthFlowActive      atomic.Bool
+}
+
+// SetShutdownContext sets the server-scoped context cancelled on Server.Stop.
+func (a *APIHandler) SetShutdownContext(ctx context.Context) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.shutdownCtx = ctx
+}
+
+func (a *APIHandler) baseCtx() context.Context {
+	a.cfgMu.RLock()
+	ctx := a.shutdownCtx
+	a.cfgMu.RUnlock()
+	if ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 // SetCloudCodeBaseURL overrides the Cloud Code PA base URL (primarily for testing).
@@ -74,6 +94,8 @@ type QuotaPoller interface {
 
 // SetPoller assigns the quota poller.
 func (a *APIHandler) SetPoller(p QuotaPoller) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
 	a.poller = p
 }
 
@@ -121,10 +143,13 @@ func (a *APIHandler) HandleQuotaRefresh(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if a.poller != nil {
+	a.cfgMu.RLock()
+	poller := a.poller
+	a.cfgMu.RUnlock()
+	if poller != nil {
 		pollCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		_ = a.poller.PollOnce(pollCtx)
+		_ = poller.PollOnce(pollCtx)
 	}
 
 	a.listAccounts(w, r)
@@ -464,14 +489,22 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 		_ = a.eventRepo.Record(ctx, evt)
 	}
 
-	if a.poller != nil {
+	a.cfgMu.RLock()
+	poller := a.poller
+	setter := a.fallbackConfigSetter
+	a.cfgMu.RUnlock()
+
+	if poller != nil {
+		base := a.baseCtx()
 		go func() {
-			_ = a.poller.PollOnce(context.Background())
+			pollCtx, cancel := context.WithTimeout(base, 10*time.Second)
+			defer cancel()
+			_ = poller.PollOnce(pollCtx)
 		}()
 	}
 
-	if a.fallbackConfigSetter != nil {
-		a.fallbackConfigSetter.ResetAccountState(id)
+	if setter != nil {
+		setter.ResetAccountState(id)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -538,8 +571,11 @@ func (a *APIHandler) updateAccountCategory(w http.ResponseWriter, r *http.Reques
 	if a.eventRepo != nil {
 		_ = a.eventRepo.Record(ctx, evt)
 	}
-	if a.fallbackConfigSetter != nil {
-		a.fallbackConfigSetter.ResetAccountState(id)
+	a.cfgMu.RLock()
+	setter := a.fallbackConfigSetter
+	a.cfgMu.RUnlock()
+	if setter != nil {
+		setter.ResetAccountState(id)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -595,8 +631,11 @@ func (a *APIHandler) updateAccountModelRule(w http.ResponseWriter, r *http.Reque
 		writeErrorJSON(w, http.StatusInternalServerError, "failed to update model rule", err)
 		return
 	}
-	if a.fallbackConfigSetter != nil {
-		a.fallbackConfigSetter.ResetAccountState(id)
+	a.cfgMu.RLock()
+	setter := a.fallbackConfigSetter
+	a.cfgMu.RUnlock()
+	if setter != nil {
+		setter.ResetAccountState(id)
 	}
 	writeJSON(w, http.StatusOK, rule)
 }
@@ -665,6 +704,9 @@ func (a *APIHandler) HandleConversations(w http.ResponseWriter, r *http.Request)
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			limit = parsed
+			if limit > 500 {
+				limit = 500
+			}
 		}
 	}
 
@@ -679,7 +721,7 @@ func (a *APIHandler) HandleConversations(w http.ResponseWriter, r *http.Request)
 
 	summaries, err := provider.GetConversationSummaries(r.Context(), limit)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to load conversations: %v", err), http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, "failed to load conversations", err)
 		return
 	}
 	if summaries == nil {
@@ -761,6 +803,11 @@ func parseLocation(tzParam, tzOffsetParam string) *time.Location {
 
 // HandleEvents serves GET /api/events as a real-time SSE stream.
 func (a *APIHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed", nil)
+		return
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported by client connection", http.StatusInternalServerError)
@@ -776,6 +823,13 @@ func (a *APIHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	var eventChan <-chan *domain.ProxyEvent
+	var unsubscribe func()
+	if a.broadcaster != nil {
+		eventChan, unsubscribe = a.broadcaster.Subscribe()
+		defer unsubscribe()
+	}
+
 	// 1. Send recent historical events if event repository is present
 	if a.eventRepo != nil {
 		recent, err := a.eventRepo.ListRecent(ctx, 30)
@@ -784,7 +838,9 @@ func (a *APIHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			for i := len(recent) - 1; i >= 0; i-- {
 				evt := recent[i]
 				if data, err := json.Marshal(evt); err == nil {
-					_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+					if _, err := fmt.Fprintf(w, "event: history\ndata: %s\n\n", data); err != nil {
+						return
+					}
 				}
 			}
 			flusher.Flush()
@@ -797,13 +853,18 @@ func (a *APIHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventChan, unsubscribe := a.broadcaster.Subscribe()
-	defer unsubscribe()
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		case evt, ok := <-eventChan:
 			if !ok {
 				return
@@ -812,16 +873,26 @@ func (a *APIHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
 }
 
-// HandleOAuthStart serves POST/GET /oauth/start.
+// HandleOAuthStart serves POST /oauth/start.
 func (a *APIHandler) HandleOAuthStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed", nil)
+		return
+	}
 	if a.oauthEngine == nil {
 		writeErrorJSON(w, http.StatusNotImplemented, "OAuth2 engine not configured", nil)
+		return
+	}
+	if !a.oauthFlowActive.CompareAndSwap(false, true) {
+		writeErrorJSON(w, http.StatusConflict, "an OAuth authentication flow is already in progress", nil)
 		return
 	}
 
@@ -830,6 +901,7 @@ func (a *APIHandler) HandleOAuthStart(w http.ResponseWriter, r *http.Request) {
 
 	// Non-blocking trigger of loopback flow
 	go func() {
+		defer a.oauthFlowActive.Store(false)
 		acc, err := a.oauthEngine.StartLoopbackFlow(context.Background(), nil, func(authURL string) {
 			select {
 			case urlChan <- authURL:
@@ -996,30 +1068,32 @@ func (a *APIHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		a.appConfig = loaded
 	}
 
+	candidate := *currentCfg
 	if req.ModelPrimary != nil {
 		if trimmed := strings.TrimSpace(*req.ModelPrimary); trimmed != "" {
-			currentCfg.ModelPrimary = trimmed
+			candidate.ModelPrimary = trimmed
 		}
 	}
 	if req.ModelSecondary != nil {
 		if trimmed := strings.TrimSpace(*req.ModelSecondary); trimmed != "" {
-			currentCfg.ModelSecondary = trimmed
+			candidate.ModelSecondary = trimmed
 		}
 	}
 	if req.FallbackSecondaryEnabled != nil {
-		currentCfg.FallbackSecondaryEnabled = *req.FallbackSecondaryEnabled
+		candidate.FallbackSecondaryEnabled = *req.FallbackSecondaryEnabled
 	}
 	if req.FallbackStrategy != nil {
 		if trimmed := strings.TrimSpace(*req.FallbackStrategy); trimmed != "" {
-			currentCfg.FallbackStrategy = trimmed
+			candidate.FallbackStrategy = trimmed
 		}
 	}
 
-	if err := currentCfg.Validate(); err != nil {
+	if err := candidate.Validate(); err != nil {
 		a.cfgMu.Unlock()
 		writeErrorJSON(w, http.StatusBadRequest, "invalid configuration", err)
 		return
 	}
+	*currentCfg = candidate
 
 	// Preserve existing non-model fields from disk config
 	if diskCfg, err := config.Load(); err == nil && diskCfg != nil {
