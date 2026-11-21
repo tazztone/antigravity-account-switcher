@@ -379,6 +379,24 @@ func runStop(args []string) {
 
 // executeStop executes the stop subcommand logic and returns an exit code.
 func executeStop(args []string, stdout, stderr io.Writer) int {
+	return executeStopWithFallbackPorts(args, []int{config.DefaultPort, 1831}, stdout, stderr)
+}
+
+// appendWaitIfIDE appends "--wait" for antigravity-ide binaries when neither "--wait" nor "-w" is present.
+func appendWaitIfIDE(binBase string, passthroughArgs []string) []string {
+	if !strings.Contains(binBase, "antigravity-ide") {
+		return passthroughArgs
+	}
+	for _, a := range passthroughArgs {
+		if a == "--wait" || a == "-w" {
+			return passthroughArgs
+		}
+	}
+	return append(passthroughArgs, "--wait")
+}
+
+// executeStopWithFallbackPorts executes the stop subcommand using the provided fallback ports.
+func executeStopWithFallbackPorts(args []string, fallbackPorts []int, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.Int("port", 0, "Port of running server to stop (defaults to configured port, or checks 8080 and 1831)")
@@ -407,8 +425,9 @@ func executeStop(args []string, stdout, stderr io.Writer) int {
 		if cfg, err := config.Load(); err == nil && cfg != nil {
 			addCandidate(cfg.Port)
 		}
-		addCandidate(config.DefaultPort)
-		addCandidate(1831)
+		for _, p := range fallbackPorts {
+			addCandidate(p)
+		}
 	}
 
 	client := &http.Client{
@@ -1083,6 +1102,7 @@ func runLaunch(args []string) {
 		}
 	}
 
+	passthroughArgs = appendWaitIfIDE(filepath.Base(antigravityBin), passthroughArgs)
 	cmdToRun := append([]string{antigravityBin}, passthroughArgs...)
 	fmt.Printf("==> Launching %s with coupled switcher supervisor:\n", appName)
 	fmt.Printf("    Executable: %s\n", antigravityBin)

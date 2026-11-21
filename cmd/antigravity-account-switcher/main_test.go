@@ -859,16 +859,79 @@ func TestCLI_StopCommand_SuccessfulShutdown(t *testing.T) {
 func TestCLI_ExecuteStop_ThreeCandidatePortsNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("ANTIGRAVITY_CONFIG_DIR", tmpDir)
-	// Use an unused port in config so candidatePorts has 3 distinct ports (cfg.Port, 8080, 1831).
-	t.Setenv("ANTIGRAVITY_PORT", "19999")
+
+	allocClosedPort := func() int {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to allocate ephemeral port: %v", err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		return port
+	}
+
+	cfgPort := allocClosedPort()
+	fb1 := allocClosedPort()
+	fb2 := allocClosedPort()
+	t.Setenv("ANTIGRAVITY_PORT", fmt.Sprintf("%d", cfgPort))
 
 	var stdout, stderr bytes.Buffer
-	code := executeStop([]string{"--timeout", "100ms"}, &stdout, &stderr)
+	code := executeStopWithFallbackPorts([]string{"--timeout", "100ms"}, []int{fb1, fb2}, &stdout, &stderr)
 	if code != 1 {
-		t.Fatalf("expected executeStop exit code 1, got %d", code)
+		t.Fatalf("expected executeStopWithFallbackPorts exit code 1, got %d", code)
 	}
 	errOut := stderr.String()
-	if !strings.Contains(errOut, "19999, 8080, 1831") {
-		t.Errorf("expected all 3 candidate ports in error output, got: %q", errOut)
+	expected := fmt.Sprintf("%d, %d, %d", cfgPort, fb1, fb2)
+	if !strings.Contains(errOut, expected) {
+		t.Errorf("expected all 3 candidate ports (%s) in error output, got: %q", expected, errOut)
+	}
+}
+
+func TestAppendWaitIfIDE(t *testing.T) {
+	tests := []struct {
+		name     string
+		binBase  string
+		args     []string
+		expected []string
+	}{
+		{
+			name:     "antigravity-ide without wait",
+			binBase:  "antigravity-ide",
+			args:     []string{"/tmp/project"},
+			expected: []string{"/tmp/project", "--wait"},
+		},
+		{
+			name:     "antigravity-ide with --wait already present",
+			binBase:  "antigravity-ide",
+			args:     []string{"--wait", "/tmp/project"},
+			expected: []string{"--wait", "/tmp/project"},
+		},
+		{
+			name:     "antigravity-ide with -w already present",
+			binBase:  "antigravity-ide",
+			args:     []string{"-w", "/tmp/project"},
+			expected: []string{"-w", "/tmp/project"},
+		},
+		{
+			name:     "non-ide binary unchanged",
+			binBase:  "antigravity",
+			args:     []string{"/tmp/project"},
+			expected: []string{"/tmp/project"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := appendWaitIfIDE(tc.binBase, tc.args)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("expected %v, got %v", tc.expected, got)
+			}
+			for i := range got {
+				if got[i] != tc.expected[i] {
+					t.Fatalf("expected %v, got %v", tc.expected, got)
+				}
+			}
+		})
 	}
 }
