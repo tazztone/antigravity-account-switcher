@@ -18,3 +18,5 @@
 - Always check `xhigh` before `high` (and `minimal` before `medium`/`low`) in substring variant parsers ([language_server.go](file:///home/tazztone/_coding/antigravity-account-switcher/internal/quota/language_server.go#L418-L444)).
 - `POST /api/config` ([api.go](file:///home/tazztone/_coding/antigravity-account-switcher/internal/web/api.go#L991-L1003)) ignores empty `model_primary`/`model_secondary` strings; disable 429 fallback exclusively via `fallback_secondary_enabled: false`.
 - Keep global utility classes (`.hidden`, `.btn-sm`) explicitly defined in `style.css` rather than relying on scoped selectors like `.btn-jump-latest.hidden`.
+- Isolate CLI tests from real loopback ports (`8080`, `1831`) using closed ephemeral ports (`executeStopWithFallbackPorts`) so `make test-race` never terminates live developer daemons.
+- VS Code / Electron `cli.js` wrappers fork GUI and exit immediately unless `--wait` is passed (`appendWaitIfIDE` in `launch`) or a persistent `serve` wrapper is used.
