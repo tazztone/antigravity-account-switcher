@@ -186,7 +186,20 @@ assert.strictEqual(orchNeon.tier, '');
 
 // Verify 2 categories on paidCard (ROUTING (2/2), no Gemini 4 Argon card)
 assert.ok(paidCard.innerHTML.includes('ROUTING (2/2)'), 'expected ROUTING (2/2) badge on paidCard');
-assert.ok(!paidCard.innerHTML.includes('Gemini 4 Argon'), 'expected no separate Gemini 4 Argon card');
+assert.ok(!paidCard.innerHTML.includes('data-category-group="gemini_argon"'), 'expected no gemini_argon category group');
+
+// Verify gemini-4-argon-high renders inside Gemini Models group (not a separate card)
+const argonAcc = {
+  ...paidAcc,
+  model_rules: [
+    ...paidAcc.model_rules,
+    { model_id: 'gemini-4-argon-high', display_name: 'Gemini 4 Argon (High)', category: 'gemini', enabled: true, discovered: true },
+  ],
+};
+const argonCard = hooks.createAccountCard(argonAcc, exclusiveMap);
+assert.ok(!argonCard.innerHTML.includes('data-category-group="gemini_argon"'), 'expected no separate gemini_argon card');
+const geminiGroupHtml = argonCard.innerHTML.split('data-category-group="gemini"')[1] || '';
+assert.ok(geminiGroupHtml.includes('Gemini 4 Argon'), 'expected Gemini 4 Argon row inside Gemini Models group');
 
 // Verify stale discovered=false model is hidden on freeAcc card and model priority pin renders
 const freeCard = hooks.createAccountCard(freeAcc, exclusiveMap);

@@ -705,7 +705,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "" {
 				isPassThrough = true
 			} else {
-				http.Error(w, "no eligible Google account for requested model", http.StatusServiceUnavailable)
+				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":{"code":503,"message":"no eligible Google account for requested model","status":"UNAVAILABLE"}}`))
 				return
 			}
 		} else if target != nil {

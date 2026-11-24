@@ -182,9 +182,6 @@ func TestPreFlightEligibility_EligibleModelStaysOnActiveAccount(t *testing.T) {
 func TestGeminiArgonSharesGeminiQuota_ExhaustionBlocksBoth(t *testing.T) {
 	f := newTwoAccountPool(t, nil)
 
-	f.seedModels(t, "acc-paid",
-		&domain.ModelInfo{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Category: "gemini"},
-	)
 	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
 		t.Fatalf("pin gemini to paid: %v", err)
 	}
