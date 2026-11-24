@@ -19,9 +19,8 @@ type AccountRepository struct {
 }
 
 // bucketCategoryPredicate matches quota_buckets rows (alias qb) belonging to a
-// model category: Claude/GPT third-party buckets for "claude_gpt", Gemini 4 Argon
-// weekly buckets for "gemini_argon", and regular Gemini buckets (explicitly not
-// Argon) for "gemini". Two placeholders are bound to the category string.
+// model category: Claude/GPT third-party buckets for "claude_gpt", and Gemini
+// buckets for "gemini". Two placeholders are bound to the category string.
 const bucketCategoryPredicate = `
 	AND (
 		(? = 'claude_gpt' AND (
@@ -29,38 +28,9 @@ const bucketCategoryPredicate = `
 			LOWER(qb.display_name) LIKE '%claude%' OR LOWER(qb.display_name) LIKE '%gpt%' OR LOWER(qb.display_name) LIKE '%3p%'
 		))
 		OR
-		(? = 'gemini_argon' AND (
-			LOWER(qb.bucket_id) LIKE '%argon%' OR LOWER(qb.display_name) LIKE '%argon%'
-		))
-		OR
 		(? = 'gemini' AND (
-			(LOWER(qb.bucket_id) LIKE '%gemini%' OR LOWER(qb.display_name) LIKE '%gemini%')
-			AND LOWER(qb.bucket_id) NOT LIKE '%argon%' AND LOWER(qb.display_name) NOT LIKE '%argon%'
+			LOWER(qb.bucket_id) LIKE '%gemini%' OR LOWER(qb.display_name) LIKE '%gemini%'
 		))
-	)
-`
-
-// argonEntitlementPredicate requires accounts matching category "gemini_argon"
-// to have Argon entitlement, evidenced by either an Argon quota bucket or an
-// enabled Argon model rule. For any other category, the condition is a no-op.
-const argonEntitlementPredicate = `
-	AND (
-		? != 'gemini_argon'
-		OR EXISTS (
-			SELECT 1 FROM quota_buckets qb
-			WHERE qb.account_id = a.id
-			  AND (LOWER(qb.bucket_id) LIKE '%argon%' OR LOWER(qb.display_name) LIKE '%argon%')
-		)
-		OR EXISTS (
-			SELECT 1 FROM account_model_rules mr
-			WHERE mr.account_id = a.id
-			  AND (
-			      (mr.category = 'gemini_argon' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
-			      OR (LOWER(mr.model_id) LIKE '%argon%' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
-			      OR (mr.category = 'claude_gpt' AND (LOWER(mr.model_id) LIKE '%5-5%' OR LOWER(mr.model_id) LIKE '%5.5%'))
-			  )
-			  AND mr.enabled = 1
-		)
 	)
 `
 
@@ -125,9 +95,9 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 	if acc.IsActive {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO active_category_accounts (category, account_id)
-			VALUES ('claude_gpt', ?), ('gemini', ?), ('gemini_argon', ?)
+			VALUES ('claude_gpt', ?), ('gemini', ?)
 			ON CONFLICT(category) DO UPDATE SET account_id = excluded.account_id
-		`, acc.ID, acc.ID, acc.ID); err != nil {
+		`, acc.ID, acc.ID); err != nil {
 			return fmt.Errorf("failed to seed active_category_accounts on create: %w", err)
 		}
 	}
@@ -230,9 +200,9 @@ func (r *AccountRepository) SetActive(ctx context.Context, id string) error {
 	// Step 3: Populate active_category_accounts for every model category
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO active_category_accounts (category, account_id)
-		VALUES ('claude_gpt', ?), ('gemini', ?), ('gemini_argon', ?)
+		VALUES ('claude_gpt', ?), ('gemini', ?)
 		ON CONFLICT(category) DO UPDATE SET account_id = excluded.account_id
-	`, id, id, id); err != nil {
+	`, id, id); err != nil {
 		return fmt.Errorf("failed to update active_category_accounts: %w", err)
 	}
 
@@ -375,17 +345,6 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 		if mode == domain.RoutingModeSolo {
 			return acc, nil
 		}
-		if category == domain.CategoryGeminiArgon {
-			entitled, eErr := r.HasArgonEntitlement(ctx, acc.ID)
-			if eErr == nil && !entitled {
-				next, nErr := r.GetNextAvailableForCategory(ctx, category, acc.ID)
-				if nErr == nil && next != nil {
-					_ = r.SetActiveForCategory(ctx, category, next.ID)
-					return next, nil
-				}
-				return nil, domain.ErrNoActiveAccount
-			}
-		}
 		dead, dErr := r.hasExhaustedBucketForCategory(ctx, acc.ID, catStr)
 		if dErr != nil || !dead {
 			return acc, nil
@@ -409,18 +368,16 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 			`, catStr, cand.ID)
 			return cand, nil
 		}
-		if category != domain.CategoryGeminiArgon {
-			globalActive, gErr := r.GetActive(ctx)
-			if gErr == nil && globalActive != nil &&
-				!globalActive.IsCategoryDisabled(category) &&
-				globalActive.Status != domain.AccountStatusDisabled &&
-				globalActive.Status != domain.AccountStatusError {
-				_, _ = r.db.ExecContext(ctx, `
-					INSERT OR IGNORE INTO active_category_accounts (category, account_id)
-					VALUES (?, ?)
-				`, catStr, globalActive.ID)
-				return globalActive, nil
-			}
+		globalActive, gErr := r.GetActive(ctx)
+		if gErr == nil && globalActive != nil &&
+			!globalActive.IsCategoryDisabled(category) &&
+			globalActive.Status != domain.AccountStatusDisabled &&
+			globalActive.Status != domain.AccountStatusError {
+			_, _ = r.db.ExecContext(ctx, `
+				INSERT OR IGNORE INTO active_category_accounts (category, account_id)
+				VALUES (?, ?)
+			`, catStr, globalActive.ID)
+			return globalActive, nil
 		}
 		return nil, domain.ErrNoActiveAccount
 	}
@@ -439,7 +396,7 @@ func (r *AccountRepository) hasExhaustedBucketForCategory(ctx context.Context, a
 		  AND qb.reset_time > ?
 	` + bucketCategoryPredicate
 	var count int
-	if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr, catStr).Scan(&count); err != nil {
+	if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr).Scan(&count); err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -535,11 +492,10 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 			    AND qb.reset_time > ?
 	` + bucketCategoryPredicate + `
 		  )
-	` + argonEntitlementPredicate + `
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, nowStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr)
+	row := r.db.QueryRowContext(ctx, query, excludeID, excludeID, catStr, nowStr, catStr, catStr, nowStr, catStr, catStr)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
 		return nil, domain.ErrNoAvailableAccount
@@ -876,7 +832,6 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 			    AND qb.reset_time > ?
 	` + bucketCategoryPredicate + `
 		  )
-	` + argonEntitlementPredicate + `
 		  AND (
 			(
 				NOT EXISTS (SELECT 1 FROM account_model_rules mr WHERE mr.account_id = a.id AND mr.discovered = 1)
@@ -890,7 +845,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 		ORDER BY a.updated_at ASC
 		LIMIT 1
 	`
-	args := []any{excludeID, excludeID, catStr, nowStr, catStr, catStr, catStr, nowStr, catStr, catStr, catStr, catStr, modelID, modelID}
+	args := []any{excludeID, excludeID, catStr, nowStr, catStr, catStr, nowStr, catStr, catStr, modelID, modelID}
 	row := r.db.QueryRowContext(ctx, query, args...)
 	acc, err := r.scanAccount(row)
 	if errors.Is(err, domain.ErrAccountNotFound) {
@@ -1050,35 +1005,6 @@ func (r *AccountRepository) GetActiveModelsByAccount(ctx context.Context) (map[s
 	return res, rows.Err()
 }
 
-// HasArgonEntitlement reports whether the account has Argon entitlement, evidenced
-// by an Argon quota bucket, an enabled Argon model rule, or Pro-tier model rules (e.g. Claude 5.5).
-func (r *AccountRepository) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
-	query := `
-		SELECT 1 FROM quota_buckets qb
-		WHERE qb.account_id = ?
-		  AND (LOWER(qb.bucket_id) LIKE '%argon%' OR LOWER(qb.display_name) LIKE '%argon%')
-		UNION
-		SELECT 1 FROM account_model_rules mr
-		WHERE mr.account_id = ?
-		  AND (
-		      (mr.category = 'gemini_argon' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
-		      OR (LOWER(mr.model_id) LIKE '%argon%' AND LOWER(mr.model_id) NOT LIKE '%disabled%')
-		      OR (mr.category = 'claude_gpt' AND (LOWER(mr.model_id) LIKE '%5-5%' OR LOWER(mr.model_id) LIKE '%5.5%'))
-		  )
-		  AND mr.enabled = 1
-		LIMIT 1
-	`
-	var exists int
-	err := r.db.QueryRowContext(ctx, query, accountID, accountID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // IsAccountAvailableForCategory reports whether one specific account may serve
 // traffic for a model category right now. It mirrors the eligibility rules of
 // GetNextAvailableForCategory: 'active' accounts need no unexpired exhausted
@@ -1106,16 +1032,6 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 		return false, nil
 	}
 
-	if category == domain.CategoryGeminiArgon {
-		entitled, err := r.HasArgonEntitlement(ctx, accountID)
-		if err != nil {
-			return false, err
-		}
-		if !entitled {
-			return false, nil
-		}
-	}
-
 	dead, err := r.hasExhaustedBucketForCategory(ctx, accountID, catStr)
 	if err != nil {
 		return false, err
@@ -1141,7 +1057,7 @@ func (r *AccountRepository) IsAccountAvailableForCategory(ctx context.Context, a
 			  )
 		` + bucketCategoryPredicate
 		var healthy int
-		if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr, catStr).Scan(&healthy); err != nil {
+		if err := r.db.QueryRowContext(ctx, query, accountID, nowStr, catStr, catStr).Scan(&healthy); err != nil {
 			return false, fmt.Errorf("failed to inspect quota buckets for account %s: %w", accountID, err)
 		}
 		return healthy > 0, nil
@@ -1209,9 +1125,8 @@ func (r *AccountRepository) SetCategoryRoutingMode(ctx context.Context, category
 // GetAllCategoryRoutingModes returns a map of all categories to their routing mode.
 func (r *AccountRepository) GetAllCategoryRoutingModes(ctx context.Context) (map[domain.ModelCategory]string, error) {
 	modes := map[domain.ModelCategory]string{
-		domain.CategoryClaudeGPT:   domain.RoutingModePool,
-		domain.CategoryGemini:      domain.RoutingModePool,
-		domain.CategoryGeminiArgon: domain.RoutingModePool,
+		domain.CategoryClaudeGPT: domain.RoutingModePool,
+		domain.CategoryGemini:    domain.RoutingModePool,
 	}
 
 	rows, err := r.db.QueryContext(ctx, "SELECT category, routing_mode FROM active_category_accounts")

@@ -10,7 +10,7 @@ import (
 type ModelInfo struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
-	Category    string `json:"category"` // "gemini", "gemini_argon" or "claude_gpt"
+	Category    string `json:"category"` // "gemini" or "claude_gpt"
 	Recommended bool   `json:"recommended"`
 }
 
@@ -96,13 +96,9 @@ func CategorizeModelID(model string) ModelCategory {
 		return CategoryClaudeGPT
 	}
 
-	// 2. Gemini 4 Argon Check (before generic gemini to avoid bucket collision)
-	if strings.Contains(lower, "argon") {
-		return CategoryGeminiArgon
-	}
-
-	// 3. Gemini Family Check
+	// 2. Gemini Family Check (includes Gemini 4 Argon models on shared Gemini quota)
 	if strings.Contains(lower, "gemini") ||
+		strings.Contains(lower, "argon") ||
 		strings.Contains(lower, "gemma") ||
 		strings.Contains(lower, "flash") ||
 		strings.Contains(lower, "pro") ||

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/store/sqlite"
 )
 
 func TestCategoryRoutingAndExclusion(t *testing.T) {
@@ -35,7 +36,7 @@ func TestCategoryRoutingAndExclusion(t *testing.T) {
 	}
 
 	// Verify default routing modes
-	for _, cat := range []domain.ModelCategory{domain.CategoryClaudeGPT, domain.CategoryGemini, domain.CategoryGeminiArgon} {
+	for _, cat := range []domain.ModelCategory{domain.CategoryClaudeGPT, domain.CategoryGemini} {
 		mode, err := accRepo.GetCategoryRoutingMode(ctx, cat)
 		if err != nil {
 			t.Fatalf("GetCategoryRoutingMode(%s) error: %v", cat, err)
@@ -122,5 +123,71 @@ func TestCategoryRoutingAndExclusion(t *testing.T) {
 	candidate, err = accRepo.GetNextAvailableForCategory(ctx, domain.CategoryClaudeGPT, "acc-1")
 	if err != nil || candidate == nil || candidate.ID != "acc-2" {
 		t.Fatalf("expected acc-2 to be available for claude_gpt after re-enabling, got candidate=%v, err=%v", candidate, err)
+	}
+}
+
+func TestMigrationV8_UnifyGeminiArgonIntoGemini(t *testing.T) {
+	ctx := context.Background()
+	db, _, _, _, _ := setupTestStore(t)
+
+	// Simulate pre-v8 state by rolling back migration 8 record and seeding legacy gemini_argon rows.
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 8`); err != nil {
+		t.Fatalf("delete migration 8: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO accounts (id, email, refresh_token, status, is_active, disabled_categories, token_expiry)
+		VALUES
+			('acc-1', 'one@example.com', 'rt-1', 'active', 1, 'claude_gpt,gemini_argon', '2099-01-01T00:00:00Z'),
+			('acc-2', 'two@example.com', 'rt-2', 'active', 0, 'gemini,gemini_argon', '2099-01-01T00:00:00Z');
+		INSERT INTO active_category_accounts (category, account_id, routing_mode)
+		VALUES ('gemini_argon', 'acc-1', 'pool');
+		INSERT INTO account_model_rules (account_id, model_id, display_name, category, enabled, discovered, updated_at)
+		VALUES ('acc-1', 'gemini-4-argon-high', 'Gemini 4 Argon (High)', 'gemini_argon', 1, 1, '2099-01-01T00:00:00Z');
+		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
+		VALUES ('acc-1', 'argon-weekly', 'Gemini 4 Argon Weekly', 'weekly', 0.5, '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z');
+	`); err != nil {
+		t.Fatalf("seed legacy state: %v", err)
+	}
+
+	if err := sqlite.Migrate(db); err != nil {
+		t.Fatalf("re-run Migrate: %v", err)
+	}
+
+	var ruleCat string
+	if err := db.QueryRowContext(ctx, `SELECT category FROM account_model_rules WHERE account_id = 'acc-1' AND model_id = 'gemini-4-argon-high'`).Scan(&ruleCat); err != nil {
+		t.Fatalf("query rule category: %v", err)
+	}
+	if ruleCat != "gemini" {
+		t.Errorf("expected rule category 'gemini', got %q", ruleCat)
+	}
+
+	var pinCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM active_category_accounts WHERE category = 'gemini_argon'`).Scan(&pinCount); err != nil {
+		t.Fatalf("query active_category_accounts: %v", err)
+	}
+	if pinCount != 0 {
+		t.Errorf("expected 0 gemini_argon pins, got %d", pinCount)
+	}
+
+	var bucketCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM quota_buckets WHERE LOWER(bucket_id) LIKE '%argon%'`).Scan(&bucketCount); err != nil {
+		t.Fatalf("query quota_buckets: %v", err)
+	}
+	if bucketCount != 0 {
+		t.Errorf("expected 0 argon quota_buckets, got %d", bucketCount)
+	}
+
+	var dc1, dc2 string
+	if err := db.QueryRowContext(ctx, `SELECT disabled_categories FROM accounts WHERE id = 'acc-1'`).Scan(&dc1); err != nil {
+		t.Fatalf("query acc-1 disabled_categories: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT disabled_categories FROM accounts WHERE id = 'acc-2'`).Scan(&dc2); err != nil {
+		t.Fatalf("query acc-2 disabled_categories: %v", err)
+	}
+	if dc1 != "claude_gpt" {
+		t.Errorf("expected acc-1 disabled_categories 'claude_gpt', got %q", dc1)
+	}
+	if dc2 != "gemini" {
+		t.Errorf("expected acc-2 disabled_categories 'gemini', got %q", dc2)
 	}
 }

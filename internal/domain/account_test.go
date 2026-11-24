@@ -13,7 +13,6 @@ func TestModelCategory_String(t *testing.T) {
 		want string
 	}{
 		{domain.CategoryGemini, "gemini"},
-		{domain.CategoryGeminiArgon, "gemini_argon"},
 		{domain.CategoryClaudeGPT, "claude_gpt"},
 		{domain.CategoryUnknown, "unknown"},
 		{domain.ModelCategory("custom"), "custom"},
@@ -36,9 +35,6 @@ func TestAccount_IsCategoryDisabled(t *testing.T) {
 	}
 	if !acc.IsCategoryDisabled(domain.CategoryClaudeGPT) {
 		t.Error("expected CategoryClaudeGPT to be disabled")
-	}
-	if acc.IsCategoryDisabled(domain.CategoryGeminiArgon) {
-		t.Error("expected CategoryGeminiArgon not to be disabled")
 	}
 	if acc.IsCategoryDisabled(domain.CategoryUnknown) {
 		t.Error("expected CategoryUnknown not to be disabled")

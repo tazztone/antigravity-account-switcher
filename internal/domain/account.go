@@ -30,8 +30,6 @@ const (
 	CategoryClaudeGPT ModelCategory = "claude_gpt"
 	// CategoryGemini covers Google Gemini and Gemma first-party models.
 	CategoryGemini ModelCategory = "gemini"
-	// CategoryGeminiArgon covers Gemini 4 Argon tiers with their own weekly quota buckets.
-	CategoryGeminiArgon ModelCategory = "gemini_argon"
 )
 
 // String returns the string representation of ModelCategory.
@@ -146,9 +144,6 @@ type AccountRepository interface {
 	// GetNextAvailableForModel selects the next account eligible for a specific model,
 	// excluding excludeID and accounts where the model is disabled or category quota is exhausted.
 	GetNextAvailableForModel(ctx context.Context, category ModelCategory, modelID, excludeID string) (*Account, error)
-
-	// HasArgonEntitlement reports whether the account has Argon entitlement.
-	HasArgonEntitlement(ctx context.Context, accountID string) (bool, error)
 
 	// IsAccountAvailableForCategory reports whether one specific account may serve traffic
 	// for a model category right now, using the same eligibility rules as

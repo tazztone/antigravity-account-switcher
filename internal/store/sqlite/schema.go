@@ -165,6 +165,20 @@ CREATE TABLE IF NOT EXISTS active_model_accounts (
 CREATE INDEX IF NOT EXISTS idx_active_model_accounts_account ON active_model_accounts(account_id);
 `,
 	},
+	{
+		Version:     8,
+		Description: "unify_gemini_argon_into_gemini",
+		SQL: `
+-- 12. Unify Gemini 4 Argon into shared Gemini category
+UPDATE account_model_rules SET category = 'gemini' WHERE category = 'gemini_argon';
+DELETE FROM active_category_accounts WHERE category = 'gemini_argon';
+DELETE FROM quota_buckets WHERE LOWER(bucket_id) LIKE '%argon%' OR LOWER(display_name) LIKE '%argon%';
+UPDATE accounts
+SET disabled_categories = TRIM(REPLACE(',' || disabled_categories || ',', ',gemini_argon,', ','), ','),
+    updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+WHERE ',' || disabled_categories || ',' LIKE '%,gemini_argon,%';
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.
@@ -222,9 +236,7 @@ func Migrate(db *DB) error {
 	INSERT OR IGNORE INTO active_category_accounts (category, account_id)
 	SELECT 'claude_gpt', id FROM accounts WHERE is_active = 1
 	UNION ALL
-	SELECT 'gemini', id FROM accounts WHERE is_active = 1
-	UNION ALL
-	SELECT 'gemini_argon', id FROM accounts WHERE is_active = 1;`
+	SELECT 'gemini', id FROM accounts WHERE is_active = 1;`
 	if _, err := seedTx.ExecContext(ctx, seedSQL); err != nil {
 		_ = seedTx.Rollback()
 		return fmt.Errorf("failed to seed active_category_accounts: %w", err)

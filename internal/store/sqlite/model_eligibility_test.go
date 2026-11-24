@@ -94,7 +94,7 @@ func TestUpsertAccountModels_PreservesUserOverrides(t *testing.T) {
 	// Re-discovery must not clobber the user's overrides
 	second := []*domain.ModelInfo{
 		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5 (renamed)", Category: "claude_gpt"},
-		{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon Medium", Category: "gemini_argon"},
+		{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon Medium", Category: "gemini"},
 	}
 	if err := repo.UpsertAccountModels(ctx, "acc-paid", second); err != nil {
 		t.Fatalf("UpsertAccountModels second pass: %v", err)
@@ -120,7 +120,7 @@ func TestUpsertAccountModels_PreservesUserOverrides(t *testing.T) {
 		t.Errorf("expected display name refreshed on conflict, got %q", opus.DisplayName)
 	}
 	argon := byModel["gemini-4-argon-medium"]
-	if argon == nil || !argon.Enabled || argon.Category != "gemini_argon" {
+	if argon == nil || !argon.Enabled || argon.Category != "gemini" {
 		t.Errorf("new model not inserted enabled: %+v", argon)
 	}
 }
@@ -357,7 +357,7 @@ func TestGetActiveCategoriesByAccount(t *testing.T) {
 	createEligibilityAccount(t, repo, ctx, "acc-a", "a@example.com", true)
 	createEligibilityAccount(t, repo, ctx, "acc-b", "b@example.com", false)
 
-	if err := repo.SetActiveForCategory(ctx, domain.CategoryGeminiArgon, "acc-b"); err != nil {
+	if err := repo.SetActiveForCategory(ctx, domain.CategoryGemini, "acc-b"); err != nil {
 		t.Fatalf("SetActiveForCategory: %v", err)
 	}
 
@@ -367,75 +367,53 @@ func TestGetActiveCategoriesByAccount(t *testing.T) {
 	}
 
 	bCats := cats["acc-b"]
-	if len(bCats) != 1 || bCats[0] != domain.CategoryGeminiArgon {
-		t.Errorf("expected [gemini_argon] for acc-b, got %v", bCats)
+	if len(bCats) != 1 || bCats[0] != domain.CategoryGemini {
+		t.Errorf("expected [gemini] for acc-b, got %v", bCats)
 	}
-	// acc-a was created active, then lost the argon pin to acc-b: claude_gpt + gemini remain
+	// acc-a was created active, then lost the gemini pin to acc-b: claude_gpt remains
 	aCats := cats["acc-a"]
-	if len(aCats) != 2 {
-		t.Errorf("expected [claude_gpt gemini] for acc-a after argon pin moved, got %v", aCats)
-	}
-	for _, c := range aCats {
-		if c == domain.CategoryGeminiArgon {
-			t.Errorf("argon pin should only be on acc-b, got %v", aCats)
-		}
+	if len(aCats) != 1 || aCats[0] != domain.CategoryClaudeGPT {
+		t.Errorf("expected [claude_gpt] for acc-a after gemini pin moved, got %v", aCats)
 	}
 }
 
-func TestGeminiArgonBucketIsolation(t *testing.T) {
+func TestGeminiArgonSharedBucketQuota(t *testing.T) {
 	ctx, db, repo := newEligibilityTestRepo(t)
 	createEligibilityAccount(t, repo, ctx, "acc-1", "one@example.com", true)
+	if err := repo.UpsertAccountModels(ctx, "acc-1", []*domain.ModelInfo{
+		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels: %v", err)
+	}
 
 	reset := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
-
-	// Regular gemini 5h bucket exhausted; argon weekly bucket healthy
 	upsert := func(bucketID, displayName, window string, fraction float64) {
 		t.Helper()
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(account_id, bucket_id) DO UPDATE SET remaining_fraction = excluded.remaining_fraction
 		`, "acc-1", bucketID, displayName, window, fraction, reset, reset); err != nil {
 			t.Fatalf("seed bucket %s: %v", bucketID, err)
 		}
 	}
 	upsert("gemini-5h", "Gemini (5h)", "5h", 0.0)
-	upsert("argon-weekly", "Gemini Argon (weekly)", "weekly", 1.0)
 
-	// Regular gemini exhausted: acc-1 excluded for gemini...
+	// Shared Gemini 5h bucket exhausted: acc-1 excluded for both CategoryGemini and gemini-4-argon-high.
 	next, err := repo.GetNextAvailableForCategory(ctx, domain.CategoryGemini, "")
 	if !errors.Is(err, domain.ErrNoAvailableAccount) {
 		t.Fatalf("expected no available gemini account, got %+v err=%v", next, err)
 	}
-
-	// ...but still eligible for gemini_argon (its own healthy weekly bucket).
-	// Before the predicate fix, '%gemini%' on display_name "Gemini Argon (weekly)"
-	// masked the exhausted regular bucket and the account stayed eligible for gemini;
-	// the isolated argon check now governs.
-	next, err = repo.GetNextAvailableForCategory(ctx, domain.CategoryGeminiArgon, "")
-	if err != nil {
-		t.Fatalf("GetNextAvailableForCategory(argon): %v", err)
-	}
-	if next == nil || next.ID != "acc-1" {
-		t.Fatalf("expected acc-1 eligible for argon, got %+v", next)
-	}
-
-	// Reverse: exhausted argon weekly bucket must not lock out regular gemini.
-	if _, err := db.ExecContext(ctx, `UPDATE quota_buckets SET remaining_fraction = 0.0 WHERE bucket_id = 'argon-weekly'`); err != nil {
-		t.Fatalf("exhaust argon: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE quota_buckets SET remaining_fraction = 1.0 WHERE bucket_id = 'gemini-5h'`); err != nil {
-		t.Fatalf("restore gemini: %v", err)
-	}
-	next, err = repo.GetNextAvailableForCategory(ctx, domain.CategoryGemini, "")
-	if err != nil {
-		t.Fatalf("GetNextAvailableForCategory(gemini): %v", err)
-	}
-	if next == nil || next.ID != "acc-1" {
-		t.Fatalf("expected acc-1 eligible for gemini after argon exhaustion, got %+v", next)
-	}
-	next, err = repo.GetNextAvailableForCategory(ctx, domain.CategoryGeminiArgon, "")
+	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGemini, "gemini-4-argon-high", "")
 	if !errors.Is(err, domain.ErrNoAvailableAccount) {
-		t.Fatalf("expected no available argon account, got %+v err=%v", next, err)
+		t.Fatalf("expected no available account for gemini-4-argon-high when gemini-5h exhausted, got %+v err=%v", next, err)
+	}
+
+	// Restoring gemini-5h restores both regular Gemini and Argon model routing.
+	upsert("gemini-5h", "Gemini (5h)", "5h", 1.0)
+	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGemini, "gemini-4-argon-high", "")
+	if err != nil || next == nil || next.ID != "acc-1" {
+		t.Fatalf("expected acc-1 eligible for gemini-4-argon-high after gemini-5h restored, got %+v err=%v", next, err)
 	}
 }
 
@@ -492,12 +470,18 @@ func TestIsAccountAvailableForCategory(t *testing.T) {
 }
 
 func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
-	ctx, db, repo := newEligibilityTestRepo(t)
+	ctx, _, repo := newEligibilityTestRepo(t)
 
 	// acc-unentitled has active status but no quota buckets and no model rules.
 	createEligibilityAccount(t, repo, ctx, "acc-unentitled", "free@example.com", true)
 
-	// Available for standard categories, but NOT for gemini_argon.
+	// Available for standard categories, but NOT for gemini-4-argon-high without discovered rule
+	// once acc-unentitled has other discovered models.
+	if err := repo.UpsertAccountModels(ctx, "acc-unentitled", []*domain.ModelInfo{
+		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels: %v", err)
+	}
 	available, err := repo.IsAccountAvailableForCategory(ctx, "acc-unentitled", domain.CategoryGemini)
 	if err != nil || !available {
 		t.Fatalf("expected available for regular gemini, got %v err=%v", available, err)
@@ -506,91 +490,32 @@ func TestArgonEntitlement_EligibilityAndRouting(t *testing.T) {
 	if err != nil || !available {
 		t.Fatalf("expected available for claude_gpt, got %v err=%v", available, err)
 	}
-	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-unentitled", domain.CategoryGeminiArgon)
-	if err != nil || available {
-		t.Fatalf("expected unavailable for gemini_argon without entitlement, got %v err=%v", available, err)
+	eligible, err := repo.IsAccountEligibleForModel(ctx, "acc-unentitled", "gemini-4-argon-high")
+	if err != nil || eligible {
+		t.Fatalf("expected acc-unentitled ineligible for gemini-4-argon-high, got %v err=%v", eligible, err)
 	}
 
-	// GetNextAvailableForCategory / Model must exclude acc-unentitled.
-	next, err := repo.GetNextAvailableForCategory(ctx, domain.CategoryGeminiArgon, "")
-	if !errors.Is(err, domain.ErrNoAvailableAccount) {
-		t.Fatalf("expected ErrNoAvailableAccount for unentitled pool, got %+v err=%v", next, err)
-	}
-	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGeminiArgon, "gemini-4-argon-high", "")
+	next, err := repo.GetNextAvailableForModel(ctx, domain.CategoryGemini, "gemini-4-argon-high", "")
 	if !errors.Is(err, domain.ErrNoAvailableAccount) {
 		t.Fatalf("expected ErrNoAvailableAccount for model on unentitled pool, got %+v err=%v", next, err)
 	}
 
-	// Add acc-entitled with an Argon quota bucket.
+	// Add acc-entitled with discovered gemini-4-argon-high.
 	createEligibilityAccount(t, repo, ctx, "acc-entitled", "pro@example.com", false)
-	reset := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
-		VALUES ('acc-entitled', 'argon-weekly', 'Gemini 4 Argon Weekly Limit', 'weekly', 0.8, ?, ?)
-	`, reset, reset); err != nil {
-		t.Fatalf("seed argon bucket: %v", err)
+	if err := repo.UpsertAccountModels(ctx, "acc-entitled", []*domain.ModelInfo{
+		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModels: %v", err)
 	}
 
-	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-entitled", domain.CategoryGeminiArgon)
-	if err != nil || !available {
-		t.Fatalf("expected acc-entitled available for gemini_argon, got %v err=%v", available, err)
-	}
-
-	next, err = repo.GetNextAvailableForCategory(ctx, domain.CategoryGeminiArgon, "")
-	if err != nil || next == nil || next.ID != "acc-entitled" {
-		t.Fatalf("expected acc-entitled selected for gemini_argon, got %+v err=%v", next, err)
-	}
-	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGeminiArgon, "gemini-4-argon-high", "")
+	next, err = repo.GetNextAvailableForModel(ctx, domain.CategoryGemini, "gemini-4-argon-high", "")
 	if err != nil || next == nil || next.ID != "acc-entitled" {
 		t.Fatalf("expected acc-entitled selected for argon model, got %+v err=%v", next, err)
 	}
 
-	// Add acc-rules with an enabled Argon model rule (no bucket yet).
-	createEligibilityAccount(t, repo, ctx, "acc-rules", "rules@example.com", false)
-	if err := repo.UpsertAccountModels(ctx, "acc-rules", []*domain.ModelInfo{
-		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini_argon"},
-	}); err != nil {
-		t.Fatalf("UpsertAccountModels: %v", err)
-	}
-
-	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-rules", domain.CategoryGeminiArgon)
-	if err != nil || !available {
-		t.Fatalf("expected acc-rules available for gemini_argon via model rule, got %v err=%v", available, err)
-	}
-
-	// Add acc-pro with a Pro model rule (claude-opus-5-5-high)
-	createEligibilityAccount(t, repo, ctx, "acc-pro", "pro-user@example.com", false)
-	if err := repo.UpsertAccountModels(ctx, "acc-pro", []*domain.ModelInfo{
-		{ID: "claude-opus-5-5-high", DisplayName: "Claude Opus 5.5 (High)", Category: "claude_gpt"},
-	}); err != nil {
-		t.Fatalf("UpsertAccountModels: %v", err)
-	}
-
-	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-pro", domain.CategoryGeminiArgon)
-	if err != nil || !available {
-		t.Fatalf("expected acc-pro available for gemini_argon via 5.5 model rule, got %v err=%v", available, err)
-	}
-
-	// Add acc-pro-dot with dot notation in model rule (claude-sonnet-5.5-medium)
-	createEligibilityAccount(t, repo, ctx, "acc-pro-dot", "pro-dot@example.com", false)
-	if err := repo.UpsertAccountModels(ctx, "acc-pro-dot", []*domain.ModelInfo{
-		{ID: "claude-sonnet-5.5-medium", DisplayName: "Claude Sonnet 5.5 (Medium)", Category: "claude_gpt"},
-	}); err != nil {
-		t.Fatalf("UpsertAccountModels: %v", err)
-	}
-
-	available, err = repo.IsAccountAvailableForCategory(ctx, "acc-pro-dot", domain.CategoryGeminiArgon)
-	if err != nil || !available {
-		t.Fatalf("expected acc-pro-dot available for gemini_argon via 5.5 dot model rule, got %v err=%v", available, err)
-	}
-	hasArgon, err := repo.HasArgonEntitlement(ctx, "acc-pro-dot")
-	if err != nil || !hasArgon {
-		t.Fatalf("expected HasArgonEntitlement true for acc-pro-dot, got %v err=%v", hasArgon, err)
-	}
-
 	// Internal/tab/preview models are always eligible, even when disabled in DB rules
 	if err := repo.UpdateAccountModelRule(ctx, &domain.AccountModelRule{
-		AccountID: "acc-pro",
+		AccountID: "acc-entitled",
 		ModelID:   "tab_flash_lite_preview",
 		Enabled:   false,
 	}); err != nil {
