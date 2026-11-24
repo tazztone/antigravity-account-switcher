@@ -318,8 +318,7 @@ You can configure model fallback directly from the browser dashboard (`http://12
 - **Unified Model Fallback**: Click **↪** on any model row to open the anchored fallback popover. Configure Primary and Secondary models with configurable failover order: **Pool-first** (rotate all available pool accounts on the primary model before degrading quality) or **Same-account first** (degrade model tier on active account before rotating). Models are transparently grouped by account availability (`This Account` vs `Other Accounts in Pool`).
 - **Model Discovery**: Click the refresh button in the header to query active `language_server` / Cloud Code PA endpoints and populate model catalogs. Internal endpoints (`tab_*`, `chat_*`) are automatically filtered from the UI.
 - **Per-Account Model Support**: Each account card cleanly displays the models discovered and supported by that account's tier with reasoning effort pills and individual **↪** fallback policy triggers.
-- **Per-Category Pins & Bucket-Level Routing**: Pin accounts separately for Claude/GPT, Gemini, or Gemini 4 Argon (`POST /api/accounts/{id}/select` with `{"category": "..."}`). Each model group features direct bucket-level borders and inline controls showing active routing state: `🔄 Pool` (auto-failover) vs `🔒 Solo` (locks category to account, returning 429 on exhaustion to protect other accounts). Accounts can also opt out of entire model categories (`🚫 Off / Excluded`) with a single click (`PUT /api/accounts/{id}/categories`).
-- **Gemini 4 Argon Weekly Quota Tracking**: Argon weekly sliding quota is tracked independently with live progress bars, percentages, and reset cooldown timers alongside standard Claude and Gemini quotas.
+- **Per-Category Pins & Bucket-Level Routing**: Pin accounts separately for Claude/GPT or Gemini (`POST /api/accounts/{id}/select` with `{"category": "..."}`). Each model group features direct bucket-level borders and inline controls showing active routing state: `🔄 Pool` (auto-failover) vs `🔒 Solo` (locks category to account, returning 429 on exhaustion to protect other accounts). Accounts can also opt out of entire model categories (`🚫 Off / Excluded`) with a single click (`PUT /api/accounts/{id}/categories`).
 - **Consolidated Model Rows**: Repetitive reasoning effort variants (`High`, `Med`, `Low`, `Think`) are combined into single clean base-model rows with compact capability pills.
 - **Exclusive Model Routing Badges**: Models provided uniquely by a single account in the pool display an inline `[Pool Route ⚡]` badge with context-aware tooltips. Selecting an exclusive model in the IDE routes directly to its provider account even while that account or category is in `STANDBY`.
 - **Instant Hot-Reload**: Persisting fallback settings updates `config.json` and immediately applies changes to the running proxy engine without restarting Antigravity 2.0 or the daemon.
@@ -352,7 +351,7 @@ The embedded web server exposes local JSON and SSE endpoints (`http://127.0.0.1:
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/api/accounts` | `GET` | Lists all registered accounts, quota buckets, and active routing pointers. |
-| `/api/accounts/{id}/select` | `POST` | Pins an account globally or for a specific category (`claude_gpt`, `gemini`, `gemini_argon`). |
+| `/api/accounts/{id}/select` | `POST` | Pins an account globally or for a specific category (`claude_gpt`, `gemini`). |
 | `/api/accounts/{id}/categories` | `PUT` | Updates category opt-out exclusions (`disabled_categories`). |
 | `/api/accounts/{id}/models` | `PUT` | Toggles model enablement rules per account. |
 | `/api/accounts/{id}/models/select` | `POST` | Pins or unpins per-model priority routing (`model_ids`, `active`) on an account. |

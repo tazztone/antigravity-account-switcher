@@ -543,7 +543,7 @@ func (a *APIHandler) selectAccount(w http.ResponseWriter, r *http.Request, id st
 	case "", "all":
 		body.Category = "all"
 		err = a.accountRepo.SetActive(ctx, id)
-	case "claude_gpt", "gemini", "gemini_argon":
+	case "claude_gpt", "gemini":
 		cat := domain.ModelCategory(body.Category)
 		err = a.accountRepo.SetActiveForCategory(ctx, cat, id)
 		_ = a.accountRepo.SetAccountCategoryDisabled(ctx, id, cat, false)
@@ -639,7 +639,7 @@ func (a *APIHandler) updateAccountCategory(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	cat := domain.ModelCategory(req.Category)
-	if cat != domain.CategoryClaudeGPT && cat != domain.CategoryGemini && cat != domain.CategoryGeminiArgon {
+	if cat != domain.CategoryClaudeGPT && cat != domain.CategoryGemini {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid category", nil)
 		return
 	}

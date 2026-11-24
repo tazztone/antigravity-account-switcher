@@ -42,8 +42,11 @@ func TestServer_API_ModelRulesAndCategorySelect(t *testing.T) {
 	}
 
 	// Per-category select must not move the global active account.
-	if r := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":"gemini_argon"}`); r.StatusCode != 200 {
-		t.Fatalf("category select: %d", r.StatusCode)
+	if r := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":"gemini"}`); r.StatusCode != 200 {
+		t.Fatalf("select gemini status=%d", r.StatusCode)
+	}
+	if r := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":"gemini_argon"}`); r.StatusCode != 400 {
+		t.Fatalf("expected 400 for legacy gemini_argon select, got %d", r.StatusCode)
 	}
 	if a, _ := accRepo.GetActive(ctx); a.ID != "acc-1" {
 		t.Fatalf("global active changed to %s", a.ID)
@@ -70,16 +73,16 @@ func TestServer_API_ModelRulesAndCategorySelect(t *testing.T) {
 	for _, a := range list {
 		switch a.ID {
 		case "acc-1":
-			if len(a.ModelRules) != 1 || a.ModelRules[0].Enabled || a.ModelRules[0].Category != "gemini_argon" {
+			if len(a.ModelRules) != 1 || a.ModelRules[0].Enabled || a.ModelRules[0].Category != "gemini" {
 				t.Fatalf("unexpected rules: %+v", a.ModelRules)
 			}
 		case "acc-2":
 			found := false
 			for _, c := range a.ActiveCategories {
-				found = found || c == "gemini_argon"
+				found = found || c == "gemini"
 			}
 			if !found {
-				t.Fatalf("acc-2 active_categories missing gemini_argon: %v", a.ActiveCategories)
+				t.Fatalf("acc-2 active_categories missing gemini: %v", a.ActiveCategories)
 			}
 		}
 	}

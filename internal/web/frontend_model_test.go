@@ -119,7 +119,7 @@ const paidAcc = {
   status: 'active',
   is_active: true,
   active_models: [],
-  active_categories: ['claude_gpt', 'gemini_argon'],
+  active_categories: ['claude_gpt', 'gemini'],
   disabled_categories: [],
   buckets: [],
   model_rules: [
@@ -172,6 +172,21 @@ assert.ok(hydrogenSection.includes('Pool Route ⚡'), 'expected Pool Route badge
 // Verify solo Orchestrator suppresses spurious Std badge
 const orchestratorSection = paidCard.innerHTML.split('Orchestrator')[1] || '';
 assert.ok(!orchestratorSection.includes('model-tier-badge'), 'solo Orchestrator must not render a spurious Std badge');
+
+// Verify Orchestrator (Argon), (Carbon), (Neon) stay distinct rows with tier === ''
+const orchArgon = hooks.parseModelTierInfo({ model_id: 'gemini-pro-orchestrator-argon', display_name: 'Orchestrator (Argon)' });
+const orchCarbon = hooks.parseModelTierInfo({ model_id: 'gemini-pro-orchestrator', display_name: 'Orchestrator (Carbon)' });
+const orchNeon = hooks.parseModelTierInfo({ model_id: 'gemini-pro-orchestrator-neon', display_name: 'Orchestrator (Neon)' });
+assert.strictEqual(orchArgon.baseName, 'Orchestrator (Argon)');
+assert.strictEqual(orchArgon.tier, '');
+assert.strictEqual(orchCarbon.baseName, 'Orchestrator (Carbon)');
+assert.strictEqual(orchCarbon.tier, '');
+assert.strictEqual(orchNeon.baseName, 'Orchestrator (Neon)');
+assert.strictEqual(orchNeon.tier, '');
+
+// Verify 2 categories on paidCard (ROUTING (2/2), no Gemini 4 Argon card)
+assert.ok(paidCard.innerHTML.includes('ROUTING (2/2)'), 'expected ROUTING (2/2) badge on paidCard');
+assert.ok(!paidCard.innerHTML.includes('Gemini 4 Argon'), 'expected no separate Gemini 4 Argon card');
 
 // Verify stale discovered=false model is hidden on freeAcc card and model priority pin renders
 const freeCard = hooks.createAccountCard(freeAcc, exclusiveMap);

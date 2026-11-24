@@ -9,7 +9,7 @@
   let rawTimelineData = [];
   let rawAccountsData = [];
   let rawModelsData = [];
-  let rawCategoryModes = { claude_gpt: 'pool', gemini: 'pool', gemini_argon: 'pool' };
+  let rawCategoryModes = { claude_gpt: 'pool', gemini: 'pool' };
   let currentAppConfig = {
     model_primary: 'gemini-2.5-pro',
     model_secondary: 'gemini-2.5-flash',
@@ -408,7 +408,7 @@
     }
 
     // 2. Strip trailing disambiguated model-ID slug like (gemini-2.5-flash-lite) independently first
-    const disambigMatch = baseName.match(/\s*\(([a-z0-9_.-]+)\)$/i);
+    const disambigMatch = baseName.match(/\s*\(([a-z0-9._-]+-[a-z0-9._-]+)\)$/);
     if (disambigMatch) {
       const innerSlug = disambigMatch[1].toLowerCase();
       if (innerSlug.includes('xhigh') && innerSlug.includes('tiered')) tier = 'XHigh Tiered';
@@ -491,7 +491,7 @@
       getVisibleAccountModelRules(acc).forEach(r => {
         if (r.enabled === false) return;
         const g = getModelRuleCategory(r);
-        const catMap = { claude: 'claude_gpt', gemini: 'gemini', argon: 'gemini_argon' };
+        const catMap = { claude: 'claude_gpt', gemini: 'gemini' };
         const catKey = catMap[g] || g;
         if (catKey && disabledCats.includes(catKey)) return;
 
@@ -569,7 +569,7 @@
 
     svg.setAttribute('viewBox', `0 0 ${gridRect.width} ${gridRect.height}`);
 
-    const categories = ['claude_gpt', 'gemini', 'gemini_argon'];
+    const categories = ['claude_gpt', 'gemini'];
 
     categories.forEach(catKey => {
       const activeEl = accountsGrid.querySelector(`.quota-group.bucket-active-pool[data-category-group="${catKey}"]`);
@@ -668,12 +668,11 @@
 
     const claude5h = findBucket('5h', '3p') || findBucket('5h', 'claude');
     const claudeWeekly = findBucket('weekly', '3p') || findBucket('weekly', 'claude');
-    const argonWeekly = findBucket('weekly', 'argon');
-    const gemini5h = findBucket('5h', 'gemini', 'argon');
-    const geminiWeekly = findBucket('weekly', 'gemini', 'argon');
+    const gemini5h = findBucket('5h', 'gemini');
+    const geminiWeekly = findBucket('weekly', 'gemini');
 
     // Identify standard buckets to find any custom/other buckets
-    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly, argonWeekly].filter(Boolean));
+    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly].filter(Boolean));
     const extraBuckets = buckets.filter(b => !standardBucketSet.has(b));
 
     function isBucketDepleted(bucket) {
@@ -786,7 +785,7 @@
       return tier;
     }
 
-    const groupedRules = { claude: [], gemini: [], argon: [], preview: [] };
+    const groupedRules = { claude: [], gemini: [], preview: [] };
     rules.forEach(r => {
       const g = getModelRuleCategory(r);
       if (g && groupedRules[g]) {
@@ -794,13 +793,8 @@
       }
     });
 
-    const hasArgonAccess = Boolean(argonWeekly) ||
-      (groupedRules.argon && groupedRules.argon.length > 0) ||
-      rules.some(r => /5-5/i.test(r.model_id) || (/argon/i.test(r.model_id) && !r.model_id.includes('disabled')));
-
     const isClaudeExhausted = isBucketDepleted(claude5h) || isBucketDepleted(claudeWeekly);
     const isGeminiExhausted = isBucketDepleted(gemini5h) || isBucketDepleted(geminiWeekly);
-    const isArgonExhausted = hasArgonAccess && isBucketDepleted(argonWeekly);
 
     function getCategoryRouting(catKey, catLabel, isExhausted) {
       const isPinned = activeCats.includes(catKey);
@@ -895,7 +889,6 @@
 
     const claudeRouting = getCategoryRouting('claude_gpt', 'Claude/GPT', isClaudeExhausted);
     const geminiRouting = getCategoryRouting('gemini', 'Gemini', isGeminiExhausted);
-    const argonRouting = getCategoryRouting('gemini_argon', 'Argon', isArgonExhausted);
 
     function buildModelGroupRows(ruleList, groupKey) {
       if (!ruleList || ruleList.length === 0) return { count: 0, html: '' };
@@ -935,7 +928,7 @@
         item.tiers.sort((a, b) => getTierWeight(a.tier) - getTierWeight(b.tier));
       });
 
-      const catMap = { claude: 'claude_gpt', gemini: 'gemini', argon: 'gemini_argon' };
+      const catMap = { claude: 'claude_gpt', gemini: 'gemini' };
       const catKey = catMap[groupKey] || groupKey;
       const isPinned = activeCats.includes(catKey);
 
@@ -1084,7 +1077,6 @@
 
     const claudeModelsHtml = renderBucketModels('claude', groupedRules.claude);
     const geminiModelsHtml = renderBucketModels('gemini', groupedRules.gemini);
-    const argonModelsHtml = renderBucketModels('argon', groupedRules.argon);
 
     // Build Model Groups with Bucket-Level Borders
     let extraHtml = '';
@@ -1111,37 +1103,17 @@
         ${claudeModelsHtml}
       </div>
 
-      <!-- Group 2: Gemini Models -->
-      <div class="quota-group ${geminiRouting.groupClass}" data-category-group="gemini" data-in-pool="${geminiRouting.isInPool ? 'true' : 'false'}">
-        <div class="quota-group-header">
-          <span class="quota-group-name">Gemini Models</span>
-          ${geminiRouting.pillHtml}
-        </div>
-        ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
-        ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
-        ${geminiModelsHtml}
-      </div>
-
       <div class="quota-slot-tail">
-        <!-- Group 3: Gemini 4 Argon -->
-        ${hasArgonAccess ? `
-        <div class="quota-group ${argonRouting.groupClass}" data-category-group="gemini_argon" data-in-pool="${argonRouting.isInPool ? 'true' : 'false'}">
+        <!-- Group 2: Gemini Models -->
+        <div class="quota-group ${geminiRouting.groupClass}" data-category-group="gemini" data-in-pool="${geminiRouting.isInPool ? 'true' : 'false'}">
           <div class="quota-group-header">
-            <span class="quota-group-name">Gemini 4 Argon</span>
-            ${argonRouting.pillHtml}
+            <span class="quota-group-name">Gemini Models</span>
+            ${geminiRouting.pillHtml}
           </div>
-          ${renderQuotaRow('Weekly Sliding Limit', argonWeekly)}
-          ${argonModelsHtml}
+          ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
+          ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
+          ${geminiModelsHtml}
         </div>
-        ` : `
-        <div class="quota-group bucket-unentitled" data-category-group="gemini_argon" data-in-pool="false">
-          <div class="quota-group-header">
-            <span class="quota-group-name">Gemini 4 Argon</span>
-            <span class="badge-unentitled" title="This account does not have a paid Pro plan with Argon access">No Plan Access</span>
-          </div>
-          <div class="quota-row-unentitled">Not available on this account tier</div>
-        </div>
-        `}
 
         ${extraHtml}
       </div>
@@ -1149,7 +1121,6 @@
 
     // Total entitled, non-disabled categories for this account
     const entitledCats = ['claude_gpt', 'gemini'];
-    if (hasArgonAccess) entitledCats.push('gemini_argon');
     const enabledEntitledCats = entitledCats.filter(c => !disabledCats.includes(c));
     const activeEntitledCount = activeCats.filter(c => entitledCats.includes(c)).length;
     const allEntitledActive = entitledCats.length > 0 && activeEntitledCount === entitledCats.length;
@@ -1157,7 +1128,6 @@
     const isAllExhausted = enabledEntitledCats.length > 0 && enabledEntitledCats.every(c => {
       if (c === 'claude_gpt') return isClaudeExhausted;
       if (c === 'gemini') return isGeminiExhausted;
-      if (c === 'gemini_argon') return isArgonExhausted;
       return false;
     });
 
@@ -1480,9 +1450,6 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
     }
     if (cat === 'claude_gpt' || /claude|gpt|sonnet|opus|haiku|3p|openai|anthropic/i.test(mid)) {
       return 'claude';
-    }
-    if (cat === 'gemini_argon' || /argon/i.test(mid)) {
-      return 'argon';
     }
     if (isInternalOrPreviewModel(mid)) {
       return 'preview';
@@ -3205,8 +3172,7 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
 
     const cats = [
       { key: 'claude_gpt', label: 'Claude/GPT' },
-      { key: 'gemini', label: 'Gemini' },
-      { key: 'gemini_argon', label: 'Argon' }
+      { key: 'gemini', label: 'Gemini' }
     ];
 
     const chips = cats.map(c => {

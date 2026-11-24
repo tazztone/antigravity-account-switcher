@@ -154,8 +154,8 @@ func TestServer_API_CategorySyncPromotesGlobalActive(t *testing.T) {
 		t.Fatalf("expected acc-1 to be active initially, got %s", active.ID)
 	}
 
-	// Sequentially activate claude_gpt, gemini, and gemini_argon on acc-2
-	for _, cat := range []string{"claude_gpt", "gemini", "gemini_argon"} {
+	// Sequentially activate claude_gpt and gemini on acc-2
+	for _, cat := range []string{"claude_gpt", "gemini"} {
 		resp := do(http.MethodPost, "/api/accounts/acc-2/select", `{"category":"`+cat+`"}`)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("expected 200 activating %s, got %d", cat, resp.StatusCode)
