@@ -1062,6 +1062,25 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Unary response: capture usageMetadata on Cloud Code generation JSON responses (<=4MB)
+		if isCloudCode && !isPassThrough && resp.StatusCode == http.StatusOK &&
+			(h.metricsRepo != nil || h.eventBroadcaster != nil) && isGenerationRequestPath(currentPath) {
+			const maxUnaryInspectBytes = 4 * 1024 * 1024
+			prefix, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUnaryInspectBytes+1))
+			if len(prefix) > 0 {
+				_, _ = w.Write(prefix)
+			}
+			if len(prefix) <= maxUnaryInspectBytes && (readErr == nil || errors.Is(readErr, io.EOF)) {
+				telemetry := ExtractRequestTelemetry(r.Header, currentBody, currentModel, origModel)
+				isGzip := strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip")
+				RecordUnaryResponseUsage(prefix, isGzip, accID, currentPath, &telemetry, h.metricsRepo, h.eventBroadcaster)
+			} else {
+				_, _ = io.Copy(w, resp.Body)
+			}
+			_ = resp.Body.Close()
+			return
+		}
+
 		// Unary response: copy body directly
 		_, _ = io.Copy(w, resp.Body)
 		_ = resp.Body.Close()
@@ -1082,4 +1101,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "maximum upstream retries exceeded", http.StatusServiceUnavailable)
+}
+
+func isGenerationRequestPath(p string) bool {
+	lower := strings.ToLower(p)
+	return strings.Contains(lower, "generatecontent") ||
+		strings.Contains(lower, "streamgeneratecontent") ||
+		strings.Contains(lower, "complete") ||
+		strings.Contains(lower, "chat")
 }

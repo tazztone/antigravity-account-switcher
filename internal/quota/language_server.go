@@ -285,6 +285,7 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 				Window:            domain.QuotaWindow(windowName),
 				RemainingFraction: remFraction,
 				ResetTime:         resetTime,
+				Source:            "language_server",
 				UpdatedAt:         now,
 			}
 			buckets = append(buckets, bucket)

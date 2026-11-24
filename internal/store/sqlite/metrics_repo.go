@@ -32,8 +32,9 @@ func (r *MetricsRepository) Record(ctx context.Context, m *domain.TokenMetric) e
 	query := `
 		INSERT INTO token_metrics (
 			account_id, request_path, model, reasoning_mode, conversation_id,
-			prompt_tokens, candidates_tokens, total_tokens, cached_content_tokens, thoughts_tokens, timestamp
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			prompt_tokens, candidates_tokens, total_tokens, cached_content_tokens, thoughts_tokens,
+			tool_use_prompt_tokens, cache_creation_tokens, timestamp
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	res, err := r.db.ExecContext(ctx, query,
 		m.AccountID,
@@ -46,6 +47,8 @@ func (r *MetricsRepository) Record(ctx context.Context, m *domain.TokenMetric) e
 		m.TotalTokens,
 		m.CachedContentTokens,
 		m.ThoughtsTokens,
+		m.ToolUsePromptTokens,
+		m.CacheCreationTokens,
 		m.Timestamp.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
@@ -61,7 +64,59 @@ func (r *MetricsRepository) Record(ctx context.Context, m *domain.TokenMetric) e
 }
 
 // Compile-time interface check.
-var _ domain.ConversationMetricsRepository = (*MetricsRepository)(nil)
+var (
+	_ domain.ConversationMetricsRepository = (*MetricsRepository)(nil)
+	_ domain.TokenMetricQueryRepository    = (*MetricsRepository)(nil)
+)
+
+// ListMetricsSince retrieves raw token_metrics rows optionally filtered by accountID and start time.
+func (r *MetricsRepository) ListMetricsSince(ctx context.Context, accountID string, since time.Time) ([]*domain.TokenMetric, error) {
+	sinceStr := ""
+	if !since.IsZero() {
+		sinceStr = since.UTC().Format(time.RFC3339)
+	}
+	query := `
+		SELECT id, account_id, request_path, model, reasoning_mode, conversation_id,
+		       prompt_tokens, candidates_tokens, total_tokens, cached_content_tokens,
+		       thoughts_tokens, tool_use_prompt_tokens, cache_creation_tokens, timestamp
+		FROM token_metrics
+		WHERE (? = '' OR account_id = ?)
+		  AND (? = '' OR timestamp >= ?)
+		ORDER BY timestamp ASC, id ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, accountID, accountID, sinceStr, sinceStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list token metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.TokenMetric
+	for rows.Next() {
+		var m domain.TokenMetric
+		var tsStr string
+		if err := rows.Scan(
+			&m.ID,
+			&m.AccountID,
+			&m.RequestPath,
+			&m.Model,
+			&m.ReasoningMode,
+			&m.ConversationID,
+			&m.PromptTokens,
+			&m.CandidatesTokens,
+			&m.TotalTokens,
+			&m.CachedContentTokens,
+			&m.ThoughtsTokens,
+			&m.ToolUsePromptTokens,
+			&m.CacheCreationTokens,
+			&tsStr,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan token metric: %w", err)
+		}
+		m.Timestamp, _ = parseDBTime(tsStr)
+		out = append(out, &m)
+	}
+	return out, rows.Err()
+}
 
 // GetConversationSummaries returns aggregated token usage per conversation, ordered by last_seen DESC.
 func (r *MetricsRepository) GetConversationSummaries(ctx context.Context, limit int) ([]domain.ConversationSummary, error) {

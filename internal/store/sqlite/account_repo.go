@@ -69,10 +69,22 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 	query := `
 		INSERT INTO accounts (
 			id, email, refresh_token, access_token, token_expiry,
-			is_active, status, created_at, updated_at, disabled_categories
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			is_active, status, created_at, updated_at, disabled_categories,
+			plan_tier, monthly_cost_usd
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	disabledCats := strings.Join(acc.DisabledCategories, ",")
+	planTier := strings.TrimSpace(acc.PlanTier)
+	monthlyCost := acc.MonthlyCostUSD
+	if planTier == "" {
+		planTier = "ai_pro"
+	}
+	if planTier == "ai_pro" && monthlyCost <= 0 {
+		monthlyCost = 20.0
+	}
+	acc.PlanTier = planTier
+	acc.MonthlyCostUSD = monthlyCost
+
 	_, err = tx.ExecContext(ctx, query,
 		acc.ID,
 		acc.Email,
@@ -84,6 +96,8 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 		acc.CreatedAt.UTC().Format(time.RFC3339),
 		acc.UpdatedAt.UTC().Format(time.RFC3339),
 		disabledCats,
+		planTier,
+		monthlyCost,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "accounts.email") && strings.Contains(err.Error(), "UNIQUE") {
@@ -108,7 +122,7 @@ func (r *AccountRepository) Create(ctx context.Context, acc *domain.Account) err
 // GetByID retrieves an account by ID.
 func (r *AccountRepository) GetByID(ctx context.Context, id string) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories, plan_tier, monthly_cost_usd
 		FROM accounts
 		WHERE id = ?
 	`
@@ -119,7 +133,7 @@ func (r *AccountRepository) GetByID(ctx context.Context, id string) (*domain.Acc
 // GetByEmail retrieves an account by email.
 func (r *AccountRepository) GetByEmail(ctx context.Context, email string) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories, plan_tier, monthly_cost_usd
 		FROM accounts
 		WHERE email = ?
 	`
@@ -130,7 +144,7 @@ func (r *AccountRepository) GetByEmail(ctx context.Context, email string) (*doma
 // GetActive retrieves the single currently active account.
 func (r *AccountRepository) GetActive(ctx context.Context) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories, plan_tier, monthly_cost_usd
 		FROM accounts
 		WHERE is_active = 1
 		LIMIT 1
@@ -146,7 +160,7 @@ func (r *AccountRepository) GetActive(ctx context.Context) (*domain.Account, err
 // List returns all accounts in the pool ordered by creation date.
 func (r *AccountRepository) List(ctx context.Context) ([]*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories, plan_tier, monthly_cost_usd
 		FROM accounts
 		ORDER BY created_at ASC
 	`
@@ -293,7 +307,7 @@ func (r *AccountRepository) Delete(ctx context.Context, id string) error {
 // excluding the given account ID (for failover rotation).
 func (r *AccountRepository) GetNextAvailable(ctx context.Context, excludeID string) (*domain.Account, error) {
 	query := `
-		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories
+		SELECT id, email, refresh_token, access_token, token_expiry, is_active, status, created_at, updated_at, disabled_categories, plan_tier, monthly_cost_usd
 		FROM accounts
 		WHERE status = 'active'
 		  AND (? = '' OR id != ?)
@@ -320,7 +334,7 @@ func (r *AccountRepository) GetActiveForCategory(ctx context.Context, category d
 	}
 
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories, a.plan_tier, a.monthly_cost_usd
 		FROM accounts a
 		JOIN active_category_accounts aca ON a.id = aca.account_id
 		WHERE aca.category = ?
@@ -466,7 +480,7 @@ func (r *AccountRepository) GetNextAvailableForCategory(ctx context.Context, cat
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories, a.plan_tier, a.monthly_cost_usd
 		FROM accounts a
 		WHERE (? = '' OR a.id != ?)
 		  AND (',' || a.disabled_categories || ',') NOT LIKE '%,' || ? || ',%'
@@ -523,6 +537,8 @@ func (r *AccountRepository) scanAccount(scanner rowScanner) (*domain.Account, er
 		&createdStr,
 		&updatedStr,
 		&disabledCatsStr,
+		&acc.PlanTier,
+		&acc.MonthlyCostUSD,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -806,7 +822,7 @@ func (r *AccountRepository) GetNextAvailableForModel(ctx context.Context, catego
 	catStr := category.String()
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories, a.plan_tier, a.monthly_cost_usd
 		FROM accounts a
 		WHERE (? = '' OR a.id != ?)
 		  AND (',' || a.disabled_categories || ',') NOT LIKE '%,' || ? || ',%'
@@ -868,7 +884,7 @@ func (r *AccountRepository) GetActiveForModel(ctx context.Context, modelID strin
 	}
 
 	query := `
-		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories
+		SELECT a.id, a.email, a.refresh_token, a.access_token, a.token_expiry, a.is_active, a.status, a.created_at, a.updated_at, a.disabled_categories, a.plan_tier, a.monthly_cost_usd
 		FROM accounts a
 		JOIN active_model_accounts ama ON a.id = ama.account_id
 		WHERE ama.model_id = ?
@@ -1208,4 +1224,37 @@ func (r *AccountRepository) SetAccountCategoryDisabled(ctx context.Context, acco
 	}
 
 	return tx.Commit()
+}
+
+// Compile-time check for AccountPlanRepository.
+var _ domain.AccountPlanRepository = (*AccountRepository)(nil)
+
+// UpdatePlan updates the subscription plan tier and monthly USD cost for an account.
+func (r *AccountRepository) UpdatePlan(ctx context.Context, id, planTier string, monthlyCostUSD float64) error {
+	if id == "" {
+		return domain.ErrAccountNotFound
+	}
+	cleanTier := strings.TrimSpace(planTier)
+	if cleanTier == "" {
+		cleanTier = "ai_pro"
+	}
+	if monthlyCostUSD < 0 {
+		monthlyCostUSD = 0
+	}
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	res, err := r.db.ExecContext(ctx,
+		"UPDATE accounts SET plan_tier = ?, monthly_cost_usd = ?, updated_at = ? WHERE id = ?",
+		cleanTier, monthlyCostUSD, nowStr, id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update account plan: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.ErrAccountNotFound
+	}
+	return nil
 }

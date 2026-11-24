@@ -1280,6 +1280,7 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 			Timestamp: time.Now().UTC(),
 		})
 	}
+	f.recordExhaustionSnapshotLocked(ctx, exhaustedAcc.ID, category, resetTime)
 
 	// Broadcast EventTypeFailover429
 	msg := fmt.Sprintf("Account %s (%s) marked exhausted due to HTTP 429 / RESOURCE_EXHAUSTED", exhaustedAcc.Email, exhaustedAcc.ID)
@@ -1431,4 +1432,56 @@ func (f *FailoverEngine) emitEvent(event *domain.ProxyEvent) {
 		defer cancel()
 		_ = f.eventRepo.Record(ctx, event)
 	}
+}
+
+func (f *FailoverEngine) recordExhaustionSnapshotLocked(ctx context.Context, accountID string, category ModelCategory, resetTime time.Time) {
+	if f.quotaRepo == nil || category == CategoryUnknown {
+		return
+	}
+	snapRepo, ok := f.quotaRepo.(domain.QuotaSnapshotRepository)
+	if !ok {
+		return
+	}
+
+	domainCat := domain.ModelCategory(category.String())
+	bucketID := ""
+	displayName := ""
+	bucketReset := resetTime
+	if buckets, err := f.quotaRepo.GetByAccountID(ctx, accountID); err == nil {
+		for _, b := range buckets {
+			if b == nil || domain.CategorizeBucket(b.BucketID, b.DisplayName) != domainCat {
+				continue
+			}
+			wLower := strings.ToLower(string(b.Window))
+			if strings.Contains(wLower, "5h") || strings.Contains(wLower, "daily") || strings.Contains(strings.ToLower(b.BucketID), "5h") {
+				bucketID = b.BucketID
+				displayName = b.DisplayName
+				if !b.ResetTime.IsZero() && b.ResetTime.After(time.Now().UTC()) {
+					bucketReset = b.ResetTime
+				}
+				break
+			}
+		}
+	}
+	if bucketID == "" {
+		if domainCat == domain.CategoryClaudeGPT {
+			bucketID = accountID + "-3p-5h"
+			displayName = "Claude & GPT (5h)"
+		} else {
+			bucketID = accountID + "-gemini-5h"
+			displayName = "Gemini (5h)"
+		}
+	}
+
+	_, _ = snapRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{{
+		AccountID:         accountID,
+		BucketID:          bucketID,
+		DisplayName:       displayName,
+		Category:          domainCat.String(),
+		Window:            "5h",
+		RemainingFraction: 0.0,
+		ResetTime:         bucketReset,
+		Source:            "429_exhaustion",
+		CapturedAt:        time.Now().UTC(),
+	}})
 }

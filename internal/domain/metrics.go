@@ -33,6 +33,8 @@ type TokenMetric struct {
 	TotalTokens         int64     `json:"total_tokens"`
 	CachedContentTokens int64     `json:"cached_content_tokens"`
 	ThoughtsTokens      int64     `json:"thoughts_tokens,omitempty"`
+	ToolUsePromptTokens int64     `json:"tool_use_prompt_tokens,omitempty"`
+	CacheCreationTokens int64     `json:"cache_creation_tokens,omitempty"`
 	Timestamp           time.Time `json:"timestamp"`
 }
 
@@ -122,6 +124,11 @@ type TimezoneDailyHistoryRepository interface {
 // ConversationMetricsRepository defines per-conversation aggregated token metrics capability.
 type ConversationMetricsRepository interface {
 	GetConversationSummaries(ctx context.Context, limit int) ([]ConversationSummary, error)
+}
+
+// TokenMetricQueryRepository defines raw time-ordered token metric queries for valuation calibration.
+type TokenMetricQueryRepository interface {
+	ListMetricsSince(ctx context.Context, accountID string, since time.Time) ([]*TokenMetric, error)
 }
 
 // MetricsService specifies the use-case methods exposed to HTTP handlers and CLI.

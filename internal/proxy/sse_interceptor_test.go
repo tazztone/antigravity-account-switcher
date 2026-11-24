@@ -489,3 +489,37 @@ func TestSSEInterceptor_WithMeta(t *testing.T) {
 		t.Errorf("unexpected recorded metric fields: %+v", rec)
 	}
 }
+
+func TestRecordUnaryResponseUsage_GzipAndExtendedFields(t *testing.T) {
+	metricsRepo := &mockMetricsRepo{}
+	broadcaster := NewBroadcaster(10)
+
+	rawJSON := `{"response":{"usageMetadata":{"promptTokenCount":500,"candidatesTokenCount":100,"totalTokenCount":600,"cachedContentTokenCount":300,"thoughtsTokenCount":40,"toolUsePromptTokenCount":55,"cacheCreationInputTokenCount":75},"modelVersion":"claude-sonnet-5-5"}}`
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, _ = gz.Write([]byte(rawJSON))
+	_ = gz.Close()
+
+	meta := &RequestTelemetry{
+		RequestedModel: "claude-sonnet-5-5",
+		ReasoningMode:  "HIGH",
+		ConversationID: "conv-unary-1",
+	}
+	RecordUnaryResponseUsage(buf.Bytes(), true, "acc-unary", "/v1internal:generateContent", meta, metricsRepo, broadcaster)
+
+	var records []*domain.TokenMetric
+	for i := 0; i < 50; i++ {
+		records = metricsRepo.getRecords()
+		if len(records) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 recorded unary metric, got %d", len(records))
+	}
+	rec := records[0]
+	if rec.Model != "claude-sonnet-5-5" || rec.PromptTokens != 500 || rec.ToolUsePromptTokens != 55 || rec.CacheCreationTokens != 75 {
+		t.Fatalf("unexpected unary metric: %+v", rec)
+	}
+}

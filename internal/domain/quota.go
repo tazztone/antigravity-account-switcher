@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -24,7 +25,43 @@ type QuotaBucket struct {
 	RemainingFraction float64     `json:"remaining_fraction"` // 0.0 (exhausted) to 1.0 (full)
 	RemainingAmount   int64       `json:"remaining_amount"`   // Available requests or token units
 	ResetTime         time.Time   `json:"reset_time"`         // Point in time when quota refreshes
+	Source            string      `json:"source,omitempty"`   // "cloud_code", "language_server", "synthetic", "429_exhaustion"
 	UpdatedAt         time.Time   `json:"updated_at"`
+}
+
+// QuotaSnapshot records a historical quota observation for burn-rate calibration.
+type QuotaSnapshot struct {
+	ID                int64     `json:"id"`
+	AccountID         string    `json:"account_id"`
+	BucketID          string    `json:"bucket_id"`
+	DisplayName       string    `json:"display_name"`
+	Category          string    `json:"category"`
+	Window            string    `json:"window"`
+	RemainingFraction float64   `json:"remaining_fraction"`
+	RemainingAmount   int64     `json:"remaining_amount"`
+	ResetTime         time.Time `json:"reset_time"`
+	Source            string    `json:"source"`
+	CapturedAt        time.Time `json:"captured_at"`
+}
+
+// CategorizeBucket maps a quota bucket ID and display name to its canonical ModelCategory.
+func CategorizeBucket(bucketID, displayName string) ModelCategory {
+	idLower := strings.ToLower(bucketID)
+	nameLower := strings.ToLower(displayName)
+	if strings.Contains(idLower, "claude") || strings.Contains(idLower, "gpt") || strings.Contains(idLower, "3p") ||
+		strings.Contains(nameLower, "claude") || strings.Contains(nameLower, "gpt") || strings.Contains(nameLower, "3p") {
+		return CategoryClaudeGPT
+	}
+	if strings.Contains(idLower, "gemini") || strings.Contains(nameLower, "gemini") {
+		return CategoryGemini
+	}
+	return CategoryUnknown
+}
+
+// QuotaSnapshotRepository persists and queries append-only quota snapshots.
+type QuotaSnapshotRepository interface {
+	RecordSnapshotsIfChanged(ctx context.Context, snapshots []*QuotaSnapshot) (int, error)
+	ListSnapshots(ctx context.Context, accountID string, since time.Time) ([]*QuotaSnapshot, error)
 }
 
 // IsExhausted returns true if remaining quota fraction is zero or negligible.

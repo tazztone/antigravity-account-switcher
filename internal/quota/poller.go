@@ -351,7 +351,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 		buckets = b
 	}
 
-	// 2. Upsert buckets to SQLite
+	// 2. Upsert buckets to SQLite and append changed snapshots
 	if len(buckets) > 0 {
 		if replacer, ok := p.quotaRepo.(atomicBucketReplacer); ok {
 			if err := replacer.ReplaceBucketsForAccount(ctx, acc.ID, buckets); err != nil {
@@ -362,6 +362,32 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 			if err := p.quotaRepo.UpsertBuckets(ctx, buckets); err != nil {
 				return fmt.Errorf("failed to upsert quota buckets: %w", err)
 			}
+		}
+
+		if snapRepo, ok := p.quotaRepo.(domain.QuotaSnapshotRepository); ok {
+			snaps := make([]*domain.QuotaSnapshot, 0, len(buckets))
+			for _, b := range buckets {
+				if b == nil {
+					continue
+				}
+				src := b.Source
+				if src == "" {
+					src = "cloud_code"
+				}
+				snaps = append(snaps, &domain.QuotaSnapshot{
+					AccountID:         b.AccountID,
+					BucketID:          b.BucketID,
+					DisplayName:       b.DisplayName,
+					Category:          string(domain.CategorizeBucket(b.BucketID, b.DisplayName)),
+					Window:            string(b.Window),
+					RemainingFraction: b.RemainingFraction,
+					RemainingAmount:   b.RemainingAmount,
+					ResetTime:         b.ResetTime,
+					Source:            src,
+					CapturedAt:        now,
+				})
+			}
+			_, _ = snapRepo.RecordSnapshotsIfChanged(ctx, snaps)
 		}
 	}
 
@@ -537,6 +563,7 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		Window:            domain.QuotaWindow("5h"),
 		RemainingFraction: dailyFraction,
 		ResetTime:         dailyResetTime,
+		Source:            "synthetic",
 		UpdatedAt:         now,
 	}
 
@@ -547,6 +574,7 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		Window:            domain.QuotaWindow("weekly"),
 		RemainingFraction: weeklyFraction,
 		ResetTime:         weeklyResetTime,
+		Source:            "synthetic",
 		UpdatedAt:         now,
 	}
 
@@ -557,6 +585,7 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		Window:            domain.QuotaWindow("5h"),
 		RemainingFraction: 1.0,
 		ResetTime:         dailyResetTime,
+		Source:            "synthetic",
 		UpdatedAt:         now,
 	}
 
@@ -567,6 +596,7 @@ func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.A
 		Window:            domain.QuotaWindow("weekly"),
 		RemainingFraction: 1.0,
 		ResetTime:         weeklyResetTime,
+		Source:            "synthetic",
 		UpdatedAt:         now,
 	}
 
@@ -684,6 +714,7 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 					RemainingFraction: fraction,
 					RemainingAmount:   amount,
 					ResetTime:         resetTime,
+					Source:            "cloud_code",
 					UpdatedAt:         now,
 				})
 			}
@@ -738,6 +769,7 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 			RemainingFraction: fraction,
 			RemainingAmount:   amount,
 			ResetTime:         resetTime,
+			Source:            "cloud_code",
 			UpdatedAt:         now,
 		})
 	}
@@ -771,6 +803,7 @@ func (p *Poller) parseLegacyQuotaResponse(accountID string, r io.Reader) ([]*dom
 			RemainingFraction: b.RemainingFraction,
 			RemainingAmount:   b.RemainingAmount,
 			ResetTime:         t,
+			Source:            "cloud_code",
 			UpdatedAt:         now,
 		})
 	}

@@ -173,10 +173,62 @@ CREATE INDEX IF NOT EXISTS idx_active_model_accounts_account ON active_model_acc
 UPDATE account_model_rules SET category = 'gemini' WHERE category = 'gemini_argon';
 DELETE FROM active_category_accounts WHERE category = 'gemini_argon';
 DELETE FROM quota_buckets WHERE LOWER(bucket_id) LIKE '%argon%' OR LOWER(display_name) LIKE '%argon%';
-UPDATE accounts
-SET disabled_categories = TRIM(REPLACE(',' || disabled_categories || ',', ',gemini_argon,', ','), ','),
-    updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
-WHERE ',' || disabled_categories || ',' LIKE '%,gemini_argon,%';
+		UPDATE accounts
+		SET disabled_categories = TRIM(REPLACE(',' || disabled_categories || ',', ',gemini_argon,', ','), ','),
+		    updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+		WHERE ',' || disabled_categories || ',' LIKE '%,gemini_argon,%';
+`,
+	},
+	{
+		Version:     9,
+		Description: "plan_value_and_quota_snapshots",
+		SQL: `
+-- 13. Account plan metadata, extended token metrics, quota history snapshots, pricing overrides & competitor benchmarks
+ALTER TABLE accounts ADD COLUMN plan_tier TEXT NOT NULL DEFAULT 'ai_pro';
+ALTER TABLE accounts ADD COLUMN monthly_cost_usd REAL NOT NULL DEFAULT 20.0;
+
+ALTER TABLE token_metrics ADD COLUMN tool_use_prompt_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE token_metrics ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    bucket_id TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'unknown',
+    window TEXT NOT NULL,
+    remaining_fraction REAL NOT NULL,
+    remaining_amount INTEGER NOT NULL DEFAULT 0,
+    reset_time DATETIME NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'cloud_code',
+    captured_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_quota_snapshots_acc_bucket_time
+    ON quota_snapshots(account_id, bucket_id, captured_at);
+CREATE INDEX IF NOT EXISTS idx_quota_snapshots_captured_at
+    ON quota_snapshots(captured_at);
+
+CREATE TABLE IF NOT EXISTS model_pricing_overrides (
+    model_pattern TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL DEFAULT '',
+    input_per_million REAL NOT NULL,
+    cached_input_per_million REAL NOT NULL,
+    cache_write_per_million REAL NOT NULL DEFAULT 0,
+    output_per_million REAL NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS plan_benchmarks (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    plan_name TEXT NOT NULL,
+    monthly_cost_usd REAL NOT NULL,
+    window_5h_api_usd REAL NOT NULL DEFAULT 0,
+    weekly_api_usd REAL NOT NULL DEFAULT 0,
+    notes TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `,
 	},
 }

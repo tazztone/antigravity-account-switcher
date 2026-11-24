@@ -53,8 +53,15 @@ type Account struct {
 	IsActive           bool          `json:"is_active"`
 	Status             AccountStatus `json:"status"`
 	DisabledCategories []string      `json:"disabled_categories"`
+	PlanTier           string        `json:"plan_tier"`
+	MonthlyCostUSD     float64       `json:"monthly_cost_usd"`
 	CreatedAt          time.Time     `json:"created_at"`
 	UpdatedAt          time.Time     `json:"updated_at"`
+}
+
+// AccountPlanRepository updates subscription plan metadata for an account.
+type AccountPlanRepository interface {
+	UpdatePlan(ctx context.Context, id, planTier string, monthlyCostUSD float64) error
 }
 
 // IsCategoryDisabled reports whether the account has opted out of the specified category.

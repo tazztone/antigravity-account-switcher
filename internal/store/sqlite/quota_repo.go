@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
@@ -254,4 +256,178 @@ func (r *QuotaRepository) scanBucket(scanner rowScanner) (*domain.QuotaBucket, e
 	b.UpdatedAt, _ = parseDBTime(updatedStr)
 
 	return &b, nil
+}
+
+// Compile-time check for QuotaSnapshotRepository.
+var _ domain.QuotaSnapshotRepository = (*QuotaRepository)(nil)
+
+// RecordSnapshotsIfChanged appends quota snapshots for any bucket whose remaining_fraction,
+// reset_time (>2m shift), or 429_exhaustion source changed relative to its latest stored snapshot.
+func (r *QuotaRepository) RecordSnapshotsIfChanged(ctx context.Context, snapshots []*domain.QuotaSnapshot) (int, error) {
+	if len(snapshots) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin snapshot tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	latestStmt, err := tx.PrepareContext(ctx, `
+		SELECT remaining_fraction, reset_time, source
+		FROM quota_snapshots
+		WHERE account_id = ? AND bucket_id = ?
+		ORDER BY captured_at DESC, id DESC
+		LIMIT 1
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare latest snapshot query: %w", err)
+	}
+	defer latestStmt.Close()
+
+	insertStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO quota_snapshots (
+			account_id, bucket_id, display_name, category, window,
+			remaining_fraction, remaining_amount, reset_time, source, captured_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare insert snapshot statement: %w", err)
+	}
+	defer insertStmt.Close()
+
+	inserted := 0
+	now := time.Now().UTC()
+	for _, s := range snapshots {
+		if s == nil || s.AccountID == "" || s.BucketID == "" {
+			continue
+		}
+		capturedAt := s.CapturedAt
+		if capturedAt.IsZero() {
+			capturedAt = now
+		}
+		category := s.Category
+		if category == "" {
+			category = string(domain.CategorizeBucket(s.BucketID, s.DisplayName))
+		}
+		source := s.Source
+		if source == "" {
+			source = "cloud_code"
+		}
+
+		var prevFrac float64
+		var prevResetStr, prevSource string
+		err := latestStmt.QueryRowContext(ctx, s.AccountID, s.BucketID).Scan(&prevFrac, &prevResetStr, &prevSource)
+		shouldInsert := false
+		if err == sql.ErrNoRows {
+			shouldInsert = true
+		} else if err != nil {
+			return 0, fmt.Errorf("failed to check latest snapshot: %w", err)
+		} else {
+			if math.Abs(s.RemainingFraction-prevFrac) >= 1e-6 {
+				shouldInsert = true
+			} else if (source == "429_exhaustion") != (prevSource == "429_exhaustion") {
+				shouldInsert = true
+			} else {
+				prevReset, _ := parseDBTime(prevResetStr)
+				if resetTimeShifted(prevReset, s.ResetTime) {
+					shouldInsert = true
+				}
+			}
+		}
+
+		if !shouldInsert {
+			continue
+		}
+
+		resetStr := ""
+		if !s.ResetTime.IsZero() {
+			resetStr = s.ResetTime.UTC().Format(time.RFC3339)
+		}
+		res, insErr := insertStmt.ExecContext(ctx,
+			s.AccountID,
+			s.BucketID,
+			s.DisplayName,
+			category,
+			s.Window,
+			s.RemainingFraction,
+			s.RemainingAmount,
+			resetStr,
+			source,
+			capturedAt.UTC().Format(time.RFC3339),
+		)
+		if insErr != nil {
+			return 0, fmt.Errorf("failed to insert snapshot %s/%s: %w", s.AccountID, s.BucketID, insErr)
+		}
+		if id, idErr := res.LastInsertId(); idErr == nil {
+			s.ID = id
+		}
+		inserted++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit snapshots: %w", err)
+	}
+	return inserted, nil
+}
+
+func resetTimeShifted(a, b time.Time) bool {
+	if a.IsZero() && b.IsZero() {
+		return false
+	}
+	if a.IsZero() != b.IsZero() {
+		return true
+	}
+	diff := a.Sub(b)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff > 2*time.Minute
+}
+
+// ListSnapshots retrieves recorded quota snapshots optionally filtered by accountID and start time.
+func (r *QuotaRepository) ListSnapshots(ctx context.Context, accountID string, since time.Time) ([]*domain.QuotaSnapshot, error) {
+	sinceStr := ""
+	if !since.IsZero() {
+		sinceStr = since.UTC().Format(time.RFC3339)
+	}
+	query := `
+		SELECT id, account_id, bucket_id, display_name, category, window,
+		       remaining_fraction, remaining_amount, reset_time, source, captured_at
+		FROM quota_snapshots
+		WHERE (? = '' OR account_id = ?)
+		  AND (? = '' OR captured_at >= ?)
+		ORDER BY account_id ASC, bucket_id ASC, captured_at ASC, id ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, accountID, accountID, sinceStr, sinceStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list quota snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.QuotaSnapshot
+	for rows.Next() {
+		var s domain.QuotaSnapshot
+		var resetStr, capturedStr string
+		if err := rows.Scan(
+			&s.ID,
+			&s.AccountID,
+			&s.BucketID,
+			&s.DisplayName,
+			&s.Category,
+			&s.Window,
+			&s.RemainingFraction,
+			&s.RemainingAmount,
+			&resetStr,
+			&s.Source,
+			&capturedStr,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan quota snapshot: %w", err)
+		}
+		s.ResetTime, _ = parseDBTime(resetStr)
+		s.CapturedAt, _ = parseDBTime(capturedStr)
+		out = append(out, &s)
+	}
+	return out, rows.Err()
 }

@@ -18,12 +18,24 @@ import (
 
 // RawUsageMetadata represents the JSON structure of usageMetadata in Cloud Code PA and Gemini SSE chunks.
 type RawUsageMetadata struct {
-	PromptTokenCount        int64 `json:"promptTokenCount"`
-	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
-	TotalTokenCount         int64 `json:"totalTokenCount"`
-	CachedContentTokenCount int64 `json:"cachedContentTokenCount,omitempty"`
-	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount,omitempty"`
-	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount,omitempty"`
+	PromptTokenCount             int64 `json:"promptTokenCount"`
+	CandidatesTokenCount         int64 `json:"candidatesTokenCount"`
+	TotalTokenCount              int64 `json:"totalTokenCount"`
+	CachedContentTokenCount      int64 `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount           int64 `json:"thoughtsTokenCount,omitempty"`
+	ToolUsePromptTokenCount      int64 `json:"toolUsePromptTokenCount,omitempty"`
+	CacheCreationInputTokenCount int64 `json:"cacheCreationInputTokenCount,omitempty"`
+	CacheCreationInputTokens     int64 `json:"cache_creation_input_tokens,omitempty"`
+}
+
+func (u *RawUsageMetadata) cacheCreationTokens() int64 {
+	if u == nil {
+		return 0
+	}
+	if u.CacheCreationInputTokenCount > 0 {
+		return u.CacheCreationInputTokenCount
+	}
+	return u.CacheCreationInputTokens
 }
 
 // SSEChunk represents an event chunk supporting both nested (Google Cloud Code PA)
@@ -83,65 +95,7 @@ func StreamAndInterceptSSEWithMeta(
 	// Resilience: In defer, if capturedUsage != nil, persist asynchronously
 	// with a detached context so mid-stream disconnects never drop token metrics.
 	defer func() {
-		if capturedUsage != nil && (metricsRepo != nil || eventBroadcaster != nil) {
-			totTokens := capturedUsage.TotalTokenCount
-			if totTokens == 0 {
-				totTokens = capturedUsage.PromptTokenCount + capturedUsage.CandidatesTokenCount
-			}
-			model := capturedModelVersion
-			var reasoningMode, conversationID string
-			if meta != nil {
-				if model == "" {
-					model = meta.RequestedModel
-				}
-				reasoningMode = meta.ReasoningMode
-				conversationID = meta.ConversationID
-			}
-			metric := &domain.TokenMetric{
-				AccountID:           accountID,
-				RequestPath:         requestPath,
-				Model:               model,
-				ReasoningMode:       reasoningMode,
-				ConversationID:      conversationID,
-				PromptTokens:        capturedUsage.PromptTokenCount,
-				CandidatesTokens:    capturedUsage.CandidatesTokenCount,
-				TotalTokens:         totTokens,
-				CachedContentTokens: capturedUsage.CachedContentTokenCount,
-				ThoughtsTokens:      capturedUsage.ThoughtsTokenCount,
-				Timestamp:           time.Now().UTC(),
-			}
-
-			go func(m *domain.TokenMetric, u *RawUsageMetadata, mVer string) {
-				if metricsRepo != nil {
-					detachedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					_ = metricsRepo.Record(detachedCtx, m)
-					cancel()
-				}
-
-				if eventBroadcaster != nil {
-					details := map[string]any{
-						"account_id":            accountID,
-						"request_path":          requestPath,
-						"prompt_tokens":         u.PromptTokenCount,
-						"candidates_tokens":     u.CandidatesTokenCount,
-						"total_tokens":          m.TotalTokens,
-						"cached_content_tokens": u.CachedContentTokenCount,
-						"thoughts_tokens":       u.ThoughtsTokenCount,
-					}
-					if mVer != "" {
-						details["model_version"] = mVer
-					}
-					enrichTokenEventDetails(details, meta)
-					eventBroadcaster.Broadcast(&domain.ProxyEvent{
-						Type:      domain.EventTypeTokensCaptured,
-						AccountID: accountID,
-						Message:   formatUsageMessageWithMeta(u, mVer, meta),
-						Details:   details,
-						Timestamp: time.Now().UTC(),
-					})
-				}
-			}(metric, capturedUsage, capturedModelVersion)
-		}
+		recordUsageMetricAsync(capturedUsage, capturedModelVersion, accountID, requestPath, meta, metricsRepo, eventBroadcaster)
 	}()
 
 	for {
@@ -207,6 +161,119 @@ func parseSSEData(data []byte) (*RawUsageMetadata, string) {
 		modelVersion = chunk.ModelVersion
 	}
 	return usage, modelVersion
+}
+
+// RecordUnaryResponseUsage inspects a non-streaming Cloud Code / Gemini JSON response
+// (optionally gzip-encoded) and asynchronously records usageMetadata if present.
+func RecordUnaryResponseUsage(
+	body []byte,
+	isGzip bool,
+	accountID string,
+	requestPath string,
+	meta *RequestTelemetry,
+	metricsRepo domain.MetricsRepository,
+	eventBroadcaster domain.EventBroadcaster,
+) {
+	if len(body) == 0 || (metricsRepo == nil && eventBroadcaster == nil) {
+		return
+	}
+	raw := body
+	if isGzip || (len(body) >= 2 && body[0] == 0x1f && body[1] == 0x8b) {
+		gz, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		decompressed, err := io.ReadAll(io.LimitReader(gz, 8*1024*1024))
+		_ = gz.Close()
+		if err != nil {
+			return
+		}
+		raw = decompressed
+	}
+	if !bytes.Contains(raw, []byte("usageMetadata")) {
+		return
+	}
+	usage, mVer := parseSSEData(raw)
+	if usage == nil {
+		return
+	}
+	recordUsageMetricAsync(usage, mVer, accountID, requestPath, meta, metricsRepo, eventBroadcaster)
+}
+
+func recordUsageMetricAsync(
+	capturedUsage *RawUsageMetadata,
+	capturedModelVersion string,
+	accountID string,
+	requestPath string,
+	meta *RequestTelemetry,
+	metricsRepo domain.MetricsRepository,
+	eventBroadcaster domain.EventBroadcaster,
+) {
+	if capturedUsage == nil || (metricsRepo == nil && eventBroadcaster == nil) {
+		return
+	}
+	totTokens := capturedUsage.TotalTokenCount
+	if totTokens == 0 {
+		totTokens = capturedUsage.PromptTokenCount + capturedUsage.CandidatesTokenCount
+	}
+	model := capturedModelVersion
+	var reasoningMode, conversationID string
+	if meta != nil {
+		if model == "" {
+			model = meta.RequestedModel
+		}
+		reasoningMode = meta.ReasoningMode
+		conversationID = meta.ConversationID
+	}
+	cacheWrite := capturedUsage.cacheCreationTokens()
+	metric := &domain.TokenMetric{
+		AccountID:           accountID,
+		RequestPath:         requestPath,
+		Model:               model,
+		ReasoningMode:       reasoningMode,
+		ConversationID:      conversationID,
+		PromptTokens:        capturedUsage.PromptTokenCount,
+		CandidatesTokens:    capturedUsage.CandidatesTokenCount,
+		TotalTokens:         totTokens,
+		CachedContentTokens: capturedUsage.CachedContentTokenCount,
+		ThoughtsTokens:      capturedUsage.ThoughtsTokenCount,
+		ToolUsePromptTokens: capturedUsage.ToolUsePromptTokenCount,
+		CacheCreationTokens: cacheWrite,
+		Timestamp:           time.Now().UTC(),
+	}
+
+	go func(m *domain.TokenMetric, u *RawUsageMetadata, mVer string) {
+		if metricsRepo != nil {
+			detachedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = metricsRepo.Record(detachedCtx, m)
+			cancel()
+		}
+
+		if eventBroadcaster != nil {
+			details := map[string]any{
+				"account_id":             accountID,
+				"request_path":           requestPath,
+				"prompt_tokens":          u.PromptTokenCount,
+				"candidates_tokens":      u.CandidatesTokenCount,
+				"total_tokens":           m.TotalTokens,
+				"cached_content_tokens":  u.CachedContentTokenCount,
+				"thoughts_tokens":        u.ThoughtsTokenCount,
+				"tool_use_prompt_tokens": u.ToolUsePromptTokenCount,
+				"cache_creation_tokens":  m.CacheCreationTokens,
+			}
+			if mVer != "" {
+				details["model_version"] = mVer
+			}
+			enrichTokenEventDetails(details, meta)
+			eventBroadcaster.Broadcast(&domain.ProxyEvent{
+				Type:      domain.EventTypeTokensCaptured,
+				AccountID: accountID,
+				Message:   formatUsageMessageWithMeta(u, mVer, meta),
+				Details:   details,
+				Timestamp: time.Now().UTC(),
+			})
+		}
+	}(metric, capturedUsage, capturedModelVersion)
 }
 
 func formatUsageMessageWithMeta(u *RawUsageMetadata, modelVersion string, meta *RequestTelemetry) string {
