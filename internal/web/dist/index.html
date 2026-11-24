@@ -240,6 +240,182 @@
       </div>
     </section>
 
+    <!-- Section 3b: Plan Value & Competitor Comparison -->
+    <section class="panel" id="plan-value-section" aria-labelledby="plan-value-title">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <h2 id="plan-value-title" class="panel-title">
+            Plan Value &amp; Competitor Comparison
+            <span class="badge badge-info mono">Wokey / SemiAnalysis</span>
+          </h2>
+          <p class="panel-description">API-equivalent USD value calibrated from live proxy tokens &amp; monotonic quota deltas across your account pool</p>
+        </div>
+        <div class="panel-header-actions value-header-actions">
+          <div class="metrics-tabs value-period-tabs" role="tablist" aria-label="Plan Value Period" id="value-period-selector">
+            <button data-period="day" class="tab-btn" role="tab" aria-selected="false">24h</button>
+            <button data-period="week" class="tab-btn active" role="tab" aria-selected="true">7d</button>
+            <button data-period="month" class="tab-btn" role="tab" aria-selected="false">30d</button>
+            <button data-period="lifetime" class="tab-btn" role="tab" aria-selected="false">All Time</button>
+          </div>
+          <button id="btn-export-value-csv" class="btn btn-sm btn-secondary" title="Download calibration episodes &amp; model summary as CSV">Export CSV</button>
+          <button id="btn-export-value-json" class="btn btn-sm btn-secondary" title="Download full Plan Value JSON report">Export JSON</button>
+          <button id="btn-toggle-value-settings" class="btn btn-sm btn-secondary" aria-expanded="false">Edit Prices / Benchmarks</button>
+        </div>
+      </div>
+
+      <!-- Hero Summary Tiles -->
+      <div class="metrics-summary-grid" id="plan-value-tiles">
+        <div class="metric-tile">
+          <div class="metric-tile-label">Realized API Value</div>
+          <div id="val-realized-usd" class="metric-tile-value tabular-nums">$0.00</div>
+          <div id="val-realized-sub" class="stat-subtext">0 requests • 0 tokens</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-tile-label">Claude/GPT Weekly Cap / Seat</div>
+          <div id="val-claude-weekly" class="metric-tile-value tabular-nums">--</div>
+          <div id="val-claude-sub" class="stat-subtext">Collecting snapshots...</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-tile-label">Gemini Weekly Cap / Seat</div>
+          <div id="val-gemini-weekly" class="metric-tile-value tabular-nums">--</div>
+          <div id="val-gemini-sub" class="stat-subtext">Collecting snapshots...</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-tile-label">Combined AI Pro Multiplier</div>
+          <div id="val-combined-mult" class="metric-tile-value tabular-nums">--</div>
+          <div id="val-combined-sub" class="stat-subtext">Cache hit: 0%</div>
+        </div>
+      </div>
+
+      <!-- Unpriced Models Warning Banner -->
+      <div id="value-unpriced-banner" class="value-unpriced-banner hidden" role="status">
+        <span class="value-unpriced-text" id="value-unpriced-text"></span>
+        <button id="btn-fix-unpriced" type="button" class="btn btn-sm btn-secondary">Set Price</button>
+      </div>
+
+      <!-- Collapsible Pricing & Benchmark Editor Drawer -->
+      <div id="value-settings-drawer" class="value-settings-drawer hidden">
+        <div class="value-drawer-grid">
+          <div class="value-drawer-card">
+            <h3 class="value-subtable-title">Model API Pricing Override ($ / 1M tokens)</h3>
+            <form id="form-pricing-override" class="value-editor-form">
+              <div class="value-form-row">
+                <label class="value-field"><span>Pattern</span><input type="text" id="price-pattern" placeholder="e.g. claude-opus-5-5" required></label>
+                <label class="value-field"><span>Display Name</span><input type="text" id="price-display" placeholder="Claude Opus 5.5"></label>
+              </div>
+              <div class="value-form-row">
+                <label class="value-field"><span>Input $</span><input type="number" id="price-input" step="0.0001" min="0" value="5" required></label>
+                <label class="value-field"><span>Cache Read $</span><input type="number" id="price-cached" step="0.0001" min="0" value="0.5" required></label>
+                <label class="value-field"><span>Cache Write $</span><input type="number" id="price-write" step="0.0001" min="0" value="6.25" required></label>
+                <label class="value-field"><span>Output $</span><input type="number" id="price-output" step="0.0001" min="0" value="25" required></label>
+              </div>
+              <div class="value-form-actions">
+                <button type="submit" class="btn btn-sm btn-primary">Save Model Price</button>
+              </div>
+            </form>
+            <div id="pricing-overrides-list" class="value-override-chips"></div>
+          </div>
+
+          <div class="value-drawer-card">
+            <h3 class="value-subtable-title">Competitor Plan Benchmark ($ API Equivalent)</h3>
+            <form id="form-benchmark-override" class="value-editor-form">
+              <div class="value-form-row">
+                <label class="value-field"><span>ID</span><input type="text" id="bench-id" placeholder="claude-pro" required></label>
+                <label class="value-field"><span>Provider</span><input type="text" id="bench-provider" placeholder="Anthropic" required></label>
+                <label class="value-field"><span>Plan Name</span><input type="text" id="bench-plan" placeholder="Claude Pro" required></label>
+              </div>
+              <div class="value-form-row">
+                <label class="value-field"><span>Cost/mo $</span><input type="number" id="bench-cost" step="0.01" min="0" value="20" required></label>
+                <label class="value-field"><span>5h Cap $</span><input type="number" id="bench-5h" step="0.01" min="0" value="10" required></label>
+                <label class="value-field"><span>Weekly Cap $</span><input type="number" id="bench-weekly" step="0.01" min="0" value="50" required></label>
+              </div>
+              <div class="value-form-row">
+                <label class="value-field" style="flex:1;"><span>Notes</span><input type="text" id="bench-notes" placeholder="Editable reference baseline"></label>
+              </div>
+              <div class="value-form-actions">
+                <button type="submit" class="btn btn-sm btn-primary">Save Benchmark</button>
+              </div>
+            </form>
+            <div id="benchmarks-custom-list" class="value-override-chips"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Competitor Comparison Table -->
+      <div class="value-table-block">
+        <div class="value-table-header">
+          <h3 class="value-subtable-title">AGY vs Anthropic Claude &amp; OpenAI Codex</h3>
+          <span class="text-xs text-muted">Competitor rows are editable reference baselines; AGY rows update live from your pool</span>
+        </div>
+        <div class="value-table-scroll">
+          <table class="value-table" id="value-benchmarks-table">
+            <thead>
+              <tr>
+                <th>Plan</th>
+                <th class="num">Monthly</th>
+                <th class="num">5h Cap ($)</th>
+                <th class="num">Weekly Cap ($)</th>
+                <th class="num">Est. Monthly ($)</th>
+                <th class="num">Value / $1</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="value-benchmarks-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Per-Account Cohort & Per-Model Breakdown -->
+      <div class="value-split-grid">
+        <div class="value-table-block">
+          <div class="value-table-header">
+            <h3 class="value-subtable-title">Per-Account Cohort Comparison</h3>
+            <span class="text-xs text-muted">Spot A/B limit variance across seats</span>
+          </div>
+          <div class="value-table-scroll">
+            <table class="value-table" id="value-accounts-table">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Plan</th>
+                  <th class="num">Realized $</th>
+                  <th class="num">Cache %</th>
+                  <th class="num">Claude 5h / Wk</th>
+                  <th class="num">Gemini 5h / Wk</th>
+                  <th class="num">Est. ×</th>
+                </tr>
+              </thead>
+              <tbody id="value-accounts-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="value-table-block">
+          <div class="value-table-header">
+            <h3 class="value-subtable-title">Per-Model API Value Breakdown</h3>
+            <span class="text-xs text-muted">Uncached vs cached input &amp; output</span>
+          </div>
+          <div class="value-table-scroll">
+            <table class="value-table" id="value-models-table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th class="num">Reqs</th>
+                  <th class="num">Uncached In</th>
+                  <th class="num">Cached In</th>
+                  <th class="num">Out + Think</th>
+                  <th class="num">Cache %</th>
+                  <th class="num">API $</th>
+                  <th>Rate</th>
+                </tr>
+              </thead>
+              <tbody id="value-models-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Section 4: Real-Time Proxy Event Log -->
     <section class="panel" aria-labelledby="logs-section-title">
       <div class="panel-header logs-panel-header">

@@ -473,6 +473,16 @@ Sim! No Linux, o Antigravity 2.0 utiliza o mecanismo `AppImageUpdater` do Electr
 
 ---
 
+## Valor do Plano & Comparação com Concorrentes
+
+O painel web inclui a seção **Plan Value & Competitor Comparison** para comparar suas contas Google AI Pro / AI Ultra com planos da Anthropic (Claude Pro / Max) e OpenAI (ChatGPT Plus / Codex) em uma escala padronizada de valor equivalente de API (USD):
+
+- **Valoração Equivalente de API**: Tokens de streaming SSE e respostas unárias `usageMetadata` (entrada sem cache, leitura de cache, escrita de cache, tool-use, saída e thoughts sem dupla contagem) são convertidos com base nos preços oficiais por 1M de tokens (`GET/PUT/DELETE /api/analytics/pricing`).
+- **Calibração por Queima de Cota**: A tabela append-only `quota_snapshots` registra quedas monotônicas de `remaining_fraction` dentro de cada janela de reset (além das bordas de esgotamento 429) para estimar tetos implícitos de 5h e semanais por categoria (`claude_gpt` vs `gemini`) e multiplicadores de retorno (`×`).
+- **Comparação por Conta & Exportação**: Compare variações entre contas do pool, edite baselines de concorrentes (`GET/PUT/DELETE /api/analytics/benchmarks`) e planos por conta (`PUT /api/accounts/{id}/plan`), e exporte relatórios em CSV ou JSON (`GET /api/analytics/export`).
+
+---
+
 ## Segurança
 
 Consulte [SECURITY.md](SECURITY.md) para detalhes sobre políticas de reporte de vulnerabilidades e conformidade com a especificação RFC 8252 §8.5 para clientes OAuth 2.0 públicos.

@@ -5,6 +5,8 @@
 
   // Application State
   let currentPeriod = 'lifetime';
+  let currentValuePeriod = 'week';
+  let lastPlanValueReport = null;
   let eventSource = null;
   let rawTimelineData = [];
   let rawAccountsData = [];
@@ -114,6 +116,9 @@
     // Re-render accounts grid if accounts data loaded
     if (rawAccountsData && rawAccountsData.length > 0) {
       renderAccountsGrid();
+    }
+    if (lastPlanValueReport) {
+      renderPlanValueReport(lastPlanValueReport);
     }
 
     // Reapply log filtering to refresh blurred spans
@@ -1168,6 +1173,9 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             </button>
+            <span class="account-plan-wrap">
+              <button type="button" class="account-plan-badge" data-id="${escapeHtml(acc.id)}" title="Click to change subscription plan &amp; monthly cost">${escapeHtml(formatPlanBadge(acc.plan_tier, acc.monthly_cost_usd))}</button>
+            </span>
           </div>
         </div>
         <div class="badge ${statusBadgeClass}">
@@ -1208,6 +1216,65 @@
         e.stopPropagation();
         const toCopy = isPrivacyMode ? '[redacted@email.com]' : acc.email;
         copyToClipboard(toCopy, isPrivacyMode ? 'Redacted email' : 'Account email');
+      });
+    }
+
+    // Bind inline plan tier selector
+    const planBadge = card.querySelector('.account-plan-badge');
+    if (planBadge) {
+      planBadge.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wrap = planBadge.parentElement;
+        if (!wrap) return;
+        const select = document.createElement('select');
+        select.className = 'account-plan-select';
+        const curTier = acc.plan_tier || 'ai_pro';
+        const opts = [
+          { val: 'ai_pro:20', label: 'AI Pro ($20/mo)', tier: 'ai_pro' },
+          { val: 'ai_ultra:250', label: 'AI Ultra ($250/mo)', tier: 'ai_ultra' },
+          { val: 'free:0', label: 'Free ($0/mo)', tier: 'free' },
+          { val: 'custom', label: 'Custom $/mo...', tier: 'custom' }
+        ];
+        opts.forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o.val;
+          opt.textContent = o.label;
+          if (o.tier === curTier) opt.selected = true;
+          select.appendChild(opt);
+        });
+        wrap.innerHTML = '';
+        wrap.appendChild(select);
+        select.focus();
+
+        const commitPlan = async () => {
+          const val = select.value;
+          let nextTier = 'ai_pro';
+          let nextCost = 20;
+          if (val === 'custom') {
+            const entered = typeof window !== 'undefined' && typeof window.prompt === 'function'
+              ? window.prompt('Monthly subscription USD:', String(acc.monthly_cost_usd ?? 20))
+              : null;
+            if (entered === null) {
+              renderAccountsGrid();
+              return;
+            }
+            const parsed = parseFloat(entered);
+            if (isNaN(parsed) || parsed < 0) {
+              showToast('Invalid monthly cost', 'error');
+              renderAccountsGrid();
+              return;
+            }
+            nextTier = 'custom';
+            nextCost = parsed;
+          } else {
+            const parts = val.split(':');
+            nextTier = parts[0] || 'ai_pro';
+            nextCost = parseFloat(parts[1] || '20');
+          }
+          await updateAccountPlan(acc.id, nextTier, nextCost);
+        };
+        select.addEventListener('change', commitPlan);
+        select.addEventListener('blur', () => renderAccountsGrid());
       });
     }
 
@@ -3119,7 +3186,7 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
     });
 
     // Period selector buttons
-    const periodButtons = document.querySelectorAll('.metrics-tabs .tab-btn');
+    const periodButtons = document.querySelectorAll('#period-selector .tab-btn');
     periodButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         periodButtons.forEach(b => {
@@ -3132,6 +3199,106 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
         fetchMetrics();
       });
     });
+
+    // Plan Value period selector, export, & editor drawer
+    const valuePeriodButtons = document.querySelectorAll('#value-period-selector .tab-btn');
+    valuePeriodButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        valuePeriodButtons.forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-selected', 'false');
+        });
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+        currentValuePeriod = btn.getAttribute('data-period') || 'week';
+        fetchPlanValue();
+      });
+    });
+
+    const btnExportCsv = document.getElementById('btn-export-value-csv');
+    if (btnExportCsv) {
+      btnExportCsv.addEventListener('click', () => triggerValueExport('csv'));
+    }
+    const btnExportJson = document.getElementById('btn-export-value-json');
+    if (btnExportJson) {
+      btnExportJson.addEventListener('click', () => triggerValueExport('json'));
+    }
+    const btnToggleSettings = document.getElementById('btn-toggle-value-settings');
+    const drawer = document.getElementById('value-settings-drawer');
+    if (btnToggleSettings && drawer) {
+      btnToggleSettings.addEventListener('click', () => {
+        const hidden = drawer.classList.toggle('hidden');
+        btnToggleSettings.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+      });
+    }
+    const btnFixUnpriced = document.getElementById('btn-fix-unpriced');
+    if (btnFixUnpriced && drawer) {
+      btnFixUnpriced.addEventListener('click', () => {
+        drawer.classList.remove('hidden');
+        if (btnToggleSettings) btnToggleSettings.setAttribute('aria-expanded', 'true');
+        const firstUnpriced = lastPlanValueReport?.pool_summary?.unpriced_models?.[0] || '';
+        const patInput = document.getElementById('price-pattern');
+        if (patInput && firstUnpriced) {
+          patInput.value = firstUnpriced;
+          patInput.focus();
+        }
+      });
+    }
+
+    const pricingForm = document.getElementById('form-pricing-override');
+    if (pricingForm) {
+      pricingForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = {
+          model_pattern: document.getElementById('price-pattern')?.value?.trim() || '',
+          display_name: document.getElementById('price-display')?.value?.trim() || '',
+          input_per_million: parseFloat(document.getElementById('price-input')?.value || '0'),
+          cached_input_per_million: parseFloat(document.getElementById('price-cached')?.value || '0'),
+          cache_write_per_million: parseFloat(document.getElementById('price-write')?.value || '0'),
+          output_per_million: parseFloat(document.getElementById('price-output')?.value || '0')
+        };
+        try {
+          const res = await fetch('/api/analytics/pricing', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast(`Saved pricing override for ${payload.model_pattern}`, 'success');
+          await fetchPlanValue();
+        } catch (err) {
+          showToast(`Failed to save pricing: ${err.message}`, 'error');
+        }
+      });
+    }
+
+    const benchForm = document.getElementById('form-benchmark-override');
+    if (benchForm) {
+      benchForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = {
+          id: document.getElementById('bench-id')?.value?.trim() || '',
+          provider: document.getElementById('bench-provider')?.value?.trim() || '',
+          plan_name: document.getElementById('bench-plan')?.value?.trim() || '',
+          monthly_cost_usd: parseFloat(document.getElementById('bench-cost')?.value || '0'),
+          window_5h_api_usd: parseFloat(document.getElementById('bench-5h')?.value || '0'),
+          weekly_api_usd: parseFloat(document.getElementById('bench-weekly')?.value || '0'),
+          notes: document.getElementById('bench-notes')?.value?.trim() || ''
+        };
+        try {
+          const res = await fetch('/api/analytics/benchmarks', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast(`Saved benchmark ${payload.plan_name}`, 'success');
+          await fetchPlanValue();
+        } catch (err) {
+          showToast(`Failed to save benchmark: ${err.message}`, 'error');
+        }
+      });
+    }
   }
 
   function updateLastPollTime() {
@@ -3196,6 +3363,7 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
     renderFallbackPolicyBar();
     renderCategoryRouteChips();
     fetchMetrics();
+    fetchPlanValue();
 
     // Trigger one initial quota synchronization pass
     fetch('/api/quota/refresh', { method: 'POST' })
@@ -3210,6 +3378,7 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
         }
         updateLastPollTime();
         await fetchStatus();
+        fetchPlanValue();
       })
       .catch(() => {});
 
@@ -3221,8 +3390,275 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
       fetchStatus();
       fetchAccounts();
       fetchMetrics();
+      fetchPlanValue();
     }, 30000);
   });
+
+  // =========================================================================
+  // Plan Value, Cap Calibration & Competitor Benchmarking
+  // =========================================================================
+
+  function formatUSD(val) {
+    if (val === null || val === undefined || isNaN(val)) return '--';
+    const n = Number(val);
+    if (n > 0 && n < 0.01) return '$' + n.toFixed(4);
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function formatMultiplier(val) {
+    if (val === null || val === undefined || isNaN(val)) return '--';
+    return Number(val).toFixed(1) + 'x';
+  }
+
+  function formatPlanBadge(tier, costUSD) {
+    const t = String(tier || 'ai_pro').toLowerCase();
+    let label = 'AI Pro';
+    if (t === 'ai_ultra') label = 'AI Ultra';
+    else if (t === 'free') label = 'Free';
+    else if (t !== 'ai_pro') label = t;
+    const cost = (costUSD === null || costUSD === undefined || isNaN(costUSD)) ? (t === 'free' ? 0 : 20) : Number(costUSD);
+    return `${label} · $${cost % 1 === 0 ? cost.toFixed(0) : cost.toFixed(2)}/mo`;
+  }
+
+  function formatConfidenceBadge(conf) {
+    const c = String(conf || 'none').toLowerCase();
+    const cls = c === 'high' ? 'conf-high' : (c === 'medium' ? 'conf-medium' : (c === 'low' ? 'conf-low' : 'conf-none'));
+    return `<span class="value-conf-badge ${cls}">${escapeHtml(c)}</span>`;
+  }
+
+  function triggerValueExport(format) {
+    const url = `/api/analytics/export?period=${encodeURIComponent(currentValuePeriod)}&format=${encodeURIComponent(format)}`;
+    if (typeof document !== 'undefined' && document.createElement && document.body && typeof document.body.appendChild === 'function') {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `antigravity-plan-value-${currentValuePeriod}.${format}`;
+      document.body.appendChild(a);
+      if (typeof a.click === 'function') a.click();
+      if (typeof a.remove === 'function') a.remove();
+    }
+  }
+
+  async function updateAccountPlan(accountId, planTier, monthlyCostUSD) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/plan`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_tier: planTier, monthly_cost_usd: monthlyCostUSD })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast(`Updated plan to ${formatPlanBadge(planTier, monthlyCostUSD)}`, 'success');
+      await fetchAccounts();
+      await fetchPlanValue();
+    } catch (err) {
+      showToast(`Failed to update plan: ${err.message}`, 'error');
+      renderAccountsGrid();
+    }
+  }
+
+  async function fetchPlanValue() {
+    try {
+      const res = await fetch(`/api/analytics/value?period=${encodeURIComponent(currentValuePeriod)}`);
+      if (!res.ok) return;
+      const report = await res.json();
+      lastPlanValueReport = report;
+      renderPlanValueReport(report);
+    } catch (e) {
+      console.warn('Failed to fetch plan value report:', e);
+    }
+  }
+
+  function renderPlanValueReport(report) {
+    if (!report) return;
+    const pool = report.pool_summary || {};
+
+    const realizedEl = document.getElementById('val-realized-usd');
+    const realizedSub = document.getElementById('val-realized-sub');
+    if (realizedEl) realizedEl.textContent = formatUSD(pool.realized_api_usd || 0);
+    if (realizedSub) {
+      const multStr = pool.realized_multiplier != null ? ` • ${formatMultiplier(pool.realized_multiplier)} realized` : '';
+      realizedSub.textContent = `${formatNumber(pool.total_requests || 0)} reqs • ${formatCompactNumber(pool.total_tokens || 0)} tokens${multStr}`;
+    }
+
+    const claudeEl = document.getElementById('val-claude-weekly');
+    const claudeSub = document.getElementById('val-claude-sub');
+    if (claudeEl) {
+      claudeEl.innerHTML = pool.avg_claude_weekly_cap_usd != null
+        ? `${escapeHtml(formatUSD(pool.avg_claude_weekly_cap_usd))}${formatConfidenceBadge(pool.claude_weekly_confidence)}`
+        : '--';
+    }
+    if (claudeSub) {
+      claudeSub.textContent = (pool.claude_observed_delta || 0) >= 0.01
+        ? `Observed Δ ${(pool.claude_observed_delta * 100).toFixed(1)}% • 5h: ${formatUSD(pool.avg_claude_5h_cap_usd)}`
+        : 'Collecting snapshots (need ≥1% quota delta)';
+    }
+
+    const geminiEl = document.getElementById('val-gemini-weekly');
+    const geminiSub = document.getElementById('val-gemini-sub');
+    if (geminiEl) {
+      geminiEl.innerHTML = pool.avg_gemini_weekly_cap_usd != null
+        ? `${escapeHtml(formatUSD(pool.avg_gemini_weekly_cap_usd))}${formatConfidenceBadge(pool.gemini_weekly_confidence)}`
+        : '--';
+    }
+    if (geminiSub) {
+      geminiSub.textContent = (pool.gemini_observed_delta || 0) >= 0.01
+        ? `Observed Δ ${(pool.gemini_observed_delta * 100).toFixed(1)}% • 5h: ${formatUSD(pool.avg_gemini_5h_cap_usd)}`
+        : 'Collecting snapshots (need ≥1% quota delta)';
+    }
+
+    const multEl = document.getElementById('val-combined-mult');
+    const multSub = document.getElementById('val-combined-sub');
+    if (multEl) multEl.textContent = formatMultiplier(pool.combined_value_multiplier);
+    if (multSub) {
+      const cachePct = ((pool.cache_hit_rate || 0) * 100).toFixed(1);
+      const estMo = pool.avg_combined_monthly_cap_usd != null ? `≈ ${formatUSD(pool.avg_combined_monthly_cap_usd)}/mo • ` : '';
+      multSub.textContent = `${estMo}Cache hit: ${cachePct}%`;
+    }
+
+    // Unpriced warning banner
+    const unpricedBanner = document.getElementById('value-unpriced-banner');
+    const unpricedText = document.getElementById('value-unpriced-text');
+    const unpriced = Array.isArray(pool.unpriced_models) ? pool.unpriced_models : [];
+    if (unpricedBanner && unpricedText) {
+      if (unpriced.length > 0) {
+        unpricedBanner.classList.remove('hidden');
+        unpricedText.textContent = `Unpriced models excluded from USD total: ${unpriced.join(', ')}`;
+      } else {
+        unpricedBanner.classList.add('hidden');
+      }
+    }
+
+    // Competitor Benchmarks Table
+    const benchBody = document.getElementById('value-benchmarks-body');
+    if (benchBody) {
+      const rows = Array.isArray(report.benchmarks) ? report.benchmarks : [];
+      const maxVal = Math.max(1, ...rows.map(r => Number(r.value_per_dollar || 0)));
+      benchBody.innerHTML = rows.map(b => {
+        const mult = Number(b.value_per_dollar || 0);
+        const barPct = Math.min(100, Math.round((mult / maxVal) * 100));
+        const confHtml = b.is_measured ? formatConfidenceBadge(b.confidence) : '';
+        return `
+          <tr class="${b.is_measured ? 'is-measured-row' : ''}">
+            <td>${escapeHtml(b.plan_name)}${confHtml}</td>
+            <td class="num">${escapeHtml(formatUSD(b.monthly_cost_usd))}</td>
+            <td class="num">${b.window_5h_api_usd > 0 ? escapeHtml(formatUSD(b.window_5h_api_usd)) : '--'}</td>
+            <td class="num">${b.weekly_api_usd > 0 ? escapeHtml(formatUSD(b.weekly_api_usd)) : '--'}</td>
+            <td class="num">${b.est_monthly_api_usd > 0 ? escapeHtml(formatUSD(b.est_monthly_api_usd)) : '--'}</td>
+            <td class="num">
+              <div class="value-bar-wrap">
+                <span>${mult > 0 ? escapeHtml(formatMultiplier(mult)) : '--'}</span>
+                <div class="value-bar-track"><div class="value-bar-fill" style="width:${barPct}%"></div></div>
+              </div>
+            </td>
+            <td class="text-muted">${escapeHtml(b.notes || '')}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Per-Account Cohort Table (Privacy-Mode aware!)
+    const accBody = document.getElementById('value-accounts-body');
+    if (accBody) {
+      const accRows = Array.isArray(report.by_account) ? report.by_account : [];
+      const findCal = (cals, cat, win) => (cals || []).find(c => c.category === cat && c.window === win);
+      accBody.innerHTML = accRows.map(a => {
+        const displayEmail = isPrivacyMode ? '[redacted]' : a.email;
+        const c5h = findCal(a.calibrations, 'claude_gpt', '5h')?.implied_full_cap_usd;
+        const cWk = findCal(a.calibrations, 'claude_gpt', 'weekly')?.implied_full_cap_usd;
+        const g5h = findCal(a.calibrations, 'gemini', '5h')?.implied_full_cap_usd;
+        const gWk = findCal(a.calibrations, 'gemini', 'weekly')?.implied_full_cap_usd;
+        return `
+          <tr>
+            <td><span class="${isPrivacyMode ? 'blurred-email' : ''}">${escapeHtml(displayEmail)}</span></td>
+            <td>${escapeHtml(formatPlanBadge(a.plan_tier, a.monthly_cost_usd))}</td>
+            <td class="num">${escapeHtml(formatUSD(a.realized_api_usd))}</td>
+            <td class="num">${((a.cache_hit_rate || 0) * 100).toFixed(1)}%</td>
+            <td class="num">${escapeHtml(formatUSD(c5h))} / ${escapeHtml(formatUSD(cWk))}</td>
+            <td class="num">${escapeHtml(formatUSD(g5h))} / ${escapeHtml(formatUSD(gWk))}</td>
+            <td class="num">${escapeHtml(formatMultiplier(a.value_multiplier))}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Per-Model Breakdown Table
+    const modelsBody = document.getElementById('value-models-body');
+    if (modelsBody) {
+      const mRows = Array.isArray(report.by_model) ? report.by_model : [];
+      if (mRows.length === 0) {
+        modelsBody.innerHTML = `<tr><td colspan="8" class="text-muted">No token metrics recorded in this period yet.</td></tr>`;
+      } else {
+        modelsBody.innerHTML = mRows.map(m => {
+          const outTotal = (m.output_tokens || 0) + (m.thoughts_tokens || 0);
+          return `
+            <tr>
+              <td class="mono">${escapeHtml(m.model)}</td>
+              <td class="num">${formatNumber(m.requests)}</td>
+              <td class="num">${formatCompactNumber(m.uncached_input_tokens)}</td>
+              <td class="num">${formatCompactNumber(m.cached_input_tokens)}</td>
+              <td class="num">${formatCompactNumber(outTotal)}</td>
+              <td class="num">${((m.cache_hit_rate || 0) * 100).toFixed(1)}%</td>
+              <td class="num">${m.priced ? escapeHtml(formatUSD(m.api_value_usd)) : '<span class="text-warning">Unpriced</span>'}</td>
+              <td><button type="button" class="btn btn-sm btn-secondary btn-edit-model-price" data-pattern="${escapeHtml(m.pricing_pattern || m.model)}">${m.priced ? 'Edit' : 'Set Price'}</button></td>
+            </tr>
+          `;
+        }).join('');
+        modelsBody.querySelectorAll('.btn-edit-model-price').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const drawer = document.getElementById('value-settings-drawer');
+            const toggleBtn = document.getElementById('btn-toggle-value-settings');
+            if (drawer) drawer.classList.remove('hidden');
+            if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'true');
+            const pat = btn.dataset.pattern || '';
+            const existing = (report.pricing_catalog || []).find(p => p.model_pattern === pat);
+            const patEl = document.getElementById('price-pattern');
+            if (patEl) patEl.value = pat;
+            if (existing) {
+              if (document.getElementById('price-display')) document.getElementById('price-display').value = existing.display_name || '';
+              if (document.getElementById('price-input')) document.getElementById('price-input').value = existing.input_per_million;
+              if (document.getElementById('price-cached')) document.getElementById('price-cached').value = existing.cached_input_per_million;
+              if (document.getElementById('price-write')) document.getElementById('price-write').value = existing.cache_write_per_million;
+              if (document.getElementById('price-output')) document.getElementById('price-output').value = existing.output_per_million;
+            }
+          });
+        });
+      }
+    }
+
+    // Custom override chips inside editor drawer
+    const priceChips = document.getElementById('pricing-overrides-list');
+    if (priceChips) {
+      const overrides = (report.pricing_catalog || []).filter(p => p.is_override);
+      priceChips.innerHTML = overrides.map(p => `
+        <span class="value-override-chip">
+          <span>${escapeHtml(p.model_pattern)}: $${p.input_per_million}/$${p.output_per_million}</span>
+          <button type="button" data-pattern="${escapeHtml(p.model_pattern)}" title="Reset override">✕</button>
+        </span>
+      `).join('');
+      priceChips.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await fetch(`/api/analytics/pricing?model_pattern=${encodeURIComponent(btn.dataset.pattern)}`, { method: 'DELETE' });
+          await fetchPlanValue();
+        });
+      });
+    }
+
+    const benchChips = document.getElementById('benchmarks-custom-list');
+    if (benchChips) {
+      const customBench = (report.benchmarks || []).filter(b => b.is_custom && !b.is_measured);
+      benchChips.innerHTML = customBench.map(b => `
+        <span class="value-override-chip">
+          <span>${escapeHtml(b.plan_name)} ($${b.weekly_api_usd}/wk)</span>
+          <button type="button" data-id="${escapeHtml(b.id)}" title="Reset to default">✕</button>
+        </span>
+      `).join('');
+      benchChips.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await fetch(`/api/analytics/benchmarks?id=${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+          await fetchPlanValue();
+        });
+      });
+    }
+  }
 
   if (typeof globalThis !== 'undefined' && globalThis.__antigravityTestHooks) {
     Object.assign(globalThis.__antigravityTestHooks, {
@@ -3231,6 +3667,12 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
       getModelRuleCategory,
       computeExclusiveModelMap,
       createAccountCard,
+      formatUSD,
+      formatMultiplier,
+      formatPlanBadge,
+      formatConfidenceBadge,
+      renderPlanValueReport,
+      setPrivacyMode: (v) => { isPrivacyMode = Boolean(v); },
       setAccountsData: (accounts) => { rawAccountsData = accounts; },
       setAppConfig: (cfg) => { currentAppConfig = cfg; }
     });

@@ -209,6 +209,16 @@ assert.ok(freeCard.innerHTML.includes('model-rule-row is-model-pinned'), 'expect
 assert.ok(freeCard.innerHTML.includes('model-pin-btn is-pinned'), 'expected is-pinned button class on pinned model');
 assert.ok(freeCard.innerHTML.includes('● Priority'), 'expected active Priority pill label');
 assert.ok(freeCard.innerHTML.includes('ROUTING (1 MODEL)'), 'expected ROUTING (1 MODEL) header badge when only model pin is active');
+assert.ok(paidCard.innerHTML.includes('AI Pro · $20/mo'), 'expected account plan badge in card header');
+
+// 4. Plan Value formatting helpers
+assert.strictEqual(hooks.formatUSD(12.345), '$12.35');
+assert.strictEqual(hooks.formatUSD(0.0042), '$0.0042');
+assert.strictEqual(hooks.formatUSD(null), '--');
+assert.strictEqual(hooks.formatMultiplier(5.26), '5.3x');
+assert.strictEqual(hooks.formatPlanBadge('ai_ultra', 250), 'AI Ultra · $250/mo');
+assert.strictEqual(hooks.formatPlanBadge('free', 0), 'Free · $0/mo');
+assert.ok(hooks.formatConfidenceBadge('high').includes('conf-high'));
 `
 
 	tmpDir := t.TempDir()

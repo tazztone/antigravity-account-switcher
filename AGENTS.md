@@ -99,6 +99,7 @@ The codebase adheres strictly to **Clean Architecture / Hexagonal Principles**:
    - `internal/proxy/`: In-memory reverse and forward proxy, 100MB request buffer (`NewBufferedRequestWithLimit`), dynamic Bearer token replacement, failover engine, union model list fan-out, and SSE stream parsing.
    - `internal/launcher/`: Process supervisor. Couples process lifecycles via Linux `PR_SET_PDEATHSIG` (if switcher dies, child dies; if child exits, switcher terminates cleanly).
    - `internal/quota/`: Background daemon querying Google Cloud Code PA API endpoints and probing local `language_server` sockets.
+   - `internal/metrics/`: Token aggregation, API-equivalent USD valuation, monotonic `quota_snapshots` cap calibration, and competitor benchmark comparisons.
    - `internal/oauth/`: RFC 8252 loopback OAuth2 server for account onboarding.
    - `internal/web/`: HTTP server embedding frontend assets (`embed.FS`) and providing SSE event feeds.
 3. **Transition-Edge Event Logging (No Request-Level Flooding)**:
