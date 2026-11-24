@@ -243,11 +243,8 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 		if groupName == "" {
 			groupName = g.DisplayNameAlt
 		}
-		isArgon := strings.Contains(strings.ToLower(groupName), "argon")
 		if strings.Contains(strings.ToLower(groupName), "claude") {
 			groupName = "Claude & GPT"
-		} else if isArgon {
-			groupName = "Gemini 4 Argon"
 		} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 			groupName = "Gemini"
 		}
@@ -278,14 +275,6 @@ func QueryLocalLanguageServer(ctx context.Context, accountID string) ([]*domain.
 				windowName = "WEEKLY"
 			} else if strings.EqualFold(windowName, "5h") {
 				windowName = "5H"
-			}
-
-			if isArgon && !strings.Contains(strings.ToLower(rawBucketID), "argon") {
-				if strings.Contains(strings.ToLower(rawBucketID), "weekly") || strings.EqualFold(windowName, "WEEKLY") {
-					rawBucketID = "argon-weekly"
-				} else {
-					rawBucketID = "argon-" + rawBucketID
-				}
 			}
 
 			displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
@@ -573,14 +562,14 @@ func DefaultModelCatalog() []*domain.ModelInfo {
 		{ID: "gemini-3.1-pro-low", DisplayName: "Gemini 3.1 Pro (Low)", Category: "gemini", Recommended: true},
 		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini", Recommended: false},
 		{ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", Category: "gemini", Recommended: false},
-		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini_argon", Recommended: true},
-		{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon", Recommended: true},
-		{ID: "gemini-4-argon-low", DisplayName: "Gemini 4 Argon (Low)", Category: "gemini_argon", Recommended: true},
+		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini", Recommended: true},
+		{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini", Recommended: true},
+		{ID: "gemini-4-argon-low", DisplayName: "Gemini 4 Argon (Low)", Category: "gemini", Recommended: true},
 		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6 (Thinking)", Category: "claude_gpt", Recommended: true},
 		{ID: "claude-opus-4-6-thinking", DisplayName: "Claude Opus 4.6 (Thinking)", Category: "claude_gpt", Recommended: true},
 		{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B (Medium)", Category: "claude_gpt", Recommended: true},
 	}
 }
 
-// CategorizeModelID returns the category string (claude_gpt, gemini_argon, gemini) for a model ID.
+// CategorizeModelID returns the category string (claude_gpt, gemini) for a model ID.
 func CategorizeModelID(id string) string { return categorizeModelID(id) }

@@ -467,27 +467,27 @@ func (h *ProxyHandler) resolveEligibleAccount(
 	currentAcc *domain.Account,
 	category ModelCategory,
 	model string,
-) *domain.Account {
+) (*domain.Account, bool) {
 	if h.accountRepo == nil || currentAcc == nil || model == "" {
-		return nil
+		return nil, false
 	}
 	if category != CategoryUnknown {
 		mode, _ := h.accountRepo.GetCategoryRoutingMode(ctx, category)
 		if mode == domain.RoutingModeSolo {
-			return nil
+			return nil, false
 		}
 	}
 	normModel := NormalizeModelName(model)
 	eligible, err := h.accountRepo.IsAccountEligibleForModel(ctx, currentAcc.ID, normModel)
 	if err != nil || eligible {
-		return nil
+		return nil, false
 	}
 
 	next, nErr := h.accountRepo.GetNextAvailableForModel(ctx, category, normModel, currentAcc.ID)
 	if nErr != nil || next == nil || next.ID == currentAcc.ID {
-		return nil
+		return nil, true
 	}
-	return next
+	return next, false
 }
 
 // applyPredictiveFallback checks whether the incoming request targets an exhausted primary
@@ -659,9 +659,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if accErr != nil || acc == nil {
-			if origCategory != CategoryGeminiArgon {
-				acc, accErr = h.accountRepo.GetActive(ctx)
-			}
+			acc, accErr = h.accountRepo.GetActive(ctx)
 		}
 		if accErr != nil || acc == nil {
 			var nextAcc *domain.Account
@@ -669,7 +667,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if origCategory != CategoryUnknown {
 				nextAcc, nextErr = h.accountRepo.GetNextAvailableForCategory(ctx, origCategory, "")
 			}
-			if (nextErr != nil || nextAcc == nil) && origCategory != CategoryGeminiArgon {
+			if nextErr != nil || nextAcc == nil {
 				nextAcc, nextErr = h.accountRepo.GetNextAvailable(ctx, "")
 			}
 			if nextErr == nil && nextAcc != nil {
@@ -703,7 +701,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// or never discovered on it), transparently re-route to an eligible account
 	// instead of wasting an upstream request.
 	if isCloudCode && !isPassThrough && currentAcc != nil && origModel != "" && origCategory != CategoryUnknown {
-		if target := h.resolveEligibleAccount(ctx, currentAcc, origCategory, origModel); target != nil {
+		if target, blocked := h.resolveEligibleAccount(ctx, currentAcc, origCategory, origModel); blocked {
+			if r.Header.Get("Authorization") != "" {
+				isPassThrough = true
+			} else {
+				http.Error(w, "no eligible Google account for requested model", http.StatusServiceUnavailable)
+				return
+			}
+		} else if target != nil {
 			currentAcc = target
 		}
 	}
@@ -861,7 +866,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					bytes.Contains(bodyBytes, []byte("thoughtSignature")) ||
 					bytes.Contains(bodyBytes, []byte("Invalid `signature` in `thinking` block"))
 
-				if isThoughtSigErr && (CategorizeModel(currentModel) == CategoryGemini || CategorizeModel(currentModel) == CategoryGeminiArgon) {
+				if isThoughtSigErr && CategorizeModel(currentModel) == CategoryGemini {
 					// Attempt in-flight sanitization using skip_thought_signature_validator
 					if sanitized, sErr := SanitizeGeminiSignatures(currentBody); sErr == nil && !bytes.Equal(sanitized, currentBody) {
 						_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512*1024))
@@ -1017,7 +1022,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 						// Post-rotation model eligibility guard
 						if isCloudCode && !isPassThrough && currentAcc != nil && currentModel != "" && currentCategory != CategoryUnknown {
-							if target := h.resolveEligibleAccount(ctx, currentAcc, currentCategory, currentModel); target != nil {
+							if target, _ := h.resolveEligibleAccount(ctx, currentAcc, currentCategory, currentModel); target != nil {
 								currentAcc = target
 							}
 						}

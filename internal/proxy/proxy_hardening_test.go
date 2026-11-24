@@ -222,9 +222,9 @@ func TestStreamAndInterceptSSEWithMeta_NilMetricsRepoBroadcastsEvent(t *testing.
 	t.Error("expected EventTypeTokensCaptured to be broadcast even when metricsRepo is nil")
 }
 
-func TestGetPayloadAdapter_GeminiArgon(t *testing.T) {
-	if GetPayloadAdapter(CategoryGeminiArgon) != defaultGeminiAdapter {
-		t.Error("expected CategoryGeminiArgon to use defaultGeminiAdapter")
+func TestGetPayloadAdapter_GeminiArgonModel(t *testing.T) {
+	if GetPayloadAdapter(CategorizeModel("gemini-4-argon-high")) != defaultGeminiAdapter {
+		t.Error("expected gemini-4-argon-high to use defaultGeminiAdapter")
 	}
 }
 

@@ -276,8 +276,6 @@ func (f *FailoverEngine) UpdateQuotaCache(accountID string, buckets any) {
 		if cat == CategoryUnknown {
 			if MatchesBucket(b, CategoryClaudeGPT) {
 				cat = CategoryClaudeGPT
-			} else if MatchesBucket(b, CategoryGeminiArgon) {
-				cat = CategoryGeminiArgon
 			} else if MatchesBucket(b, CategoryGemini) {
 				cat = CategoryGemini
 			}
@@ -621,8 +619,6 @@ func (f *FailoverEngine) getAccountBucketsLocked(ctx context.Context, accountID 
 		if cat == CategoryUnknown {
 			if MatchesBucket(b, CategoryClaudeGPT) {
 				cat = CategoryClaudeGPT
-			} else if MatchesBucket(b, CategoryGeminiArgon) {
-				cat = CategoryGeminiArgon
 			} else if MatchesBucket(b, CategoryGemini) {
 				cat = CategoryGemini
 			}

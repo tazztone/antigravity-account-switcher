@@ -261,10 +261,6 @@ func (m *mockAccountRepo) IsAccountAvailableForCategory(ctx context.Context, acc
 	return acc.IsAvailable(), nil
 }
 
-func (m *mockAccountRepo) HasArgonEntitlement(ctx context.Context, accountID string) (bool, error) {
-	return true, nil
-}
-
 func (m *mockAccountRepo) GetCategoryRoutingMode(ctx context.Context, category domain.ModelCategory) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -290,9 +286,8 @@ func (m *mockAccountRepo) GetAllCategoryRoutingModes(ctx context.Context) (map[d
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	modes := map[domain.ModelCategory]string{
-		domain.CategoryClaudeGPT:   domain.RoutingModePool,
-		domain.CategoryGemini:      domain.RoutingModePool,
-		domain.CategoryGeminiArgon: domain.RoutingModePool,
+		domain.CategoryClaudeGPT: domain.RoutingModePool,
+		domain.CategoryGemini:    domain.RoutingModePool,
 	}
 	for k, v := range m.categoryModes {
 		modes[k] = v

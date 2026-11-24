@@ -455,7 +455,7 @@ var (
 // DetectAntigravityCLIVersion determines the Antigravity / AGY CLI semantic version.
 // It probes the CLI binary ('agy') with '--version'. If detection fails or returns a
 // version earlier than "1.4.10", it defaults to "1.4.10" so that Google Cloud Code PA
-// enables Gemini 4 Argon quota and models.
+// exposes modern Antigravity models and unified quota tiers.
 // If the target or resolved binary is a GUI application (e.g. 'antigravity-ide' or 'antigravity'),
 // process execution is skipped to prevent launching the heavy Electron runtime.
 func DetectAntigravityCLIVersion(overrideBin string) string {
@@ -542,7 +542,7 @@ func compareSemver(v1, v2 string) int {
 }
 
 // AntigravityUserAgent returns a User-Agent string simulating the Antigravity CLI
-// with at least version 1.4.10, ensuring Google Cloud Code PA exposes the Gemini 4 Argon tier.
+// with at least version 1.4.10, ensuring Google Cloud Code PA exposes modern Antigravity models and unified quota tiers.
 func AntigravityUserAgent(overrideBin string) string {
 	ver := DetectAntigravityCLIVersion(overrideBin)
 	return fmt.Sprintf("antigravity/cli/%s (aidev_client; os_type=%s; arch=%s; cl=976013059; auth_method=consumer)", ver, runtime.GOOS, runtime.GOARCH)

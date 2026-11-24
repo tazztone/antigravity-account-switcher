@@ -75,22 +75,30 @@ func TestArgonQuota_ParseResponse_OmitsArgonWhenMissing(t *testing.T) {
 	}
 }
 
-func TestArgonQuota_ParseResponse_RealUpstreamArgonPayload(t *testing.T) {
+func TestArgonQuota_ParseResponse_RealUpstreamGeminiPayload(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	p, err := NewPoller(accRepo, quotaRepo)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
 
-	// Real Google Cloud Code PA payload as returned to Pro accounts
+	// Real Google Cloud Code PA payload: Gemini 4 Argon shares Gemini Models 5h + weekly buckets
 	rawJSON := `{
 		"groups": [
 			{
-				"displayName": "GEMINI 4 ARGON",
-				"description": "For paid Pro plans, Argon quota is separate.",
+				"displayName": "Gemini Models",
+				"description": "Includes Gemini 4 Argon, Gemini 3.1 Pro, and Gemini Flash.",
 				"buckets": [
 					{
-						"displayName": "Gemini 4 Argon Weekly Limit",
+						"bucketId": "gemini-5h",
+						"displayName": "Gemini Models (5h)",
+						"window": "5H",
+						"remainingFraction": 0.9,
+						"resetTime": "2026-10-30T14:01:00Z"
+					},
+					{
+						"bucketId": "gemini-weekly",
+						"displayName": "Gemini Models (Weekly)",
 						"window": "WEEKLY",
 						"remainingFraction": 0.5526,
 						"resetTime": "2026-10-30T14:01:00Z"
@@ -105,58 +113,20 @@ func TestArgonQuota_ParseResponse_RealUpstreamArgonPayload(t *testing.T) {
 		t.Fatalf("parseQuotaResponse failed: %v", parseErr)
 	}
 
-	if len(buckets) != 1 {
-		t.Fatalf("expected 1 bucket for argon group, got %d", len(buckets))
+	if len(buckets) != 2 {
+		t.Fatalf("expected 2 buckets for Gemini Models group, got %d", len(buckets))
 	}
-	b := buckets[0]
-	if b.BucketID != "argon-weekly" {
-		t.Errorf("expected bucket ID argon-weekly, got %s", b.BucketID)
+	for _, b := range buckets {
+		if strings.Contains(strings.ToLower(b.BucketID), "argon") {
+			t.Errorf("expected no synthesized argon bucket, got %s", b.BucketID)
+		}
 	}
-	if b.RemainingFraction != 0.5526 {
-		t.Errorf("expected remaining fraction 0.5526, got %f", b.RemainingFraction)
-	}
-	expectedReset, _ := time.Parse(time.RFC3339, "2026-10-30T14:01:00Z")
-	if !b.ResetTime.Equal(expectedReset) {
-		t.Errorf("expected reset time %v, got %v", expectedReset, b.ResetTime)
+	if buckets[1].RemainingFraction != 0.5526 {
+		t.Errorf("expected remaining fraction 0.5526, got %f", buckets[1].RemainingFraction)
 	}
 }
 
-func TestArgonQuota_ParseResponse_ArgonGroupPrefixRewrite(t *testing.T) {
-	_, accRepo, quotaRepo := setupTestStore(t)
-	p, err := NewPoller(accRepo, quotaRepo)
-	if err != nil {
-		t.Fatalf("NewPoller: %v", err)
-	}
-
-	// Payload where upstream returns an Argon group with generic "weekly" bucketId
-	rawJSON := `{
-		"groups": [
-			{
-				"displayName": "Gemini 4 Argon",
-				"buckets": [
-					{"bucketId": "weekly", "window": "WEEKLY", "remainingFraction": 0.70, "resetTime": "2026-11-02T12:00:00Z"}
-				]
-			}
-		]
-	}`
-
-	buckets, parseErr := p.parseQuotaResponse("acc-test", strings.NewReader(rawJSON))
-	if parseErr != nil {
-		t.Fatalf("parseQuotaResponse failed: %v", parseErr)
-	}
-
-	if len(buckets) != 1 {
-		t.Fatalf("expected 1 bucket, got %d", len(buckets))
-	}
-	if buckets[0].BucketID != "argon-weekly" {
-		t.Errorf("expected bucket ID to be rewritten to argon-weekly, got %s", buckets[0].BucketID)
-	}
-	if buckets[0].RemainingFraction != 0.70 {
-		t.Errorf("expected remaining fraction 0.70, got %f", buckets[0].RemainingFraction)
-	}
-}
-
-func TestArgonQuota_PollAccount_PreservesActiveCooldown(t *testing.T) {
+func TestArgonQuota_PollAccount_ReplacesLegacyArgonBucket(t *testing.T) {
 	_, accRepo, quotaRepo := setupTestStore(t)
 	ctx := context.Background()
 
@@ -172,7 +142,7 @@ func TestArgonQuota_PollAccount_PreservesActiveCooldown(t *testing.T) {
 	}
 	_ = accRepo.Create(ctx, acc)
 
-	// Pre-seed an active cooldown on argon-weekly in SQLite
+	// Pre-seed a legacy argon-weekly bucket in SQLite
 	initialArgon := &domain.QuotaBucket{
 		AccountID:         acc.ID,
 		BucketID:          "argon-weekly",
@@ -214,23 +184,13 @@ func TestArgonQuota_PollAccount_PreservesActiveCooldown(t *testing.T) {
 		t.Fatalf("PollAccount failed: %v", pollErr)
 	}
 
-	var argonPolled *domain.QuotaBucket
 	for _, b := range polledBuckets {
-		if strings.Contains(b.BucketID, "argon") {
-			argonPolled = b
-			break
+		if strings.Contains(strings.ToLower(b.BucketID), "argon") {
+			t.Fatalf("expected legacy argon bucket to be replaced, got %+v", b)
 		}
 	}
-
-	if argonPolled == nil {
-		t.Fatalf("expected argon bucket in polled results")
-	}
-	// Verify that the active 0.0 fraction and cooldown resetTime were preserved
-	if argonPolled.RemainingFraction != 0.0 {
-		t.Errorf("expected active cooldown remaining fraction 0.0 to be preserved, got %f", argonPolled.RemainingFraction)
-	}
-	if !argonPolled.ResetTime.Equal(cooldownExpiry) {
-		t.Errorf("expected reset time %v, got %v", cooldownExpiry, argonPolled.ResetTime)
+	if len(polledBuckets) != 2 {
+		t.Fatalf("expected 2 polled buckets, got %d", len(polledBuckets))
 	}
 }
 

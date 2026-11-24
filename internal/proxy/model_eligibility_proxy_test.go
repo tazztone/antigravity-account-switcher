@@ -123,7 +123,7 @@ func newTwoAccountPool(t *testing.T, respond upstreamResponder) *eligibilityFixt
 
 	f.seedModels(t, "acc-paid",
 		&domain.ModelInfo{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt"},
-		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon"},
+		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini"},
 		&domain.ModelInfo{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini"},
 	)
 	f.seedModels(t, "acc-trial",
@@ -179,53 +179,52 @@ func TestPreFlightEligibility_EligibleModelStaysOnActiveAccount(t *testing.T) {
 	}
 }
 
-func TestGeminiArgonExhaustion_DoesNotLockOutRegularGemini(t *testing.T) {
+func TestGeminiArgonSharesGeminiQuota_ExhaustionBlocksBoth(t *testing.T) {
 	f := newTwoAccountPool(t, nil)
 
-	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
-		t.Fatalf("pin argon to paid: %v", err)
+	f.seedModels(t, "acc-paid",
+		&domain.ModelInfo{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Category: "gemini"},
+	)
+	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
+		t.Fatalf("pin gemini to paid: %v", err)
 	}
 
-	// Argon weekly bucket exhausted on paid; regular gemini buckets stay healthy.
+	// Exhausting shared gemini-5h on acc-paid rotates Gemini (and Argon) to acc-trial for regular Gemini,
+	// while Argon still requires model entitlement.
 	reset := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
 	if _, err := f.db.ExecContext(f.ctx, `
 		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
-		VALUES ('acc-paid', 'argon-weekly', 'Gemini Argon (weekly)', 'weekly', 0.0, ?, ?)
-	`, reset, reset); err != nil {
-		t.Fatalf("seed argon bucket: %v", err)
-	}
-	if _, err := f.db.ExecContext(f.ctx, `
-		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
-		VALUES ('acc-paid', 'gemini-5h', 'Gemini (5h)', '5h', 1.0, ?, ?)
+		VALUES ('acc-paid', 'gemini-5h', 'Gemini (5h)', '5h', 0.0, ?, ?)
 	`, reset, reset); err != nil {
 		t.Fatalf("seed gemini bucket: %v", err)
 	}
 
-	// A regular Gemini request must still reach the paid account.
+	// Regular Gemini request rotates to acc-trial.
 	rec := f.requestModel(t, "gemini-2.5-pro")
-
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for regular gemini despite argon exhaustion, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 200 for regular gemini via acc-trial, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "paid-token") {
-		t.Errorf("argon exhaustion must not lock out regular gemini, got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "trial-token") {
+		t.Errorf("expected regular gemini to rotate to acc-trial, got: %s", rec.Body.String())
 	}
-	if got := atomic.LoadInt64(f.hits); got != 1 {
-		t.Errorf("expected exactly 1 upstream hit, got %d", got)
+
+	// Argon request returns 503 because acc-paid's gemini-5h is exhausted and acc-trial lacks Argon entitlement.
+	rec = f.requestModel(t, "gemini-4-argon-medium")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for argon when paid gemini-5h exhausted and trial unentitled, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestExhaustionOnArgon_MarksOnlyArgonExhausted(t *testing.T) {
+func TestExhaustionOnArgon_RotatesSharedGeminiCategory(t *testing.T) {
 	f := newTwoAccountPool(t, nil)
 
-	// Seed Argon on trial so it has entitlement to receive the rotated argon category pin.
 	f.seedModels(t, "acc-trial",
-		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon"},
+		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini"},
 	)
 
-	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
-		t.Fatalf("pin argon to paid: %v", err)
-	}
+	f.seedModels(t, "acc-paid",
+		&domain.ModelInfo{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Category: "gemini"},
+	)
 	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
 		t.Fatalf("pin gemini to paid: %v", err)
 	}
@@ -236,15 +235,12 @@ func TestExhaustionOnArgon_MarksOnlyArgonExhausted(t *testing.T) {
 	}
 
 	engine := proxy.NewFailoverEngine(f.repo, nil, nil)
-	if _, err := engine.RotateAccountForCategory(f.ctx, paid, domain.CategoryGeminiArgon); err != nil {
-		t.Fatalf("RotateAccountForCategory(argon): %v", err)
+	if _, err := engine.RotateAccountForCategory(f.ctx, paid, domain.CategoryGemini); err != nil {
+		t.Fatalf("RotateAccountForCategory(gemini): %v", err)
 	}
 
-	if got := f.activeAccount(t, domain.CategoryGeminiArgon); got != "acc-trial" {
-		t.Errorf("argon pin should move to the next account, got %q", got)
-	}
-	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-paid" {
-		t.Errorf("regular gemini pin must stay on acc-paid after argon exhaustion, got %q", got)
+	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-trial" {
+		t.Errorf("shared gemini pin should move to acc-trial, got %q", got)
 	}
 }
 
@@ -298,28 +294,18 @@ func TestFailover_IgnoresIneligiblePinnedAccount(t *testing.T) {
 	}
 }
 
-func TestFailover_ArgonExhaustionIsolatesRegularGemini(t *testing.T) {
+func TestFailover_ArgonExhaustionRotatesSharedGemini(t *testing.T) {
 	f := newTwoAccountPool(t, nil)
 
-	// Trial can serve Argon too, so the argon rotation has a valid destination.
 	f.seedModels(t, "acc-trial",
-		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini_argon"},
+		&domain.ModelInfo{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini"},
 	)
 
-	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGeminiArgon, "acc-paid"); err != nil {
-		t.Fatalf("pin argon to paid: %v", err)
-	}
+	f.seedModels(t, "acc-paid",
+		&domain.ModelInfo{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Category: "gemini"},
+	)
 	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
 		t.Fatalf("pin gemini to paid: %v", err)
-	}
-
-	// The poller reports a healthy regular Gemini bucket on the paid account.
-	reset := "2026-12-31T00:00:00Z"
-	if _, err := f.db.ExecContext(f.ctx, `
-		INSERT INTO quota_buckets (account_id, bucket_id, display_name, window, remaining_fraction, reset_time, updated_at)
-		VALUES ('acc-paid', 'gemini-5h', 'Gemini (5h)', '5h', 0.8, ?, ?)
-	`, reset, reset); err != nil {
-		t.Fatalf("seed gemini bucket: %v", err)
 	}
 
 	paid, err := f.repo.GetByID(f.ctx, "acc-paid")
@@ -336,26 +322,8 @@ func TestFailover_ArgonExhaustionIsolatesRegularGemini(t *testing.T) {
 		t.Fatalf("expected argon traffic to rotate to acc-trial, got %+v", next)
 	}
 
-	// Only the argon category moved: regular Gemini keeps using the paid account.
-	if got := f.activeAccount(t, domain.CategoryGeminiArgon); got != "acc-trial" {
-		t.Errorf("argon pin should move to acc-trial, got %q", got)
-	}
-	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-paid" {
-		t.Errorf("gemini pin must stay on acc-paid, got %q", got)
-	}
-	available, err := f.repo.IsAccountAvailableForCategory(f.ctx, "acc-paid", domain.CategoryGemini)
-	if err != nil {
-		t.Fatalf("IsAccountAvailableForCategory(gemini): %v", err)
-	}
-	if !available {
-		t.Error("acc-paid must stay available for regular gemini after argon exhaustion")
-	}
-	available, err = f.repo.IsAccountAvailableForCategory(f.ctx, "acc-paid", domain.CategoryGeminiArgon)
-	if err != nil {
-		t.Fatalf("IsAccountAvailableForCategory(argon): %v", err)
-	}
-	if available {
-		t.Error("acc-paid must be unavailable for argon after argon exhaustion")
+	if got := f.activeAccount(t, domain.CategoryGemini); got != "acc-trial" {
+		t.Errorf("shared gemini pin should move to acc-trial, got %q", got)
 	}
 }
 
@@ -422,6 +390,9 @@ func TestProxy_ModelPriorityPin_OverridesCategoryBucket(t *testing.T) {
 	)
 
 	// Account paid is active for CategoryGemini; Account trial is pinned for gemini-3.8-flash-med.
+	f.seedModels(t, "acc-paid",
+		&domain.ModelInfo{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Category: "gemini"},
+	)
 	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
 		t.Fatalf("SetActiveForCategory: %v", err)
 	}
@@ -456,6 +427,9 @@ func TestProxy_ModelPriorityPin_FailsOverToCategoryActiveOn429AndPreservesPin(t 
 		return http.StatusOK, `{"token":"` + token + `"}`
 	})
 
+	f.seedModels(t, "acc-paid",
+		&domain.ModelInfo{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Category: "gemini"},
+	)
 	if err := f.repo.SetActiveForCategory(f.ctx, domain.CategoryGemini, "acc-paid"); err != nil {
 		t.Fatalf("SetActiveForCategory: %v", err)
 	}
