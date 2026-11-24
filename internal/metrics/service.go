@@ -14,6 +14,8 @@ import (
 type Service struct {
 	metricsRepo domain.MetricsRepository
 	accountRepo domain.AccountRepository
+	quotaRepo   domain.QuotaRepository
+	valueStore  domain.ValueAnalyticsRepository
 }
 
 // NewService constructs a new MetricsService.

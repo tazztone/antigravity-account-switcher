@@ -98,6 +98,8 @@ func setupE2EEnvironment(t *testing.T, pollInterval time.Duration) *TestEnvironm
 	}
 
 	metricsSvc := metrics.NewService(metricsRepo, accRepo)
+	metricsSvc.SetQuotaRepository(quotaRepo)
+	metricsSvc.SetValueStore(sqlite.NewValueRepository(db))
 	oauthSvc := oauth.NewOAuthService(
 		accRepo,
 		oauth.WithTokenURL(mockGoogle.URL+"/token"),

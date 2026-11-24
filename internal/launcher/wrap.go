@@ -331,6 +331,8 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		poller = pollerInstance
 
 		metricsService = metrics.NewService(metricsRepo, accRepo)
+		metricsService.SetQuotaRepository(quotaRepo)
+		metricsService.SetValueStore(sqlite.NewValueRepository(db))
 
 		serverInstance, err := web.NewServer(
 			accRepo,

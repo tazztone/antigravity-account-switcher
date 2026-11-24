@@ -219,6 +219,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.api.HandleMetrics(w, r)
 		return
 	}
+	if path == "/api/analytics/value" {
+		s.api.HandleAnalyticsValue(w, r)
+		return
+	}
+	if path == "/api/analytics/export" {
+		s.api.HandleAnalyticsExport(w, r)
+		return
+	}
+	if path == "/api/analytics/pricing" {
+		s.api.HandleAnalyticsPricing(w, r)
+		return
+	}
+	if path == "/api/analytics/benchmarks" {
+		s.api.HandleAnalyticsBenchmarks(w, r)
+		return
+	}
 	if path == "/api/conversations" {
 		s.api.HandleConversations(w, r)
 		return

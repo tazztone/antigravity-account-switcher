@@ -283,6 +283,15 @@ func (a *APIHandler) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "plan" {
+		if r.Method == http.MethodPut {
+			a.updateAccountPlan(w, r, accountID)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	if len(parts) == 3 && parts[1] == "models" && parts[2] == "select" {
 		if r.Method == http.MethodPost {
 			a.selectAccountModels(w, r, accountID)

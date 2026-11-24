@@ -320,6 +320,8 @@ func runServe(args []string) {
 	defer func() { _ = poller.Stop() }()
 
 	metricsService := metrics.NewService(metricsRepo, accRepo)
+	metricsService.SetQuotaRepository(quotaRepo)
+	metricsService.SetValueStore(sqlite.NewValueRepository(db))
 
 	server, err := web.NewServer(
 		accRepo,
@@ -947,8 +949,11 @@ func runStatus(args []string) {
 
 	ctx := context.Background()
 	accRepo := sqlite.NewAccountRepository(db)
+	quotaRepo := sqlite.NewQuotaRepository(db)
 	metricsRepo := sqlite.NewMetricsRepository(db)
 	metricsService := metrics.NewService(metricsRepo, accRepo)
+	metricsService.SetQuotaRepository(quotaRepo)
+	metricsService.SetValueStore(sqlite.NewValueRepository(db))
 
 	accounts, _ := accRepo.List(ctx)
 	active, err := accRepo.GetActive(ctx)

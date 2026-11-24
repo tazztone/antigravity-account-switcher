@@ -36,6 +36,8 @@ func setupTestWeb(t *testing.T) (*sqlite.DB, domain.AccountRepository, domain.Qu
 	metricsRepo := sqlite.NewMetricsRepository(db)
 	eventRepo := sqlite.NewEventRepository(db)
 	metricsSvc := metrics.NewService(metricsRepo, accRepo)
+	metricsSvc.SetQuotaRepository(quotaRepo)
+	metricsSvc.SetValueStore(sqlite.NewValueRepository(db))
 	broadcaster := proxy.NewBroadcaster(100)
 
 	return db, accRepo, quotaRepo, metricsRepo, metricsSvc, broadcaster, eventRepo
