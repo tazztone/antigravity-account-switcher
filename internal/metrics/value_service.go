@@ -969,13 +969,19 @@ func appendMeasuredBenchmarks(pool domain.PoolValueSummary, reports []domain.Acc
 	if combConf == "none" {
 		combConf = pool.GeminiWeeklyConfidence
 	}
+	combNotes := "Combined Claude/GPT + Gemini pools per AI Pro seat"
+	if pool.AvgClaudeWeeklyCapUSD == nil && pool.AvgGeminiWeeklyCapUSD != nil {
+		combNotes = "Partial lower bound: Gemini pool only (Claude/GPT needs >=1% delta)"
+	} else if pool.AvgClaudeWeeklyCapUSD != nil && pool.AvgGeminiWeeklyCapUSD == nil {
+		combNotes = "Partial lower bound: Claude/GPT pool only (Gemini needs >=1% delta)"
+	}
 	addMeasured(
 		"agy-ai-pro-combined",
 		"AGY AI Pro (Combined 2-pool)",
 		comb5hPtr,
 		pool.AvgCombinedWeeklyCapUSD,
 		combConf,
-		"Combined Claude/GPT + Gemini pools per AI Pro seat",
+		combNotes,
 	)
 
 	out = append(out, benchmarks...)

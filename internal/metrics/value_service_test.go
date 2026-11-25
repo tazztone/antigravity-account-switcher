@@ -348,4 +348,43 @@ func TestValueService_PreWindowAnchorAndCrossSourceContinuity(t *testing.T) {
 	if len(report.Episodes) != 1 || report.Episodes[0].SourceStart != "language_server" || report.Episodes[0].SourceEnd != "cloud_code" {
 		t.Fatalf("expected 1 cross-source episode, got %+v", report.Episodes)
 	}
+
+	// Verify Wokey.ai benchmark defaults and partial-pool combined note (Claude calibrated, Gemini uncalibrated).
+	benchByID := make(map[string]domain.PlanBenchmark, len(report.Benchmarks))
+	for _, b := range report.Benchmarks {
+		benchByID[b.ID] = b
+	}
+	if b := benchByID["claude-pro"]; b.WeeklyAPIUSD != 163.0 || b.Window5hAPIUSD != 13.0 {
+		t.Fatalf("unexpected claude-pro Wokey defaults: %+v", b)
+	}
+	if b := benchByID["codex-plus"]; b.WeeklyAPIUSD != 44.0 || b.Window5hAPIUSD != 7.10 {
+		t.Fatalf("unexpected codex-plus Wokey defaults: %+v", b)
+	}
+	// Trigger partial-pool note by adding a Claude weekly snapshot+metric check? Even better, test appendMeasuredBenchmarks logic via a weekly burn on Claude only.
+	resetWk := now.Add(5 * 24 * time.Hour)
+	_, err = quotaRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{
+		{AccountID: acc.ID, BucketID: acc.ID + "-3p-weekly", Category: "claude_gpt", Window: "weekly", RemainingFraction: 1.00, ResetTime: resetWk, Source: "cloud_code", CapturedAt: now.Add(-2 * time.Hour)},
+		{AccountID: acc.ID, BucketID: acc.ID + "-3p-weekly", Category: "claude_gpt", Window: "weekly", RemainingFraction: 0.90, ResetTime: resetWk, Source: "cloud_code", CapturedAt: now.Add(-1 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("RecordSnapshotsIfChanged weekly: %v", err)
+	}
+	if err := metricsRepo.Record(ctx, &domain.TokenMetric{
+		AccountID:        acc.ID,
+		Model:            "claude-opus-5-5",
+		CandidatesTokens: 80_000,
+		TotalTokens:      80_000,
+		Timestamp:        now.Add(-90 * time.Minute),
+	}); err != nil {
+		t.Fatalf("metricsRepo.Record weekly: %v", err)
+	}
+	partialReport, err := svc.GetPlanValueReport(ctx, domain.PeriodWeek, "")
+	if err != nil {
+		t.Fatalf("GetPlanValueReport partial: %v", err)
+	}
+	for _, b := range partialReport.Benchmarks {
+		if b.ID == "agy-ai-pro-combined" && b.Notes != "Partial lower bound: Claude/GPT pool only (Gemini needs >=1% delta)" {
+			t.Fatalf("expected partial lower bound note, got %q", b.Notes)
+		}
+	}
 }
