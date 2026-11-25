@@ -99,16 +99,40 @@ func TestServer_API_PlanValueAndBenchmarks(t *testing.T) {
 		t.Fatalf("expected ai_ultra/$250, got %s/$%v", updatedAcc.PlanTier, updatedAcc.MonthlyCostUSD)
 	}
 
-	// 4. PUT /api/analytics/pricing
-	priceReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/analytics/pricing", bytes.NewBufferString(`{"model_pattern":"custom-test","display_name":"Custom Test","input_per_million":2,"cached_input_per_million":0.2,"cache_write_per_million":2.5,"output_per_million":10}`))
+	// 4. PUT /api/analytics/pricing (with long-context tier + negative validation)
+	priceReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/analytics/pricing", bytes.NewBufferString(`{"model_pattern":"custom-test","display_name":"Custom Test","input_per_million":2,"cached_input_per_million":0.2,"cache_write_per_million":2.5,"output_per_million":10,"long_context_threshold":200000,"long_context_input_multiplier":2.0,"long_context_output_multiplier":1.5}`))
 	priceReq.Header.Set("Content-Type", "application/json")
 	priceResp, err := http.DefaultClient.Do(priceReq)
 	if err != nil {
 		t.Fatalf("PUT pricing: %v", err)
 	}
+	var pricingPayload struct {
+		Pricing []domain.ModelPricing `json:"pricing"`
+	}
+	_ = json.NewDecoder(priceResp.Body).Decode(&pricingPayload)
 	_ = priceResp.Body.Close()
 	if priceResp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT pricing status = %d", priceResp.StatusCode)
+	}
+	foundCustom := false
+	for _, p := range pricingPayload.Pricing {
+		if p.ModelPattern == "custom-test" && p.LongContextThreshold == 200_000 && p.LongContextInputMultiplier == 2.0 && p.LongContextOutputMultiplier == 1.5 {
+			foundCustom = true
+		}
+	}
+	if !foundCustom {
+		t.Fatalf("expected custom-test long-context fields persisted, got %+v", pricingPayload.Pricing)
+	}
+
+	badPriceReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/analytics/pricing", bytes.NewBufferString(`{"model_pattern":"bad","input_per_million":1,"long_context_input_multiplier":-1}`))
+	badPriceReq.Header.Set("Content-Type", "application/json")
+	badPriceResp, err := http.DefaultClient.Do(badPriceReq)
+	if err != nil {
+		t.Fatalf("PUT invalid pricing: %v", err)
+	}
+	_ = badPriceResp.Body.Close()
+	if badPriceResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400 on negative long-context multiplier, got %d", badPriceResp.StatusCode)
 	}
 
 	// 5. PUT /api/analytics/benchmarks

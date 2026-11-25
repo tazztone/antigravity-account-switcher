@@ -258,8 +258,9 @@ func (a *APIHandler) HandleAnalyticsPricing(w http.ResponseWriter, r *http.Reque
 			writeErrorJSON(w, http.StatusBadRequest, "model_pattern is required", nil)
 			return
 		}
-		if p.InputPerMillion < 0 || p.CachedInputPerMillion < 0 || p.CacheWritePerMillion < 0 || p.OutputPerMillion < 0 {
-			writeErrorJSON(w, http.StatusBadRequest, "pricing rates cannot be negative", nil)
+		if p.InputPerMillion < 0 || p.CachedInputPerMillion < 0 || p.CacheWritePerMillion < 0 || p.OutputPerMillion < 0 ||
+			p.LongContextThreshold < 0 || p.LongContextInputMultiplier < 0 || p.LongContextOutputMultiplier < 0 {
+			writeErrorJSON(w, http.StatusBadRequest, "pricing rates and long-context fields cannot be negative", nil)
 			return
 		}
 		if err := svc.UpsertPricingOverride(r.Context(), p); err != nil {

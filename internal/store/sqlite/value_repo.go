@@ -25,7 +25,8 @@ var _ domain.ValueAnalyticsRepository = (*ValueRepository)(nil)
 func (r *ValueRepository) ListPricingOverrides(ctx context.Context) ([]domain.ModelPricing, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT model_pattern, display_name, input_per_million, cached_input_per_million,
-		       cache_write_per_million, output_per_million
+		       cache_write_per_million, output_per_million,
+		       long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
 		FROM model_pricing_overrides
 		ORDER BY model_pattern ASC
 	`)
@@ -44,8 +45,16 @@ func (r *ValueRepository) ListPricingOverrides(ctx context.Context) ([]domain.Mo
 			&p.CachedInputPerMillion,
 			&p.CacheWritePerMillion,
 			&p.OutputPerMillion,
+			&p.LongContextThreshold,
+			&p.LongContextInputMultiplier,
+			&p.LongContextOutputMultiplier,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan pricing override: %w", err)
+		}
+		if p.LongContextThreshold <= 0 {
+			p.LongContextThreshold = 0
+			p.LongContextInputMultiplier = 0
+			p.LongContextOutputMultiplier = 0
 		}
 		p.IsOverride = true
 		out = append(out, p)
@@ -59,20 +68,33 @@ func (r *ValueRepository) UpsertPricingOverride(ctx context.Context, p domain.Mo
 	if pattern == "" {
 		return fmt.Errorf("model_pattern cannot be empty")
 	}
+	inMult := p.LongContextInputMultiplier
+	if inMult <= 0 {
+		inMult = 1.0
+	}
+	outMult := p.LongContextOutputMultiplier
+	if outMult <= 0 {
+		outMult = 1.0
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO model_pricing_overrides (
 			model_pattern, display_name, input_per_million, cached_input_per_million,
-			cache_write_per_million, output_per_million, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			cache_write_per_million, output_per_million,
+			long_context_threshold, long_context_input_multiplier, long_context_output_multiplier,
+			updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(model_pattern) DO UPDATE SET
 			display_name = excluded.display_name,
 			input_per_million = excluded.input_per_million,
 			cached_input_per_million = excluded.cached_input_per_million,
 			cache_write_per_million = excluded.cache_write_per_million,
 			output_per_million = excluded.output_per_million,
+			long_context_threshold = excluded.long_context_threshold,
+			long_context_input_multiplier = excluded.long_context_input_multiplier,
+			long_context_output_multiplier = excluded.long_context_output_multiplier,
 			updated_at = excluded.updated_at
-	`, pattern, p.DisplayName, p.InputPerMillion, p.CachedInputPerMillion, p.CacheWritePerMillion, p.OutputPerMillion, nowStr)
+	`, pattern, p.DisplayName, p.InputPerMillion, p.CachedInputPerMillion, p.CacheWritePerMillion, p.OutputPerMillion, p.LongContextThreshold, inMult, outMult, nowStr)
 	if err != nil {
 		return fmt.Errorf("failed to upsert pricing override: %w", err)
 	}

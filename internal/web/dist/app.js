@@ -1246,35 +1246,51 @@
         wrap.appendChild(select);
         select.focus();
 
+        let committing = false;
         const commitPlan = async () => {
-          const val = select.value;
-          let nextTier = 'ai_pro';
-          let nextCost = 20;
-          if (val === 'custom') {
-            const entered = typeof window !== 'undefined' && typeof window.prompt === 'function'
-              ? window.prompt('Monthly subscription USD:', String(acc.monthly_cost_usd ?? 20))
-              : null;
-            if (entered === null) {
-              renderAccountsGrid();
-              return;
+          if (committing) return;
+          committing = true;
+          try {
+            const val = select.value;
+            let nextTier = 'ai_pro';
+            let nextCost = 20;
+            if (val === 'custom') {
+              const entered = typeof window !== 'undefined' && typeof window.prompt === 'function'
+                ? window.prompt('Monthly subscription USD:', String(acc.monthly_cost_usd ?? 20))
+                : null;
+              if (entered === null) {
+                renderAccountsGrid();
+                return;
+              }
+              const parsed = parseFloat(entered);
+              if (isNaN(parsed) || parsed < 0) {
+                showToast('Invalid monthly cost', 'error');
+                renderAccountsGrid();
+                return;
+              }
+              nextTier = 'custom';
+              nextCost = parsed;
+            } else {
+              const parts = val.split(':');
+              nextTier = parts[0] || 'ai_pro';
+              nextCost = parseFloat(parts[1] || '20');
             }
-            const parsed = parseFloat(entered);
-            if (isNaN(parsed) || parsed < 0) {
-              showToast('Invalid monthly cost', 'error');
-              renderAccountsGrid();
-              return;
-            }
-            nextTier = 'custom';
-            nextCost = parsed;
-          } else {
-            const parts = val.split(':');
-            nextTier = parts[0] || 'ai_pro';
-            nextCost = parseFloat(parts[1] || '20');
+            await updateAccountPlan(acc.id, nextTier, nextCost);
+          } finally {
+            committing = false;
           }
-          await updateAccountPlan(acc.id, nextTier, nextCost);
         };
         select.addEventListener('change', commitPlan);
-        select.addEventListener('blur', () => renderAccountsGrid());
+        select.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Escape') {
+            ev.stopPropagation();
+            committing = true;
+            renderAccountsGrid();
+          }
+        });
+        select.addEventListener('blur', () => {
+          if (!committing) renderAccountsGrid();
+        });
       });
     }
 
@@ -3476,7 +3492,8 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
     if (realizedEl) realizedEl.textContent = formatUSD(pool.realized_api_usd || 0);
     if (realizedSub) {
       const multStr = pool.realized_multiplier != null ? ` • ${formatMultiplier(pool.realized_multiplier)} realized` : '';
-      realizedSub.textContent = `${formatNumber(pool.total_requests || 0)} reqs • ${formatCompactNumber(pool.total_tokens || 0)} tokens${multStr}`;
+      const legacyStr = (pool.legacy_unpriced_requests || 0) > 0 ? ` • ${formatNumber(pool.legacy_unpriced_requests)} legacy reqs excl.` : '';
+      realizedSub.textContent = `${formatNumber(pool.total_requests || 0)} reqs • ${formatCompactNumber(pool.total_tokens || 0)} tokens${multStr}${legacyStr}`;
     }
 
     const claudeEl = document.getElementById('val-claude-weekly');
@@ -3487,9 +3504,14 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
         : '--';
     }
     if (claudeSub) {
-      claudeSub.textContent = (pool.claude_observed_delta || 0) >= 0.01
-        ? `Observed Δ ${(pool.claude_observed_delta * 100).toFixed(1)}% • 5h: ${formatUSD(pool.avg_claude_5h_cap_usd)}`
-        : 'Collecting snapshots (need ≥1% quota delta)';
+      if ((pool.claude_observed_delta || 0) >= 0.01) {
+        const spread = (pool.min_claude_weekly_cap_usd != null && pool.max_claude_weekly_cap_usd != null)
+          ? ` • Seats ${formatUSD(pool.min_claude_weekly_cap_usd)}–${formatUSD(pool.max_claude_weekly_cap_usd)}`
+          : '';
+        claudeSub.textContent = `Observed Δ ${(pool.claude_observed_delta * 100).toFixed(1)}% • 5h: ${formatUSD(pool.avg_claude_5h_cap_usd)}${spread}`;
+      } else {
+        claudeSub.textContent = 'Collecting snapshots (need ≥1% quota delta)';
+      }
     }
 
     const geminiEl = document.getElementById('val-gemini-weekly');
@@ -3500,9 +3522,14 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
         : '--';
     }
     if (geminiSub) {
-      geminiSub.textContent = (pool.gemini_observed_delta || 0) >= 0.01
-        ? `Observed Δ ${(pool.gemini_observed_delta * 100).toFixed(1)}% • 5h: ${formatUSD(pool.avg_gemini_5h_cap_usd)}`
-        : 'Collecting snapshots (need ≥1% quota delta)';
+      if ((pool.gemini_observed_delta || 0) >= 0.01) {
+        const spread = (pool.min_gemini_weekly_cap_usd != null && pool.max_gemini_weekly_cap_usd != null)
+          ? ` • Seats ${formatUSD(pool.min_gemini_weekly_cap_usd)}–${formatUSD(pool.max_gemini_weekly_cap_usd)}`
+          : '';
+        geminiSub.textContent = `Observed Δ ${(pool.gemini_observed_delta * 100).toFixed(1)}% • 5h: ${formatUSD(pool.avg_gemini_5h_cap_usd)}${spread}`;
+      } else {
+        geminiSub.textContent = 'Collecting snapshots (need ≥1% quota delta)';
+      }
     }
 
     const multEl = document.getElementById('val-combined-mult');
@@ -3536,6 +3563,9 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
         const mult = Number(b.value_per_dollar || 0);
         const barPct = Math.min(100, Math.round((mult / maxVal) * 100));
         const confHtml = b.is_measured ? formatConfidenceBadge(b.confidence) : '';
+        const actionHtml = b.is_measured
+          ? '<span class="badge badge-info">Live</span>'
+          : `<button type="button" class="btn btn-sm btn-secondary btn-edit-benchmark" data-id="${escapeHtml(b.id)}">Edit</button>`;
         return `
           <tr class="${b.is_measured ? 'is-measured-row' : ''}">
             <td>${escapeHtml(b.plan_name)}${confHtml}</td>
@@ -3550,9 +3580,29 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
               </div>
             </td>
             <td class="text-muted">${escapeHtml(b.notes || '')}</td>
+            <td>${actionHtml}</td>
           </tr>
         `;
       }).join('');
+      benchBody.querySelectorAll('.btn-edit-benchmark').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const drawer = document.getElementById('value-settings-drawer');
+          const toggleBtn = document.getElementById('btn-toggle-value-settings');
+          if (drawer) drawer.classList.remove('hidden');
+          if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'true');
+          const existing = rows.find(r => r.id === btn.dataset.id);
+          if (!existing) return;
+          if (document.getElementById('bench-id')) document.getElementById('bench-id').value = existing.id || '';
+          if (document.getElementById('bench-provider')) document.getElementById('bench-provider').value = existing.provider || '';
+          if (document.getElementById('bench-plan')) document.getElementById('bench-plan').value = existing.plan_name || '';
+          if (document.getElementById('bench-cost')) document.getElementById('bench-cost').value = existing.monthly_cost_usd ?? 0;
+          if (document.getElementById('bench-5h')) document.getElementById('bench-5h').value = existing.window_5h_api_usd ?? 0;
+          const wkInput = document.getElementById('bench-weekly');
+          if (wkInput) wkInput.value = existing.weekly_api_usd ?? 0;
+          if (document.getElementById('bench-notes')) document.getElementById('bench-notes').value = existing.notes || '';
+          if (wkInput && typeof wkInput.focus === 'function') wkInput.focus();
+        });
+      });
     }
 
     // Per-Account Cohort Table (Privacy-Mode aware!)
@@ -3566,11 +3616,14 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
         const cWk = findCal(a.calibrations, 'claude_gpt', 'weekly')?.implied_full_cap_usd;
         const g5h = findCal(a.calibrations, 'gemini', '5h')?.implied_full_cap_usd;
         const gWk = findCal(a.calibrations, 'gemini', 'weekly')?.implied_full_cap_usd;
+        const realizedMultHtml = a.realized_multiplier != null
+          ? ` <span class="text-muted text-xs">(${escapeHtml(formatMultiplier(a.realized_multiplier))})</span>`
+          : '';
         return `
           <tr>
             <td><span class="${isPrivacyMode ? 'blurred-email' : ''}">${escapeHtml(displayEmail)}</span></td>
             <td>${escapeHtml(formatPlanBadge(a.plan_tier, a.monthly_cost_usd))}</td>
-            <td class="num">${escapeHtml(formatUSD(a.realized_api_usd))}</td>
+            <td class="num">${escapeHtml(formatUSD(a.realized_api_usd))}${realizedMultHtml}</td>
             <td class="num">${((a.cache_hit_rate || 0) * 100).toFixed(1)}%</td>
             <td class="num">${escapeHtml(formatUSD(c5h))} / ${escapeHtml(formatUSD(cWk))}</td>
             <td class="num">${escapeHtml(formatUSD(g5h))} / ${escapeHtml(formatUSD(gWk))}</td>
@@ -3589,6 +3642,9 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
       } else {
         modelsBody.innerHTML = mRows.map(m => {
           const outTotal = (m.output_tokens || 0) + (m.thoughts_tokens || 0);
+          const rateBtnHtml = m.model === 'unknown'
+            ? '<span class="text-muted text-xs" title="Historical requests recorded before model capture">Legacy</span>'
+            : `<button type="button" class="btn btn-sm btn-secondary btn-edit-model-price" data-pattern="${escapeHtml(m.pricing_pattern || m.model)}">${m.priced ? 'Edit' : 'Set Price'}</button>`;
           return `
             <tr>
               <td class="mono">${escapeHtml(m.model)}</td>
@@ -3598,7 +3654,7 @@ async function handleToggleModelPriority(accountID, modelIDsCsv, nextActive, bas
               <td class="num">${formatCompactNumber(outTotal)}</td>
               <td class="num">${((m.cache_hit_rate || 0) * 100).toFixed(1)}%</td>
               <td class="num">${m.priced ? escapeHtml(formatUSD(m.api_value_usd)) : '<span class="text-warning">Unpriced</span>'}</td>
-              <td><button type="button" class="btn btn-sm btn-secondary btn-edit-model-price" data-pattern="${escapeHtml(m.pricing_pattern || m.model)}">${m.priced ? 'Edit' : 'Set Price'}</button></td>
+              <td>${rateBtnHtml}</td>
             </tr>
           `;
         }).join('');

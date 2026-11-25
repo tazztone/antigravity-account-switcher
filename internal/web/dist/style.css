@@ -2738,10 +2738,16 @@ body.privacy-mode .blurred-email {
 }
 
 /* Plan Value & Competitor Comparison Section */
+#plan-value-section .panel-header {
+  flex-wrap: wrap;
+}
+
 .value-header-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
   gap: 0.5rem;
 }
 

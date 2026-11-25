@@ -22,20 +22,20 @@ var defaultModelPricingCatalog = []domain.ModelPricing{
 	{ModelPattern: "claude-haiku", DisplayName: "Claude Haiku", InputPerMillion: 1.00, CachedInputPerMillion: 0.10, CacheWritePerMillion: 1.25, OutputPerMillion: 5.00},
 	// OpenAI / GPT-OSS
 	{ModelPattern: "gpt-oss-120b", DisplayName: "GPT-OSS 120B", InputPerMillion: 0.15, CachedInputPerMillion: 0.04, CacheWritePerMillion: 0.00, OutputPerMillion: 0.60},
-	// Google Gemini Pro & 4-series tiers
-	{ModelPattern: "gemini-4-hydrogen", DisplayName: "Gemini 4 Hydrogen", InputPerMillion: 1.25, CachedInputPerMillion: 0.3125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00},
-	{ModelPattern: "gemini-4-neon", DisplayName: "Gemini 4 Neon", InputPerMillion: 1.25, CachedInputPerMillion: 0.3125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00},
-	{ModelPattern: "gemini-4-carbon", DisplayName: "Gemini 4 Carbon", InputPerMillion: 1.25, CachedInputPerMillion: 0.3125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00},
-	{ModelPattern: "gemini-4-argon", DisplayName: "Gemini 4 Argon", InputPerMillion: 1.25, CachedInputPerMillion: 0.3125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00},
-	{ModelPattern: "gemini-3-pro", DisplayName: "Gemini 3 Pro", InputPerMillion: 1.25, CachedInputPerMillion: 0.3125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00},
-	{ModelPattern: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", InputPerMillion: 1.25, CachedInputPerMillion: 0.3125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00},
-	// Google Gemini Flash & Flash-Lite (longest-prefix keeps flash-lite distinct from flash)
-	{ModelPattern: "gemini-3.5-flash-lite", DisplayName: "Gemini 3.5 Flash Lite", InputPerMillion: 0.10, CachedInputPerMillion: 0.025, CacheWritePerMillion: 0.00, OutputPerMillion: 0.40},
-	{ModelPattern: "gemini-2.5-flash-lite", DisplayName: "Gemini 2.5 Flash Lite", InputPerMillion: 0.10, CachedInputPerMillion: 0.025, CacheWritePerMillion: 0.00, OutputPerMillion: 0.40},
-	{ModelPattern: "flash-lite", DisplayName: "Gemini Flash Lite", InputPerMillion: 0.10, CachedInputPerMillion: 0.025, CacheWritePerMillion: 0.00, OutputPerMillion: 0.40},
-	{ModelPattern: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", InputPerMillion: 0.30, CachedInputPerMillion: 0.075, CacheWritePerMillion: 0.00, OutputPerMillion: 2.50},
-	{ModelPattern: "gemini-3-flash", DisplayName: "Gemini 3 Flash", InputPerMillion: 0.30, CachedInputPerMillion: 0.075, CacheWritePerMillion: 0.00, OutputPerMillion: 2.50},
-	{ModelPattern: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", InputPerMillion: 0.30, CachedInputPerMillion: 0.075, CacheWritePerMillion: 0.00, OutputPerMillion: 2.50},
+	// Google Gemini Pro & 4-series tiers (90% cache discount; 2x input/cached, 1.5x output above 200k prompt tokens)
+	{ModelPattern: "gemini-4-hydrogen", DisplayName: "Gemini 4 Hydrogen", InputPerMillion: 1.25, CachedInputPerMillion: 0.125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00, LongContextThreshold: 200_000, LongContextInputMultiplier: 2.0, LongContextOutputMultiplier: 1.5},
+	{ModelPattern: "gemini-4-neon", DisplayName: "Gemini 4 Neon", InputPerMillion: 1.25, CachedInputPerMillion: 0.125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00, LongContextThreshold: 200_000, LongContextInputMultiplier: 2.0, LongContextOutputMultiplier: 1.5},
+	{ModelPattern: "gemini-4-carbon", DisplayName: "Gemini 4 Carbon", InputPerMillion: 1.25, CachedInputPerMillion: 0.125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00, LongContextThreshold: 200_000, LongContextInputMultiplier: 2.0, LongContextOutputMultiplier: 1.5},
+	{ModelPattern: "gemini-4-argon", DisplayName: "Gemini 4 Argon", InputPerMillion: 1.25, CachedInputPerMillion: 0.125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00, LongContextThreshold: 200_000, LongContextInputMultiplier: 2.0, LongContextOutputMultiplier: 1.5},
+	{ModelPattern: "gemini-3-pro", DisplayName: "Gemini 3 Pro", InputPerMillion: 1.25, CachedInputPerMillion: 0.125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00, LongContextThreshold: 200_000, LongContextInputMultiplier: 2.0, LongContextOutputMultiplier: 1.5},
+	{ModelPattern: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", InputPerMillion: 1.25, CachedInputPerMillion: 0.125, CacheWritePerMillion: 0.00, OutputPerMillion: 10.00, LongContextThreshold: 200_000, LongContextInputMultiplier: 2.0, LongContextOutputMultiplier: 1.5},
+	// Google Gemini Flash & Flash-Lite (90% cache discount, flat across context window)
+	{ModelPattern: "gemini-3.5-flash-lite", DisplayName: "Gemini 3.5 Flash Lite", InputPerMillion: 0.10, CachedInputPerMillion: 0.01, CacheWritePerMillion: 0.00, OutputPerMillion: 0.40},
+	{ModelPattern: "gemini-2.5-flash-lite", DisplayName: "Gemini 2.5 Flash Lite", InputPerMillion: 0.10, CachedInputPerMillion: 0.01, CacheWritePerMillion: 0.00, OutputPerMillion: 0.40},
+	{ModelPattern: "flash-lite", DisplayName: "Gemini Flash Lite", InputPerMillion: 0.10, CachedInputPerMillion: 0.01, CacheWritePerMillion: 0.00, OutputPerMillion: 0.40},
+	{ModelPattern: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", InputPerMillion: 0.30, CachedInputPerMillion: 0.03, CacheWritePerMillion: 0.00, OutputPerMillion: 2.50},
+	{ModelPattern: "gemini-3-flash", DisplayName: "Gemini 3 Flash", InputPerMillion: 0.30, CachedInputPerMillion: 0.03, CacheWritePerMillion: 0.00, OutputPerMillion: 2.50},
+	{ModelPattern: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", InputPerMillion: 0.30, CachedInputPerMillion: 0.03, CacheWritePerMillion: 0.00, OutputPerMillion: 2.50},
 }
 
 var defaultPlanBenchmarks = []domain.PlanBenchmark{
@@ -260,10 +260,21 @@ func ComputeMetricCost(m *domain.TokenMetric, p domain.ModelPricing, priced bool
 
 	var usd float64
 	if priced {
-		usd = (float64(uncachedIn)*p.InputPerMillion +
-			float64(cachedIn)*p.CachedInputPerMillion +
-			float64(cacheWrite)*p.CacheWritePerMillion +
-			float64(billableOut)*p.OutputPerMillion) / 1_000_000.0
+		inMult := 1.0
+		outMult := 1.0
+		totalContextIn := m.PromptTokens + m.ToolUsePromptTokens + m.CacheCreationTokens
+		if p.LongContextThreshold > 0 && totalContextIn > p.LongContextThreshold {
+			if p.LongContextInputMultiplier > 0 {
+				inMult = p.LongContextInputMultiplier
+			}
+			if p.LongContextOutputMultiplier > 0 {
+				outMult = p.LongContextOutputMultiplier
+			}
+		}
+		usd = (float64(uncachedIn)*p.InputPerMillion*inMult +
+			float64(cachedIn)*p.CachedInputPerMillion*inMult +
+			float64(cacheWrite)*p.CacheWritePerMillion*inMult +
+			float64(billableOut)*p.OutputPerMillion*outMult) / 1_000_000.0
 	}
 
 	return MetricCostBreakdown{

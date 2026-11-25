@@ -106,21 +106,57 @@ func (s *Service) GetPlanValueReport(ctx context.Context, period domain.MetricPe
 		return nil, err
 	}
 
-	var allMetrics []*domain.TokenMetric
-	if qRepo, ok := s.metricsRepo.(domain.TokenMetricQueryRepository); ok {
-		allMetrics, err = qRepo.ListMetricsSince(ctx, accountID, since)
-		if err != nil {
-			return nil, err
+	var allSnapshots []*domain.QuotaSnapshot
+	calMetricsSince := since
+	if s.quotaRepo != nil {
+		if snapRepo, ok := s.quotaRepo.(domain.QuotaSnapshotRepository); ok {
+			inWindowSnaps, sErr := snapRepo.ListSnapshots(ctx, accountID, since)
+			if sErr != nil {
+				return nil, sErr
+			}
+			allSnapshots = append(allSnapshots, inWindowSnaps...)
+
+			if !since.IsZero() && len(inWindowSnaps) > 0 {
+				seriesInWindow := make(map[string]bool, len(inWindowSnaps))
+				seenIDs := make(map[int64]bool, len(inWindowSnaps))
+				for _, snap := range inWindowSnaps {
+					if snap == nil {
+						continue
+					}
+					if snap.ID > 0 {
+						seenIDs[snap.ID] = true
+					}
+					seriesInWindow[snap.AccountID+"|"+snapshotSeriesKey(snap)] = true
+				}
+				anchors, aErr := snapRepo.ListLatestSnapshotsBefore(ctx, accountID, since)
+				if aErr != nil {
+					return nil, aErr
+				}
+				minAllowed := since.Add(-7 * 24 * time.Hour)
+				for _, a := range anchors {
+					if a == nil || (a.ID > 0 && seenIDs[a.ID]) {
+						continue
+					}
+					if !seriesInWindow[a.AccountID+"|"+snapshotSeriesKey(a)] {
+						continue
+					}
+					allSnapshots = append(allSnapshots, a)
+					if a.CapturedAt.Before(calMetricsSince) {
+						calMetricsSince = a.CapturedAt
+					}
+				}
+				if calMetricsSince.Before(minAllowed) {
+					calMetricsSince = minAllowed
+				}
+			}
 		}
 	}
 
-	var allSnapshots []*domain.QuotaSnapshot
-	if s.quotaRepo != nil {
-		if snapRepo, ok := s.quotaRepo.(domain.QuotaSnapshotRepository); ok {
-			allSnapshots, err = snapRepo.ListSnapshots(ctx, accountID, since)
-			if err != nil {
-				return nil, err
-			}
+	var allMetrics []*domain.TokenMetric
+	if qRepo, ok := s.metricsRepo.(domain.TokenMetricQueryRepository); ok {
+		allMetrics, err = qRepo.ListMetricsSince(ctx, accountID, calMetricsSince)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -163,16 +199,17 @@ func (s *Service) GetPlanValueReport(ctx context.Context, period domain.MetricPe
 	unpricedSet := make(map[string]bool)
 
 	var poolCostUSD, poolRealizedUSD float64
-	var poolRequests, poolTokens, poolCachedTokens, poolInputBaseTokens int64
+	var poolRequests, poolTokens, poolCachedTokens, poolInputBaseTokens, poolLegacyUnpricedReqs int64
 	var poolExternalDrops int
 
 	for _, acc := range accounts {
-		accReport, accEpisodes, extDrops := buildAccountValueReport(
+		accReport, accEpisodes, extDrops, legacyReqs := buildAccountValueReport(
 			acc,
 			metricsByAcc[acc.ID],
 			snapsByAcc[acc.ID],
 			liveBuckets[acc.ID],
 			catalog,
+			since,
 			windowDays,
 			globalModelAgg,
 			unpricedSet,
@@ -180,6 +217,7 @@ func (s *Service) GetPlanValueReport(ctx context.Context, period domain.MetricPe
 		report.ByAccount = append(report.ByAccount, accReport)
 		report.Episodes = append(report.Episodes, accEpisodes...)
 		poolExternalDrops += extDrops
+		poolLegacyUnpricedReqs += legacyReqs
 
 		poolCostUSD += acc.MonthlyCostUSD
 		poolRealizedUSD += accReport.RealizedAPIUSD
@@ -207,12 +245,13 @@ func (s *Service) GetPlanValueReport(ctx context.Context, period domain.MetricPe
 		poolTokens,
 		poolCachedTokens,
 		poolInputBaseTokens,
+		poolLegacyUnpricedReqs,
 		windowDays,
 		unpriced,
 		poolExternalDrops,
 	)
 	report.PoolSummary = poolSummary
-	report.Benchmarks = appendMeasuredBenchmarks(poolSummary, benchmarks)
+	report.Benchmarks = appendMeasuredBenchmarks(poolSummary, report.ByAccount, benchmarks)
 
 	return report, nil
 }
@@ -291,10 +330,11 @@ func buildAccountValueReport(
 	snaps []*domain.QuotaSnapshot,
 	live []*domain.QuotaBucket,
 	catalog []domain.ModelPricing,
+	since time.Time,
 	windowDays float64,
 	globalModelAgg map[string]*modelAccumulator,
 	unpricedSet map[string]bool,
-) (domain.AccountValueReport, []domain.CalibrationEpisode, int) {
+) (domain.AccountValueReport, []domain.CalibrationEpisode, int, int64) {
 	catAgg := map[string]*domain.CategoryValueSummary{
 		string(domain.CategoryClaudeGPT): {Category: string(domain.CategoryClaudeGPT)},
 		string(domain.CategoryGemini):    {Category: string(domain.CategoryGemini)},
@@ -303,7 +343,7 @@ func buildAccountValueReport(
 	pricedList := make([]pricedMetric, 0, len(metrics))
 
 	var totalUSD float64
-	var totalReqs, totalTokens, totalCached, totalInputBase int64
+	var totalReqs, totalTokens, totalCached, totalInputBase, legacyUnpricedReqs int64
 
 	for _, m := range metrics {
 		if m == nil {
@@ -311,9 +351,6 @@ func buildAccountValueReport(
 		}
 		cat := string(domain.CategorizeModelID(m.Model))
 		pricing, ok := ResolveModelPricing(m.Model, catalog)
-		if !ok && strings.TrimSpace(m.Model) != "" {
-			unpricedSet[m.Model] = true
-		}
 		cost := ComputeMetricCost(m, pricing, ok)
 
 		pricedList = append(pricedList, pricedMetric{
@@ -321,6 +358,20 @@ func buildAccountValueReport(
 			category: cat,
 			cost:     cost,
 		})
+
+		// Pre-window anchor lookback metrics feed interval calibration only;
+		// RealizedAPIUSD and per-model breakdowns remain strictly within >= since.
+		if !since.IsZero() && m.Timestamp.Before(since) {
+			continue
+		}
+		trimmedModel := strings.TrimSpace(m.Model)
+		if !ok {
+			if trimmedModel == "" {
+				legacyUnpricedReqs++
+			} else {
+				unpricedSet[m.Model] = true
+			}
+		}
 
 		totalUSD += cost.APIValueUSD
 		totalReqs++
@@ -347,7 +398,7 @@ func buildAccountValueReport(
 		cs.APIValueUSD += cost.APIValueUSD
 
 		modelKey := m.Model
-		if strings.TrimSpace(modelKey) == "" {
+		if trimmedModel == "" {
 			modelKey = "unknown"
 		}
 		for _, targetMap := range []map[string]*modelAccumulator{accModelAgg, globalModelAgg} {
@@ -381,7 +432,7 @@ func buildAccountValueReport(
 		byCat[k] = *cs
 	}
 
-	calibrations, episodes, extDrops := calibrateAccountWindows(acc, snaps, live, pricedList, byCat)
+	calibrations, episodes, extDrops := calibrateAccountWindows(acc, snaps, live, pricedList, byCat, since)
 
 	var combinedWeeklyPtr *float64
 	var combinedMonthlyPtr *float64
@@ -433,7 +484,16 @@ func buildAccountValueReport(
 		RealizedMultiplier:        realizedMultPtr,
 		ByCategory:                byCat,
 		ByModel:                   finalizeModelBreakdowns(accModelAgg),
-	}, episodes, extDrops
+	}, episodes, extDrops, legacyUnpricedReqs
+}
+
+func snapshotSeriesKey(s *domain.QuotaSnapshot) string {
+	cat := normalizeSnapshotCategory(s.Category, s.BucketID, s.DisplayName)
+	win := domain.NormalizeQuotaWindow(s.Window, s.BucketID)
+	if cat != string(domain.CategoryUnknown) && cat != "" {
+		return cat + "|" + win
+	}
+	return "raw|" + s.BucketID + "|" + win
 }
 
 type windowCalKey struct {
@@ -458,20 +518,22 @@ func calibrateAccountWindows(
 	live []*domain.QuotaBucket,
 	pricedList []pricedMetric,
 	byCat map[string]domain.CategoryValueSummary,
+	since time.Time,
 ) ([]domain.WindowCalibration, []domain.CalibrationEpisode, int) {
-	byBucket := make(map[string][]*domain.QuotaSnapshot)
+	bySeries := make(map[string][]*domain.QuotaSnapshot)
 	for _, s := range snaps {
 		if s == nil || strings.EqualFold(s.Source, "synthetic") {
 			continue
 		}
-		byBucket[s.BucketID] = append(byBucket[s.BucketID], s)
+		key := snapshotSeriesKey(s)
+		bySeries[key] = append(bySeries[key], s)
 	}
 
 	accumMap := make(map[windowCalKey]*windowCalAccum)
 	var episodes []domain.CalibrationEpisode
 	totalExternalDrops := 0
 
-	for bucketID, list := range byBucket {
+	for _, list := range bySeries {
 		sort.Slice(list, func(i, j int) bool {
 			if !list[i].CapturedAt.Equal(list[j].CapturedAt) {
 				return list[i].CapturedAt.Before(list[j].CapturedAt)
@@ -481,6 +543,9 @@ func calibrateAccountWindows(
 		for i := 1; i < len(list); i++ {
 			prev := list[i-1]
 			curr := list[i]
+			if !since.IsZero() && curr.CapturedAt.Before(since) {
+				continue
+			}
 			delta := prev.RemainingFraction - curr.RemainingFraction
 			if delta <= 1e-6 {
 				continue
@@ -490,7 +555,7 @@ func calibrateAccountWindows(
 			}
 
 			cat := normalizeSnapshotCategory(curr.Category, curr.BucketID, curr.DisplayName)
-			win := normalizeSnapshotWindow(curr.Window, curr.BucketID)
+			win := domain.NormalizeQuotaWindow(curr.Window, curr.BucketID)
 			key := windowCalKey{category: cat, window: win}
 			ac := accumMap[key]
 			if ac == nil {
@@ -544,7 +609,7 @@ func calibrateAccountWindows(
 				PlanTier:            acc.PlanTier,
 				Category:            cat,
 				Window:              win,
-				BucketID:            bucketID,
+				BucketID:            curr.BucketID,
 				StartTime:           prev.CapturedAt,
 				EndTime:             curr.CapturedAt,
 				ResetTime:           curr.ResetTime,
@@ -570,7 +635,7 @@ func calibrateAccountWindows(
 			continue
 		}
 		cat := string(domain.CategorizeBucket(b.BucketID, b.DisplayName))
-		win := normalizeSnapshotWindow(string(b.Window), b.BucketID)
+		win := domain.NormalizeQuotaWindow(string(b.Window), b.BucketID)
 		liveByKey[windowCalKey{category: cat, window: win}] = b
 	}
 
@@ -591,6 +656,7 @@ func calibrateAccountWindows(
 			Confidence:     "none",
 		}
 		if ac != nil {
+			cal.ObservedIntervalUSD = ac.sumUSD
 			cal.ObservedDeltaFraction = ac.sumDelta
 			cal.IntervalsUsed = ac.intervals
 			cal.ExternalDropIntervals = ac.externalDrops
@@ -641,15 +707,6 @@ func normalizeSnapshotCategory(cat, bucketID, displayName string) string {
 	return string(domain.CategorizeBucket(bucketID, displayName))
 }
 
-func normalizeSnapshotWindow(window, bucketID string) string {
-	wLower := strings.ToLower(window)
-	idLower := strings.ToLower(bucketID)
-	if strings.Contains(wLower, "weekly") || strings.Contains(idLower, "weekly") {
-		return "weekly"
-	}
-	return "5h"
-}
-
 func calibrationConfidence(delta float64) string {
 	switch {
 	case delta >= 0.40:
@@ -696,11 +753,46 @@ func finalizeModelBreakdowns(m map[string]*modelAccumulator) []domain.ModelValue
 	return out
 }
 
+func cohortSeatUnitCost(accounts []*domain.Account, aiProCount int) float64 {
+	var sum float64
+	var cnt int
+	for _, acc := range accounts {
+		if acc == nil {
+			continue
+		}
+		if aiProCount > 0 && acc.PlanTier != "" && acc.PlanTier != "ai_pro" {
+			continue
+		}
+		sum += acc.MonthlyCostUSD
+		cnt++
+	}
+	if cnt > 0 && sum > 0 {
+		return sum / float64(cnt)
+	}
+	return 20.0
+}
+
+func cohortSeatUnitCostFromReports(reports []domain.AccountValueReport, aiProCount int) float64 {
+	var sum float64
+	var cnt int
+	for _, r := range reports {
+		if aiProCount > 0 && r.PlanTier != "" && r.PlanTier != "ai_pro" {
+			continue
+		}
+		sum += r.MonthlyCostUSD
+		cnt++
+	}
+	if cnt > 0 && sum > 0 {
+		return sum / float64(cnt)
+	}
+	return 20.0
+}
+
 func aggregatePoolSummary(
 	accounts []*domain.Account,
 	reports []domain.AccountValueReport,
 	poolCostUSD, poolRealizedUSD float64,
-	poolRequests, poolTokens, poolCachedTokens, poolInputBaseTokens int64,
+	poolRequests, poolTokens, poolCachedTokens, poolInputBaseTokens, legacyUnpricedReqs int64,
 	windowDays float64,
 	unpriced []string,
 	extDrops int,
@@ -712,37 +804,47 @@ func aggregatePoolSummary(
 		}
 	}
 
-	avgWindow := func(cat, win string) (*float64, string, float64) {
-		var vals []float64
-		var totalDelta float64
+	avgWindow := func(cat, win string) (mleCap *float64, minCap *float64, maxCap *float64, conf string, totalDelta float64) {
+		var sumUSD float64
+		var seatCaps []float64
 		for _, r := range reports {
 			if aiProCount > 0 && r.PlanTier != "" && r.PlanTier != "ai_pro" {
 				continue
 			}
 			for _, cal := range r.Calibrations {
 				if cal.Category == cat && cal.Window == win {
+					sumUSD += cal.ObservedIntervalUSD
 					totalDelta += cal.ObservedDeltaFraction
 					if cal.ImpliedFullCapUSD != nil {
-						vals = append(vals, *cal.ImpliedFullCapUSD)
+						seatCaps = append(seatCaps, *cal.ImpliedFullCapUSD)
 					}
 				}
 			}
 		}
-		conf := calibrationConfidence(totalDelta)
-		if len(vals) == 0 {
-			return nil, conf, totalDelta
+		conf = calibrationConfidence(totalDelta)
+		if len(seatCaps) >= 2 {
+			minV, maxV := seatCaps[0], seatCaps[0]
+			for _, v := range seatCaps[1:] {
+				if v < minV {
+					minV = v
+				}
+				if v > maxV {
+					maxV = v
+				}
+			}
+			minCap = float64Ptr(minV)
+			maxCap = float64Ptr(maxV)
 		}
-		var sum float64
-		for _, v := range vals {
-			sum += v
+		if totalDelta < 0.01 {
+			return nil, minCap, maxCap, conf, totalDelta
 		}
-		return float64Ptr(sum / float64(len(vals))), conf, totalDelta
+		return float64Ptr(sumUSD / totalDelta), minCap, maxCap, conf, totalDelta
 	}
 
-	c5h, _, _ := avgWindow(string(domain.CategoryClaudeGPT), "5h")
-	cWk, cConf, cDelta := avgWindow(string(domain.CategoryClaudeGPT), "weekly")
-	g5h, _, _ := avgWindow(string(domain.CategoryGemini), "5h")
-	gWk, gConf, gDelta := avgWindow(string(domain.CategoryGemini), "weekly")
+	c5h, _, _, _, _ := avgWindow(string(domain.CategoryClaudeGPT), "5h")
+	cWk, cMin, cMax, cConf, cDelta := avgWindow(string(domain.CategoryClaudeGPT), "weekly")
+	g5h, _, _, _, _ := avgWindow(string(domain.CategoryGemini), "5h")
+	gWk, gMin, gMax, gConf, gDelta := avgWindow(string(domain.CategoryGemini), "weekly")
 
 	var combinedWk, combinedMo, combinedMult *float64
 	if cWk != nil || gWk != nil {
@@ -756,10 +858,7 @@ func aggregatePoolSummary(
 		combinedWk = float64Ptr(wk)
 		mo := wk * weeksPerMonth
 		combinedMo = float64Ptr(mo)
-		unitCost := 20.0
-		if aiProCount == 0 && len(accounts) > 0 && poolCostUSD > 0 {
-			unitCost = poolCostUSD / float64(len(accounts))
-		}
+		unitCost := cohortSeatUnitCost(accounts, aiProCount)
 		if unitCost > 0 {
 			combinedMult = float64Ptr(mo / unitCost)
 		}
@@ -789,25 +888,30 @@ func aggregatePoolSummary(
 		CacheHitRate:              cacheRate,
 		AvgClaude5hCapUSD:         c5h,
 		AvgClaudeWeeklyCapUSD:     cWk,
+		MinClaudeWeeklyCapUSD:     cMin,
+		MaxClaudeWeeklyCapUSD:     cMax,
 		ClaudeWeeklyConfidence:    cConf,
 		ClaudeObservedDelta:       cDelta,
 		AvgGemini5hCapUSD:         g5h,
 		AvgGeminiWeeklyCapUSD:     gWk,
+		MinGeminiWeeklyCapUSD:     gMin,
+		MaxGeminiWeeklyCapUSD:     gMax,
 		GeminiWeeklyConfidence:    gConf,
 		GeminiObservedDelta:       gDelta,
 		AvgCombinedWeeklyCapUSD:   combinedWk,
 		AvgCombinedMonthlyCapUSD:  combinedMo,
 		CombinedValueMultiplier:   combinedMult,
 		UnpricedModels:            unpriced,
+		LegacyUnpricedRequests:    legacyUnpricedReqs,
 		ExternalDropIntervalCount: extDrops,
 	}
 }
 
-func appendMeasuredBenchmarks(pool domain.PoolValueSummary, benchmarks []domain.PlanBenchmark) []domain.PlanBenchmark {
+func appendMeasuredBenchmarks(pool domain.PoolValueSummary, reports []domain.AccountValueReport, benchmarks []domain.PlanBenchmark) []domain.PlanBenchmark {
 	out := make([]domain.PlanBenchmark, 0, len(benchmarks)+3)
 
-	unitCost := 20.0
-	if pool.AIProAccounts == 0 && pool.TotalAccounts > 0 && pool.TotalMonthlyCostUSD > 0 {
+	unitCost := cohortSeatUnitCostFromReports(reports, pool.AIProAccounts)
+	if unitCost <= 0 && pool.TotalAccounts > 0 && pool.TotalMonthlyCostUSD > 0 {
 		unitCost = pool.TotalMonthlyCostUSD / float64(pool.TotalAccounts)
 	}
 

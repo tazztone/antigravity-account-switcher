@@ -38,6 +38,14 @@ const fakeElement = () => ({
   innerHTML: '',
 });
 
+const fakeElementsById = {};
+const getOrCreateById = (id) => {
+  if (!fakeElementsById[id]) {
+    fakeElementsById[id] = fakeElement();
+  }
+  return fakeElementsById[id];
+};
+
 const sandbox = {
   console,
   Math,
@@ -62,7 +70,7 @@ const sandbox = {
   window: { addEventListener: noop, location: { origin: 'http://127.0.0.1:8080' } },
   document: {
     body: { classList: { add: noop, remove: noop, toggle: noop } },
-    getElementById: () => null,
+    getElementById: (id) => getOrCreateById(id),
     querySelector: () => null,
     querySelectorAll: () => [],
     addEventListener: noop,
@@ -219,6 +227,50 @@ assert.strictEqual(hooks.formatMultiplier(5.26), '5.3x');
 assert.strictEqual(hooks.formatPlanBadge('ai_ultra', 250), 'AI Ultra · $250/mo');
 assert.strictEqual(hooks.formatPlanBadge('free', 0), 'Free · $0/mo');
 assert.ok(hooks.formatConfidenceBadge('high').includes('conf-high'));
+
+// 5. renderPlanValueReport: benchmark Edit action, Legacy badge on unknown model, cohort spread, legacy hero note
+hooks.renderPlanValueReport({
+  pool_summary: {
+    realized_api_usd: 120.5,
+    total_requests: 500,
+    total_tokens: 1500000,
+    legacy_unpriced_requests: 42,
+    avg_claude_5h_cap_usd: 12.0,
+    avg_claude_weekly_cap_usd: 50.0,
+    min_claude_weekly_cap_usd: 40.0,
+    max_claude_weekly_cap_usd: 60.0,
+    claude_weekly_confidence: 'medium',
+    claude_observed_delta: 0.25,
+    cache_hit_rate: 0.9,
+  },
+  benchmarks: [
+    { id: 'agy-ai-pro-claude', plan_name: 'AGY AI Pro (Claude/GPT pool)', monthly_cost_usd: 20, window_5h_api_usd: 12, weekly_api_usd: 50, est_monthly_api_usd: 214.29, value_per_dollar: 10.7, is_measured: true, confidence: 'medium' },
+    { id: 'claude-pro', provider: 'Anthropic', plan_name: 'Claude Pro', monthly_cost_usd: 20, window_5h_api_usd: 10, weekly_api_usd: 50, est_monthly_api_usd: 214.29, value_per_dollar: 10.7, is_measured: false },
+  ],
+  by_account: [
+    { email: 'a@example.com', plan_tier: 'ai_pro', monthly_cost_usd: 20, realized_api_usd: 80.0, realized_multiplier: 4.0, cache_hit_rate: 0.9, calibrations: [] },
+  ],
+  by_model: [
+    { model: 'gemini-4-hydrogen', requests: 100, uncached_input_tokens: 1000, cached_input_tokens: 9000, output_tokens: 500, thoughts_tokens: 0, cache_hit_rate: 0.9, api_value_usd: 10.0, priced: true, pricing_pattern: 'gemini-4-hydrogen' },
+    { model: 'unknown', requests: 42, uncached_input_tokens: 500, cached_input_tokens: 0, output_tokens: 100, thoughts_tokens: 0, cache_hit_rate: 0.0, api_value_usd: 0, priced: false },
+  ],
+  pricing_catalog: [],
+});
+
+const benchHTML = getOrCreateById('value-benchmarks-body').innerHTML;
+assert.ok(benchHTML.includes('btn-edit-benchmark" data-id="claude-pro"'), 'expected Edit button on competitor row');
+assert.ok(!benchHTML.includes('data-id="agy-ai-pro-claude"'), 'measured AGY row must not render Edit button');
+
+const modelsHTML = getOrCreateById('value-models-body').innerHTML;
+assert.ok(modelsHTML.includes('Legacy</span>'), 'unknown model row should render Legacy badge');
+assert.ok(!modelsHTML.includes('data-pattern="unknown"'), 'unknown model row must not render Set Price button');
+
+const claudeSubText = getOrCreateById('val-claude-sub').textContent;
+assert.ok(claudeSubText.includes('Seats $40.00'), 'expected cohort spread in #val-claude-sub, got: ' + claudeSubText);
+const realizedSubText = getOrCreateById('val-realized-sub').textContent;
+assert.ok(realizedSubText.includes('42 legacy reqs excl.'), 'expected legacy count note in #val-realized-sub, got: ' + realizedSubText);
+const accHTML = getOrCreateById('value-accounts-body').innerHTML;
+assert.ok(accHTML.includes('(4.0x)'), 'expected realized multiplier in per-account table');
 `
 
 	tmpDir := t.TempDir()

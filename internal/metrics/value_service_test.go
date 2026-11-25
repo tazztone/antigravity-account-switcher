@@ -138,18 +138,29 @@ func TestValueService_MonotonicCalibrationAndPoolAggregation(t *testing.T) {
 		t.Fatalf("RecordSnapshotsIfChanged: %v", err)
 	}
 
-	// Token metrics:
-	// Claude Opus 5.5: $5/1M in, $25/1M out. 800,000 uncached input tokens = $4.00!
-	for _, m := range []*domain.TokenMetric{
-		{AccountID: "acc-a", Model: "claude-opus-5-5-high", PromptTokens: 800_000, TotalTokens: 800_000, Timestamp: tStart.Add(10 * time.Minute)},
-		{AccountID: "acc-a", Model: "claude-opus-5-5-high", PromptTokens: 800_000, TotalTokens: 800_000, Timestamp: tStart.Add(60 * time.Minute)},
-		// Gemini 4 Hydrogen: $1.25/1M in, $10/1M out. 1,000,000 output tokens = $10.00!
-		{AccountID: "acc-a", Model: "gemini-4-hydrogen-high", CandidatesTokens: 1_000_000, TotalTokens: 1_000_000, Timestamp: tStart.Add(15 * time.Minute)},
-		// Account B: 1,200,000 input tokens on Opus 5.5 = $6.00!
-		{AccountID: "acc-b", Model: "claude-opus-5-5-high", PromptTokens: 1_200_000, TotalTokens: 1_200_000, Timestamp: tStart.Add(10 * time.Minute)},
-		// Unpriced model request
-		{AccountID: "acc-b", Model: "experimental-unpriced-v9", PromptTokens: 1000, TotalTokens: 1000, Timestamp: tStart.Add(30 * time.Minute)},
-	} {
+	// Token metrics (<=200k per request so base-tier pricing applies cleanly):
+	// Claude Opus 5.5: $5/1M in, $25/1M out. 4 x 200,000 = 800,000 uncached input tokens = $4.00 per burn!
+	// Total Claude burn: acc-a delta 0.20 ($8.00 => $40/wk), acc-b delta 0.10 ($6.00 => $60/wk).
+	// Delta-weighted pool MLE = $14.00 / 0.30 = $46.6667/wk (seat spread $40-$60/wk).
+	var testMetrics []*domain.TokenMetric
+	for i := 0; i < 4; i++ {
+		testMetrics = append(testMetrics,
+			&domain.TokenMetric{AccountID: "acc-a", Model: "claude-opus-5-5-high", PromptTokens: 200_000, TotalTokens: 200_000, Timestamp: tStart.Add(10 * time.Minute)},
+			&domain.TokenMetric{AccountID: "acc-a", Model: "claude-opus-5-5-high", PromptTokens: 200_000, TotalTokens: 200_000, Timestamp: tStart.Add(60 * time.Minute)},
+		)
+	}
+	// Gemini 4 Hydrogen: $1.25/1M in, $10/1M out. 5 x 200,000 output tokens = 1,000,000 = $10.00!
+	for i := 0; i < 5; i++ {
+		testMetrics = append(testMetrics, &domain.TokenMetric{AccountID: "acc-a", Model: "gemini-4-hydrogen-high", CandidatesTokens: 200_000, TotalTokens: 200_000, Timestamp: tStart.Add(15 * time.Minute)})
+	}
+	// Account B: 6 x 200,000 input tokens on Opus 5.5 = $6.00!
+	for i := 0; i < 6; i++ {
+		testMetrics = append(testMetrics, &domain.TokenMetric{AccountID: "acc-b", Model: "claude-opus-5-5-high", PromptTokens: 200_000, TotalTokens: 200_000, Timestamp: tStart.Add(10 * time.Minute)})
+	}
+	// Unpriced model request
+	testMetrics = append(testMetrics, &domain.TokenMetric{AccountID: "acc-b", Model: "experimental-unpriced-v9", PromptTokens: 1000, TotalTokens: 1000, Timestamp: tStart.Add(30 * time.Minute)})
+
+	for _, m := range testMetrics {
 		if err := metricsRepo.Record(ctx, m); err != nil {
 			t.Fatalf("metricsRepo.Record: %v", err)
 		}
@@ -167,14 +178,23 @@ func TestValueService_MonotonicCalibrationAndPoolAggregation(t *testing.T) {
 	if math.Abs(report.PoolSummary.RealizedAPIUSD-24.0) > 1e-6 {
 		t.Fatalf("RealizedAPIUSD = %v, want 24.0", report.PoolSummary.RealizedAPIUSD)
 	}
-	if report.PoolSummary.AvgClaudeWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.AvgClaudeWeeklyCapUSD-50.0) > 1e-4 {
-		t.Fatalf("AvgClaudeWeeklyCapUSD = %v, want 50.0", report.PoolSummary.AvgClaudeWeeklyCapUSD)
+	// Delta-weighted MLE = ($8 + $6) / (0.20 + 0.10) = 46.666667
+	wantClaudeMLE := 14.0 / 0.30
+	if report.PoolSummary.AvgClaudeWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.AvgClaudeWeeklyCapUSD-wantClaudeMLE) > 1e-4 {
+		t.Fatalf("AvgClaudeWeeklyCapUSD = %v, want %v", report.PoolSummary.AvgClaudeWeeklyCapUSD, wantClaudeMLE)
+	}
+	if report.PoolSummary.MinClaudeWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.MinClaudeWeeklyCapUSD-40.0) > 1e-4 {
+		t.Fatalf("MinClaudeWeeklyCapUSD = %v, want 40.0", report.PoolSummary.MinClaudeWeeklyCapUSD)
+	}
+	if report.PoolSummary.MaxClaudeWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.MaxClaudeWeeklyCapUSD-60.0) > 1e-4 {
+		t.Fatalf("MaxClaudeWeeklyCapUSD = %v, want 60.0", report.PoolSummary.MaxClaudeWeeklyCapUSD)
 	}
 	if report.PoolSummary.AvgGeminiWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.AvgGeminiWeeklyCapUSD-50.0) > 1e-4 {
 		t.Fatalf("AvgGeminiWeeklyCapUSD = %v, want 50.0", report.PoolSummary.AvgGeminiWeeklyCapUSD)
 	}
-	if report.PoolSummary.AvgCombinedWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.AvgCombinedWeeklyCapUSD-100.0) > 1e-4 {
-		t.Fatalf("AvgCombinedWeeklyCapUSD = %v, want 100.0", report.PoolSummary.AvgCombinedWeeklyCapUSD)
+	wantCombined := wantClaudeMLE + 50.0
+	if report.PoolSummary.AvgCombinedWeeklyCapUSD == nil || math.Abs(*report.PoolSummary.AvgCombinedWeeklyCapUSD-wantCombined) > 1e-4 {
+		t.Fatalf("AvgCombinedWeeklyCapUSD = %v, want %v", report.PoolSummary.AvgCombinedWeeklyCapUSD, wantCombined)
 	}
 	if report.PoolSummary.ExternalDropIntervalCount != 1 {
 		t.Fatalf("expected 1 external drop interval ignored, got %d", report.PoolSummary.ExternalDropIntervalCount)
@@ -187,5 +207,145 @@ func TestValueService_MonotonicCalibrationAndPoolAggregation(t *testing.T) {
 	}
 	if len(report.Benchmarks) < 8 {
 		t.Fatalf("expected 3 measured AGY rows + 5 competitor rows, got %d", len(report.Benchmarks))
+	}
+}
+
+func TestPricing_Gemini90PctCacheAndLongContextTiers(t *testing.T) {
+	catalog := metrics.DefaultModelPricing()
+
+	// 1. 90% cache discount defaults on Gemini Pro, Flash, and Flash-Lite
+	pPro, ok := metrics.ResolveModelPricing("gemini-4-hydrogen", catalog)
+	if !ok || pPro.CachedInputPerMillion != 0.125 {
+		t.Fatalf("expected gemini-4-hydrogen cached $0.125, got %+v", pPro)
+	}
+	pFlash, ok := metrics.ResolveModelPricing("gemini-3.8-flash", catalog)
+	if !ok || pFlash.CachedInputPerMillion != 0.03 {
+		t.Fatalf("expected gemini-3.8-flash cached $0.03, got %+v", pFlash)
+	}
+	pLite, ok := metrics.ResolveModelPricing("gemini-3.5-flash-lite", catalog)
+	if !ok || pLite.CachedInputPerMillion != 0.01 {
+		t.Fatalf("expected gemini-3.5-flash-lite cached $0.01, got %+v", pLite)
+	}
+
+	// 2. Gemini Pro request > 200k prompt tokens applies 2.0x input/cached and 1.5x output
+	mLongGemini := &domain.TokenMetric{
+		Model:               "gemini-4-hydrogen",
+		PromptTokens:        250_000,
+		CachedContentTokens: 200_000, // 50k uncached ($2.50/1M), 200k cached ($0.25/1M)
+		CandidatesTokens:    100_000, // 100k output ($15.00/1M)
+		TotalTokens:         350_000,
+	}
+	cGemini := metrics.ComputeMetricCost(mLongGemini, pPro, true)
+	wantGeminiUSD := (50_000*1.25*2.0 + 200_000*0.125*2.0 + 100_000*10.0*1.5) / 1e6
+	if math.Abs(cGemini.APIValueUSD-wantGeminiUSD) > 1e-12 {
+		t.Fatalf("Gemini >200k USD = %v, want %v", cGemini.APIValueUSD, wantGeminiUSD)
+	}
+
+	// 3. Gemini Flash and Claude Opus stay flat above 200k
+	mLongFlash := &domain.TokenMetric{
+		Model:            "gemini-3.8-flash",
+		PromptTokens:     250_000,
+		CandidatesTokens: 10_000,
+		TotalTokens:      260_000,
+	}
+	cFlash := metrics.ComputeMetricCost(mLongFlash, pFlash, true)
+	wantFlashUSD := (250_000*0.30 + 10_000*2.50) / 1e6
+	if math.Abs(cFlash.APIValueUSD-wantFlashUSD) > 1e-12 {
+		t.Fatalf("Flash >200k should remain flat: got %v, want %v", cFlash.APIValueUSD, wantFlashUSD)
+	}
+
+	pOpus, ok := metrics.ResolveModelPricing("claude-opus-5-5", catalog)
+	if !ok {
+		t.Fatalf("expected claude-opus-5-5 pricing")
+	}
+	mLongClaude := &domain.TokenMetric{
+		Model:            "claude-opus-5-5",
+		PromptTokens:     250_000,
+		CandidatesTokens: 10_000,
+		TotalTokens:      260_000,
+	}
+	cClaude := metrics.ComputeMetricCost(mLongClaude, pOpus, true)
+	wantClaudeUSD := (250_000*5.0 + 10_000*25.0) / 1e6
+	if math.Abs(cClaude.APIValueUSD-wantClaudeUSD) > 1e-12 {
+		t.Fatalf("Claude >200k should remain flat: got %v, want %v", cClaude.APIValueUSD, wantClaudeUSD)
+	}
+}
+
+func TestValueService_PreWindowAnchorAndCrossSourceContinuity(t *testing.T) {
+	svc, accRepo, quotaRepo, metricsRepo, _ := setupValueTestService(t)
+	ctx := context.Background()
+
+	acc := &domain.Account{
+		ID:             "acc-anchor",
+		Email:          "anchor@gmail.com",
+		RefreshToken:   "rt-anchor",
+		PlanTier:       "ai_pro",
+		MonthlyCostUSD: 20.0,
+	}
+	if err := accRepo.Create(ctx, acc); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	reset := now.Add(4 * time.Hour)
+
+	// Anchor snapshot at now-26h (before PeriodDay 24h cutoff) from language_server (5H, prefixed bucketID)
+	// Followed by in-window snapshot at now-22h from cloud_code (5h, raw bucketID)
+	_, err := quotaRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{
+		{
+			AccountID:         acc.ID,
+			BucketID:          acc.ID + "-3p-5h",
+			DisplayName:       "Claude & GPT (5h)",
+			Window:            "5H",
+			RemainingFraction: 1.00,
+			ResetTime:         reset,
+			Source:            "language_server",
+			CapturedAt:        now.Add(-26 * time.Hour),
+		},
+		{
+			AccountID:         acc.ID,
+			BucketID:          "3p-5h",
+			DisplayName:       "Claude and GPT models (5h)",
+			Window:            "5h",
+			RemainingFraction: 0.90,
+			ResetTime:         reset,
+			Source:            "cloud_code",
+			CapturedAt:        now.Add(-22 * time.Hour),
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordSnapshotsIfChanged: %v", err)
+	}
+
+	// Two requests inside the (now-26h, now-22h] interval: one before 24h cutoff (-25h, $2) and one inside (-23h, $2).
+	// Using claude-sonnet ($3/1M input): 200k * 3 + ... or outputs ($15/1M): 133,333.33... -> use claude-opus-4-1 ($15/1M in):
+	// Actually claude-opus-5-5 is $5/1M in, $25/1M out: 80,000 output tokens = $2.00!
+	for _, ts := range []time.Time{now.Add(-25 * time.Hour), now.Add(-23 * time.Hour)} {
+		if err := metricsRepo.Record(ctx, &domain.TokenMetric{
+			AccountID:        acc.ID,
+			Model:            "claude-opus-5-5",
+			CandidatesTokens: 80_000,
+			TotalTokens:      80_000,
+			Timestamp:        ts,
+		}); err != nil {
+			t.Fatalf("metricsRepo.Record: %v", err)
+		}
+	}
+
+	report, err := svc.GetPlanValueReport(ctx, domain.PeriodDay, "")
+	if err != nil {
+		t.Fatalf("GetPlanValueReport: %v", err)
+	}
+
+	// RealizedAPIUSD for PeriodDay must count ONLY the -23h request ($2.00), NOT the -25h request.
+	if math.Abs(report.PoolSummary.RealizedAPIUSD-2.0) > 1e-6 {
+		t.Fatalf("RealizedAPIUSD = %v, want 2.0", report.PoolSummary.RealizedAPIUSD)
+	}
+	// Calibration across the anchor interval (-26h -> -22h, delta 0.10) must include BOTH $2 requests ($4 total => $40 cap).
+	if report.PoolSummary.AvgClaude5hCapUSD == nil || math.Abs(*report.PoolSummary.AvgClaude5hCapUSD-40.0) > 1e-4 {
+		t.Fatalf("AvgClaude5hCapUSD = %v, want 40.0", report.PoolSummary.AvgClaude5hCapUSD)
+	}
+	if len(report.Episodes) != 1 || report.Episodes[0].SourceStart != "language_server" || report.Episodes[0].SourceEnd != "cloud_code" {
+		t.Fatalf("expected 1 cross-source episode, got %+v", report.Episodes)
 	}
 }

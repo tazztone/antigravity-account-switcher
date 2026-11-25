@@ -7,13 +7,16 @@ import (
 
 // ModelPricing defines official API token rates in USD per 1 million tokens.
 type ModelPricing struct {
-	ModelPattern          string  `json:"model_pattern"`
-	DisplayName           string  `json:"display_name"`
-	InputPerMillion       float64 `json:"input_per_million"`
-	CachedInputPerMillion float64 `json:"cached_input_per_million"`
-	CacheWritePerMillion  float64 `json:"cache_write_per_million"`
-	OutputPerMillion      float64 `json:"output_per_million"`
-	IsOverride            bool    `json:"is_override,omitempty"`
+	ModelPattern                string  `json:"model_pattern"`
+	DisplayName                 string  `json:"display_name"`
+	InputPerMillion             float64 `json:"input_per_million"`
+	CachedInputPerMillion       float64 `json:"cached_input_per_million"`
+	CacheWritePerMillion        float64 `json:"cache_write_per_million"`
+	OutputPerMillion            float64 `json:"output_per_million"`
+	LongContextThreshold        int64   `json:"long_context_threshold,omitempty"`
+	LongContextInputMultiplier  float64 `json:"long_context_input_multiplier,omitempty"`
+	LongContextOutputMultiplier float64 `json:"long_context_output_multiplier,omitempty"`
+	IsOverride                  bool    `json:"is_override,omitempty"`
 }
 
 // PlanBenchmark represents a reference subscription plan (or synthesized AGY row)
@@ -48,6 +51,7 @@ type WindowCalibration struct {
 	Category                 string     `json:"category"`
 	Window                   string     `json:"window"`
 	RealizedAPIUSD           float64    `json:"realized_api_usd"`
+	ObservedIntervalUSD      float64    `json:"observed_interval_usd,omitempty"`
 	ObservedDeltaFraction    float64    `json:"observed_delta_fraction"`
 	ImpliedFullCapUSD        *float64   `json:"implied_full_cap_usd,omitempty"`
 	Confidence               string     `json:"confidence"`
@@ -148,16 +152,21 @@ type PoolValueSummary struct {
 	CacheHitRate              float64  `json:"cache_hit_rate"`
 	AvgClaude5hCapUSD         *float64 `json:"avg_claude_5h_cap_usd,omitempty"`
 	AvgClaudeWeeklyCapUSD     *float64 `json:"avg_claude_weekly_cap_usd,omitempty"`
+	MinClaudeWeeklyCapUSD     *float64 `json:"min_claude_weekly_cap_usd,omitempty"`
+	MaxClaudeWeeklyCapUSD     *float64 `json:"max_claude_weekly_cap_usd,omitempty"`
 	ClaudeWeeklyConfidence    string   `json:"claude_weekly_confidence"`
 	ClaudeObservedDelta       float64  `json:"claude_observed_delta"`
 	AvgGemini5hCapUSD         *float64 `json:"avg_gemini_5h_cap_usd,omitempty"`
 	AvgGeminiWeeklyCapUSD     *float64 `json:"avg_gemini_weekly_cap_usd,omitempty"`
+	MinGeminiWeeklyCapUSD     *float64 `json:"min_gemini_weekly_cap_usd,omitempty"`
+	MaxGeminiWeeklyCapUSD     *float64 `json:"max_gemini_weekly_cap_usd,omitempty"`
 	GeminiWeeklyConfidence    string   `json:"gemini_weekly_confidence"`
 	GeminiObservedDelta       float64  `json:"gemini_observed_delta"`
 	AvgCombinedWeeklyCapUSD   *float64 `json:"avg_combined_weekly_cap_usd,omitempty"`
 	AvgCombinedMonthlyCapUSD  *float64 `json:"avg_combined_monthly_cap_usd,omitempty"`
 	CombinedValueMultiplier   *float64 `json:"combined_value_multiplier,omitempty"`
 	UnpricedModels            []string `json:"unpriced_models,omitempty"`
+	LegacyUnpricedRequests    int64    `json:"legacy_unpriced_requests,omitempty"`
 	ExternalDropIntervalCount int      `json:"external_drop_interval_count,omitempty"`
 }
 

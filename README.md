@@ -477,8 +477,8 @@ Yes! On Linux, Antigravity 2.0 uses Electron's `AppImageUpdater`. When Antigravi
 
 The web dashboard includes a **Plan Value & Competitor Comparison** panel to benchmark your Google AI Pro / AI Ultra seats against Anthropic (Claude Pro / Max) and OpenAI (ChatGPT Plus / Codex) on a standardized API-equivalent USD scale:
 
-- **API-Equivalent Valuation**: Real-time SSE and unary `usageMetadata` tokens (uncached input, cache read, cache write, tool-use prompts, output, and non-overlapping thoughts) are mapped against official per-1M token pricing (`GET/PUT/DELETE /api/analytics/pricing`).
-- **Quota-Burn Calibration**: Append-only `quota_snapshots` capture monotonic `remaining_fraction` drops within each reset epoch (plus exact 429 exhaustion edges) to estimate implied 100% 5-hour and weekly API caps per category (`claude_gpt` vs `gemini`) and combined value-per-dollar multipliers (`×`).
+- **API-Equivalent Valuation**: Real-time SSE and unary `usageMetadata` tokens (uncached input, cache read, cache write, tool-use prompts, output, and non-overlapping thoughts) are mapped against official per-1M token pricing (`GET/PUT/DELETE /api/analytics/pricing`), including Gemini's 90% cached-input discount and `>200k` context tier pricing.
+- **Quota-Burn Calibration**: Append-only `quota_snapshots` capture monotonic `remaining_fraction` drops within unified `(account, category, window)` streams (using pre-window anchors and real upstream polls on 429) to estimate delta-weighted implied 100% 5-hour and weekly API caps per category (`claude_gpt` vs `gemini`) and value-per-dollar multipliers (`×`).
 - **Cohort & Benchmark Comparison**: Compare per-account cap variance across multi-account pools and compare measured AGY rows against editable competitor baselines (`GET/PUT/DELETE /api/analytics/benchmarks`), per-account plan tiers (`PUT /api/accounts/{id}/plan`), and one-click CSV/JSON export (`GET /api/analytics/export`).
 
 
