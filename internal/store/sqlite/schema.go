@@ -231,6 +231,36 @@ CREATE TABLE IF NOT EXISTS plan_benchmarks (
 );
 `,
 	},
+	{
+		Version:     10,
+		Description: "normalize_quota_snapshots_and_long_context_pricing",
+		SQL: `
+-- 14. Normalize snapshot window/category labels and add long-context multiplier columns to pricing overrides
+UPDATE quota_snapshots
+SET window = CASE
+    WHEN LOWER(window) LIKE '%weekly%' OR LOWER(bucket_id) LIKE '%weekly%' THEN 'weekly'
+    ELSE '5h'
+END;
+
+UPDATE quota_snapshots
+SET category = CASE
+    WHEN LOWER(bucket_id) LIKE '%claude%' OR LOWER(bucket_id) LIKE '%gpt%' OR LOWER(bucket_id) LIKE '%3p%'
+      OR LOWER(display_name) LIKE '%claude%' OR LOWER(display_name) LIKE '%gpt%' OR LOWER(display_name) LIKE '%3p%'
+      THEN 'claude_gpt'
+    WHEN LOWER(bucket_id) LIKE '%gemini%' OR LOWER(display_name) LIKE '%gemini%'
+      THEN 'gemini'
+    ELSE COALESCE(NULLIF(category, ''), 'unknown')
+END
+WHERE category = '' OR category = 'unknown';
+
+CREATE INDEX IF NOT EXISTS idx_quota_snapshots_acc_cat_win_time
+    ON quota_snapshots(account_id, category, window, captured_at);
+
+ALTER TABLE model_pricing_overrides ADD COLUMN long_context_threshold INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE model_pricing_overrides ADD COLUMN long_context_input_multiplier REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE model_pricing_overrides ADD COLUMN long_context_output_multiplier REAL NOT NULL DEFAULT 1.0;
+`,
+	},
 }
 
 // Migrate applies all pending schema migrations to the database.

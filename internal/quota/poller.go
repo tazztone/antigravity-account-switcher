@@ -40,15 +40,19 @@ func (f TokenRefresherFunc) RefreshToken(ctx context.Context, refreshToken strin
 	return f(ctx, refreshToken)
 }
 
+// LanguageServerQueryFunc queries the local Antigravity language_server for active quota buckets.
+type LanguageServerQueryFunc func(ctx context.Context, accountID string) ([]*domain.QuotaBucket, error)
+
 // Config holds options for the Quota Poller Daemon.
 type Config struct {
-	PollInterval      time.Duration
-	BaseURL           string
-	HTTPClient        *http.Client
-	TokenExpiryMargin time.Duration
-	TokenRefresher    TokenRefresher
-	EventBroadcaster  domain.EventBroadcaster
-	EventRepo         domain.EventRepository
+	PollInterval            time.Duration
+	BaseURL                 string
+	HTTPClient              *http.Client
+	TokenExpiryMargin       time.Duration
+	TokenRefresher          TokenRefresher
+	EventBroadcaster        domain.EventBroadcaster
+	EventRepo               domain.EventRepository
+	LanguageServerQueryFunc LanguageServerQueryFunc
 }
 
 // Option configures Config.
@@ -89,6 +93,11 @@ func WithEventRepository(repo domain.EventRepository) Option {
 	return func(c *Config) { c.EventRepo = repo }
 }
 
+// WithLanguageServerQueryFunc overrides the local language_server query provider.
+func WithLanguageServerQueryFunc(fn LanguageServerQueryFunc) Option {
+	return func(c *Config) { c.LanguageServerQueryFunc = fn }
+}
+
 // Poller is the background daemon that periodically queries quota endpoints,
 // updates SQLite quota buckets, and auto-restores exhausted accounts.
 type Poller struct {
@@ -98,6 +107,7 @@ type Poller struct {
 	tokenRefresher TokenRefresher
 	broadcaster    domain.EventBroadcaster
 	eventRepo      domain.EventRepository
+	lsQueryFunc    LanguageServerQueryFunc
 	client         *http.Client
 
 	stateMu sync.Mutex
@@ -122,9 +132,10 @@ func NewPoller(
 	}
 
 	cfg := Config{
-		PollInterval:      DefaultPollInterval,
-		BaseURL:           DefaultBaseURL,
-		TokenExpiryMargin: DefaultTokenExpiryMargin,
+		PollInterval:            DefaultPollInterval,
+		BaseURL:                 DefaultBaseURL,
+		TokenExpiryMargin:       DefaultTokenExpiryMargin,
+		LanguageServerQueryFunc: QueryLocalLanguageServer,
 	}
 
 	for _, opt := range opts {
@@ -148,6 +159,7 @@ func NewPoller(
 		tokenRefresher: cfg.TokenRefresher,
 		broadcaster:    cfg.EventBroadcaster,
 		eventRepo:      cfg.EventRepo,
+		lsQueryFunc:    cfg.LanguageServerQueryFunc,
 		client:         client,
 	}, nil
 }
@@ -306,6 +318,16 @@ func (p *Poller) PollAccount(ctx context.Context, accountID string) ([]*domain.Q
 	return p.quotaRepo.GetByAccountID(ctx, accountID)
 }
 
+func (p *Poller) languageServerAccountID(ctx context.Context) string {
+	if catAcc, err := p.accountRepo.GetActiveForCategory(ctx, domain.CategoryClaudeGPT); err == nil && catAcc != nil {
+		return catAcc.ID
+	}
+	if activeAcc, err := p.accountRepo.GetActive(ctx); err == nil && activeAcc != nil {
+		return activeAcc.ID
+	}
+	return ""
+}
+
 func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.Time) error {
 	// 1. Check token expiry and refresh if needed
 	if acc.IsTokenExpired(p.cfg.TokenExpiryMargin) {
@@ -335,10 +357,12 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 		}
 	}
 
-	// 2. Fetch quota summary
+	// 2. Fetch quota summary.
+	// Local language_server reflects whichever account handles /v1internal:retrieveUserQuotaSummary
+	// (primary Claude/GPT category owner first, falling back to global is_active).
 	var buckets []*domain.QuotaBucket
-	if acc.IsActive && p.cfg.BaseURL == DefaultBaseURL {
-		if lsBuckets, lsErr := QueryLocalLanguageServer(ctx, acc.ID); lsErr == nil && len(lsBuckets) > 0 {
+	if p.cfg.BaseURL == DefaultBaseURL && p.lsQueryFunc != nil && acc.ID == p.languageServerAccountID(ctx) {
+		if lsBuckets, lsErr := p.lsQueryFunc(ctx, acc.ID); lsErr == nil && len(lsBuckets) > 0 {
 			buckets = lsBuckets
 		}
 	}

@@ -88,8 +88,18 @@ type accountFallbackState struct {
 	fallbackLogged     bool
 }
 
+const defaultExhaustionPollCooldown = 10 * time.Second
+
 // FailoverOption provides functional options to configure FailoverEngine.
 type FailoverOption func(*FailoverEngine)
+
+// WithExhaustionPoller configures a callback invoked asynchronously (and debounced per account)
+// when an account receives HTTP 429 / RESOURCE_EXHAUSTED so real 5h/weekly buckets are polled.
+func WithExhaustionPoller(fn func(ctx context.Context, accountID string)) FailoverOption {
+	return func(f *FailoverEngine) {
+		f.SetExhaustionPoller(fn)
+	}
+}
 
 // WithQuotaRepository configures the QuotaRepository for bucket inspection.
 func WithQuotaRepository(repo domain.QuotaRepository) FailoverOption {
@@ -143,6 +153,11 @@ type FailoverEngine struct {
 	mu            sync.RWMutex
 	accountStates map[string]*accountFallbackState
 	quotaCache    map[string][]cachedQuotaBucket
+
+	pollMu                 sync.Mutex
+	exhaustionPoller       func(ctx context.Context, accountID string)
+	exhaustionPollCooldown time.Duration
+	lastExhaustionPoll     map[string]time.Time
 }
 
 // NewFailoverEngine constructs a new FailoverEngine with optional functional configuration options.
@@ -162,6 +177,8 @@ func NewFailoverEngine(
 		fallbackStrategy:         config.DefaultFallbackStrategy,
 		accountStates:            make(map[string]*accountFallbackState),
 		quotaCache:               make(map[string][]cachedQuotaBucket),
+		exhaustionPollCooldown:   defaultExhaustionPollCooldown,
+		lastExhaustionPoll:       make(map[string]time.Time),
 	}
 	f.updateFallbackFieldsLocked(config.DefaultModelPrimary, config.DefaultModelSecondary, false)
 
@@ -169,6 +186,42 @@ func NewFailoverEngine(
 		opt(f)
 	}
 	return f
+}
+
+// SetExhaustionPoller configures or updates the async per-account poll callback triggered on 429 exhaustion.
+func (f *FailoverEngine) SetExhaustionPoller(fn func(ctx context.Context, accountID string)) {
+	f.pollMu.Lock()
+	defer f.pollMu.Unlock()
+	f.exhaustionPoller = fn
+}
+
+func (f *FailoverEngine) triggerExhaustionPoll(accountID string) {
+	if accountID == "" {
+		return
+	}
+	f.pollMu.Lock()
+	fn := f.exhaustionPoller
+	if fn == nil {
+		f.pollMu.Unlock()
+		return
+	}
+	cooldown := f.exhaustionPollCooldown
+	if cooldown <= 0 {
+		cooldown = defaultExhaustionPollCooldown
+	}
+	now := time.Now()
+	if last, ok := f.lastExhaustionPoll[accountID]; ok && now.Sub(last) < cooldown {
+		f.pollMu.Unlock()
+		return
+	}
+	f.lastExhaustionPoll[accountID] = now
+	f.pollMu.Unlock()
+
+	go func(id string, pollFn func(context.Context, string)) {
+		pollCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		pollFn(pollCtx, id)
+	}(accountID, fn)
 }
 
 // SetFallbackStrategy updates the failover strategy dynamically, accepting only
@@ -929,9 +982,13 @@ func (f *FailoverEngine) HandleExhaustion(
 	f.ensureQuotaBucketsPrefetched(ctx, acc.ID)
 
 	var eventsToEmit []*domain.ProxyEvent
+	var pollAccounts []string
 	defer func() {
 		for _, ev := range eventsToEmit {
 			f.emitEvent(ev)
+		}
+		for _, id := range pollAccounts {
+			f.triggerExhaustionPoll(id)
 		}
 	}()
 
@@ -982,7 +1039,7 @@ func (f *FailoverEngine) HandleExhaustion(
 
 	// 2. If fallback is disabled or no model was requested, rotate immediately to next account for this category
 	if !f.fallbackSecondaryEnabled || strings.TrimSpace(failedModel) == "" {
-		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit, &pollAccounts)
 		if rotErr != nil {
 			return ActionRotateAccount, failedModel, nil, rotErr
 		}
@@ -993,7 +1050,7 @@ func (f *FailoverEngine) HandleExhaustion(
 	// If failed model is neither primary nor secondary, it is outside the fallback tier:
 	// rotate immediately for this category without mutating primary/secondary fallback state.
 	if !isPrimary && !isSecondary {
-		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+		next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit, &pollAccounts)
 		if rotErr != nil {
 			return ActionRotateAccount, failedModel, nil, rotErr
 		}
@@ -1018,7 +1075,7 @@ func (f *FailoverEngine) HandleExhaustion(
 		}
 		if canRotate {
 			triedPrimaryRotation = true
-			next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+			next, rotErr := f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit, &pollAccounts)
 			if rotErr == nil && next != nil {
 				return ActionRotateAccount, primary, next, nil
 			}
@@ -1051,6 +1108,7 @@ func (f *FailoverEngine) HandleExhaustion(
 		state.primaryResetTime = resetTime
 
 		f.markModelExhaustedLocked(acc.ID, primary, resetTime)
+		pollAccounts = append(pollAccounts, acc.ID)
 
 		// Emit EventTypeModelFallback once per transition
 		if !wasPrimaryExhausted {
@@ -1104,7 +1162,7 @@ func (f *FailoverEngine) HandleExhaustion(
 	var next *domain.Account
 	var rotErr error
 	if !triedPrimaryRotation {
-		next, rotErr = f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit)
+		next, rotErr = f.rotateAccountForCategoryLocked(ctx, acc, failedCat, failedModel, &eventsToEmit, &pollAccounts)
 	} else {
 		rotErr = domain.ErrNoAvailableAccount
 	}
@@ -1114,7 +1172,7 @@ func (f *FailoverEngine) HandleExhaustion(
 			if secCat == CategoryUnknown {
 				secCat = failedCat
 			}
-			nextSec, secErr := f.rotateAccountForCategoryLocked(ctx, acc, secCat, secondary, &eventsToEmit)
+			nextSec, secErr := f.rotateAccountForCategoryLocked(ctx, acc, secCat, secondary, &eventsToEmit, &pollAccounts)
 			if secErr == nil && nextSec != nil {
 				return ActionRotateAccount, secondary, nextSec, nil
 			}
@@ -1183,16 +1241,20 @@ func (f *FailoverEngine) RotateAccountForCategory(ctx context.Context, exhausted
 	}
 
 	var eventsToEmit []*domain.ProxyEvent
+	var pollAccounts []string
 	defer func() {
 		for _, ev := range eventsToEmit {
 			f.emitEvent(ev)
+		}
+		for _, id := range pollAccounts {
+			f.triggerExhaustionPoll(id)
 		}
 	}()
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.rotateAccountForCategoryLocked(ctx, exhaustedAcc, category, "", &eventsToEmit)
+	return f.rotateAccountForCategoryLocked(ctx, exhaustedAcc, category, "", &eventsToEmit, &pollAccounts)
 }
 
 func (f *FailoverEngine) rotateAccountForCategoryLocked(
@@ -1201,6 +1263,7 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 	category ModelCategory,
 	failedModel string,
 	eventsToEmit *[]*domain.ProxyEvent,
+	pollAccounts *[]string,
 ) (*domain.Account, error) {
 	emit := func(ev *domain.ProxyEvent) {
 		if eventsToEmit != nil {
@@ -1280,7 +1343,9 @@ func (f *FailoverEngine) rotateAccountForCategoryLocked(
 			Timestamp: time.Now().UTC(),
 		})
 	}
-	f.recordExhaustionSnapshotLocked(ctx, exhaustedAcc.ID, category, resetTime)
+	if pollAccounts != nil {
+		*pollAccounts = append(*pollAccounts, exhaustedAcc.ID)
+	}
 
 	// Broadcast EventTypeFailover429
 	msg := fmt.Sprintf("Account %s (%s) marked exhausted due to HTTP 429 / RESOURCE_EXHAUSTED", exhaustedAcc.Email, exhaustedAcc.ID)
@@ -1432,56 +1497,4 @@ func (f *FailoverEngine) emitEvent(event *domain.ProxyEvent) {
 		defer cancel()
 		_ = f.eventRepo.Record(ctx, event)
 	}
-}
-
-func (f *FailoverEngine) recordExhaustionSnapshotLocked(ctx context.Context, accountID string, category ModelCategory, resetTime time.Time) {
-	if f.quotaRepo == nil || category == CategoryUnknown {
-		return
-	}
-	snapRepo, ok := f.quotaRepo.(domain.QuotaSnapshotRepository)
-	if !ok {
-		return
-	}
-
-	domainCat := domain.ModelCategory(category.String())
-	bucketID := ""
-	displayName := ""
-	bucketReset := resetTime
-	if buckets, err := f.quotaRepo.GetByAccountID(ctx, accountID); err == nil {
-		for _, b := range buckets {
-			if b == nil || domain.CategorizeBucket(b.BucketID, b.DisplayName) != domainCat {
-				continue
-			}
-			wLower := strings.ToLower(string(b.Window))
-			if strings.Contains(wLower, "5h") || strings.Contains(wLower, "daily") || strings.Contains(strings.ToLower(b.BucketID), "5h") {
-				bucketID = b.BucketID
-				displayName = b.DisplayName
-				if !b.ResetTime.IsZero() && b.ResetTime.After(time.Now().UTC()) {
-					bucketReset = b.ResetTime
-				}
-				break
-			}
-		}
-	}
-	if bucketID == "" {
-		if domainCat == domain.CategoryClaudeGPT {
-			bucketID = accountID + "-3p-5h"
-			displayName = "Claude & GPT (5h)"
-		} else {
-			bucketID = accountID + "-gemini-5h"
-			displayName = "Gemini (5h)"
-		}
-	}
-
-	_, _ = snapRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{{
-		AccountID:         accountID,
-		BucketID:          bucketID,
-		DisplayName:       displayName,
-		Category:          domainCat.String(),
-		Window:            "5h",
-		RemainingFraction: 0.0,
-		ResetTime:         bucketReset,
-		Source:            "429_exhaustion",
-		CapturedAt:        time.Now().UTC(),
-	}})
 }

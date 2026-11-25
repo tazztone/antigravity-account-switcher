@@ -1911,3 +1911,92 @@ func TestFailoverEngine_PredictiveCheck_EmitsEventOnlyOncePerTransition(t *testi
 		t.Fatal("timed out waiting for re-exhaustion fallback event")
 	}
 }
+
+type mockQuotaSnapshotRepo struct {
+	mu    sync.Mutex
+	snaps []*domain.QuotaSnapshot
+}
+
+func (m *mockQuotaSnapshotRepo) UpsertBuckets(_ context.Context, _ []*domain.QuotaBucket) error {
+	return nil
+}
+func (m *mockQuotaSnapshotRepo) GetByAccountID(_ context.Context, _ string) ([]*domain.QuotaBucket, error) {
+	return nil, nil
+}
+func (m *mockQuotaSnapshotRepo) ListAll(_ context.Context) (map[string][]*domain.QuotaBucket, error) {
+	return nil, nil
+}
+func (m *mockQuotaSnapshotRepo) DeleteByAccountID(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockQuotaSnapshotRepo) GetExhaustedAccountsPastReset(_ context.Context, _ time.Time) ([]string, error) {
+	return nil, nil
+}
+func (m *mockQuotaSnapshotRepo) RecordSnapshotsIfChanged(_ context.Context, snapshots []*domain.QuotaSnapshot) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.snaps = append(m.snaps, snapshots...)
+	return len(snapshots), nil
+}
+func (m *mockQuotaSnapshotRepo) ListSnapshots(_ context.Context, _ string, _ time.Time) ([]*domain.QuotaSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*domain.QuotaSnapshot(nil), m.snaps...), nil
+}
+func (m *mockQuotaSnapshotRepo) ListLatestSnapshotsBefore(_ context.Context, _ string, _ time.Time) ([]*domain.QuotaSnapshot, error) {
+	return nil, nil
+}
+
+func TestFailoverEngine_ExhaustionTriggersDebouncedAsyncPollWithoutFabricatedSnapshot(t *testing.T) {
+	acc1 := &domain.Account{ID: "acc-p1", Email: "p1@example.com", Status: domain.AccountStatusActive, IsActive: true}
+	acc2 := &domain.Account{ID: "acc-p2", Email: "p2@example.com", Status: domain.AccountStatusActive}
+	acc3 := &domain.Account{ID: "acc-p3", Email: "p3@example.com", Status: domain.AccountStatusActive}
+
+	mockRepo := newMockAccountRepo()
+	mockRepo.addAccount(acc1)
+	mockRepo.addAccount(acc2)
+	mockRepo.addAccount(acc3)
+	snapRepo := &mockQuotaSnapshotRepo{}
+
+	polledCh := make(chan string, 4)
+	var engine *FailoverEngine
+	engine = NewFailoverEngine(mockRepo, nil, nil,
+		WithQuotaRepository(snapRepo),
+		WithExhaustionPoller(func(_ context.Context, accountID string) {
+			// Verify f.mu is NOT held while exhaustion poller executes (would deadlock on RLock if held).
+			_ = engine.IsAccountExhausted(accountID, CategoryClaudeGPT, "")
+			polledCh <- accountID
+		}),
+	)
+
+	ctx := context.Background()
+	if _, err := engine.RotateAccountForCategory(ctx, acc1, CategoryClaudeGPT); err != nil {
+		t.Fatalf("first RotateAccountForCategory: %v", err)
+	}
+	// Second rapid rotation for the same account within cooldown must be debounced.
+	if _, err := engine.RotateAccountForCategory(ctx, acc1, CategoryGemini); err != nil {
+		t.Fatalf("second RotateAccountForCategory: %v", err)
+	}
+
+	select {
+	case id := <-polledCh:
+		if id != acc1.ID {
+			t.Fatalf("expected async poll for %s, got %s", acc1.ID, id)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for async exhaustion poll")
+	}
+
+	// Debounce should suppress second rapid trigger for acc1.
+	select {
+	case extra := <-polledCh:
+		t.Fatalf("expected debounced suppression for second trigger, got extra poll for %s", extra)
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// No fabricated 429_exhaustion 5h=0.0 snapshots should be written.
+	snaps, _ := snapRepo.ListSnapshots(ctx, acc1.ID, time.Time{})
+	if len(snaps) != 0 {
+		t.Fatalf("expected 0 fabricated snapshots on 429, got %+v", snaps)
+	}
+}

@@ -313,6 +313,9 @@ func runServe(args []string) {
 		fmt.Fprintf(os.Stderr, "Error initializing quota monitor: %v\n", err)
 		os.Exit(1)
 	}
+	failoverEngine.SetExhaustionPoller(func(pCtx context.Context, accID string) {
+		_, _ = poller.PollAccount(pCtx, accID)
+	})
 
 	if err := poller.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to start quota poller: %v\n", err)

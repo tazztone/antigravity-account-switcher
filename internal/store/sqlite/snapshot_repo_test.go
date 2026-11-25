@@ -193,7 +193,104 @@ func TestAccountPlanAndExtendedMetrics(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&ver); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if ver < 9 {
-		t.Fatalf("expected schema version >= 9, got %d", ver)
+	if ver < 10 {
+		t.Fatalf("expected schema version >= 10, got %d", ver)
+	}
+}
+
+func TestQuotaSnapshots_CrossSourceUnificationAndAnchors(t *testing.T) {
+	_, accRepo, quotaRepo, _, _ := setupTestStore(t)
+	ctx := context.Background()
+
+	acc := &domain.Account{
+		ID:           "acc-1",
+		Email:        "unify@gmail.com",
+		RefreshToken: "rt-unify",
+		PlanTier:     "ai_pro",
+	}
+	if err := accRepo.Create(ctx, acc); err != nil {
+		t.Fatalf("Create account: %v", err)
+	}
+
+	t0 := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	reset1 := t0.Add(5 * time.Hour)
+
+	// 1. Initial language_server poll (bucketID "<accID>-<rawID>", window "5H")
+	inserted, err := quotaRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{{
+		AccountID:         acc.ID,
+		BucketID:          "acc-1-3p-5h",
+		DisplayName:       "Claude & GPT (5h)",
+		Window:            "5H",
+		RemainingFraction: 1.0,
+		ResetTime:         reset1,
+		Source:            "language_server",
+		CapturedAt:        t0,
+	}})
+	if err != nil || inserted != 1 {
+		t.Fatalf("expected 1 baseline language_server insert, got %d (err=%v)", inserted, err)
+	}
+
+	// 2. Subsequent unchanged cloud_code poll (raw bucketID "3p-5h", window "5h") must dedup cleanly
+	inserted, err = quotaRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{{
+		AccountID:         acc.ID,
+		BucketID:          "3p-5h",
+		DisplayName:       "Claude and GPT models (5h)",
+		Window:            "5h",
+		RemainingFraction: 1.0,
+		ResetTime:         reset1,
+		Source:            "cloud_code",
+		CapturedAt:        t0.Add(5 * time.Minute),
+	}})
+	if err != nil || inserted != 0 {
+		t.Fatalf("expected 0 inserted for unchanged cloud_code poll across sources, got %d (err=%v)", inserted, err)
+	}
+
+	// 3. Drop recorded from cloud_code must insert once with canonical window/category
+	inserted, err = quotaRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{{
+		AccountID:         acc.ID,
+		BucketID:          "3p-5h",
+		DisplayName:       "Claude and GPT models (5h)",
+		Window:            "5h",
+		RemainingFraction: 0.80,
+		ResetTime:         reset1,
+		Source:            "cloud_code",
+		CapturedAt:        t0.Add(10 * time.Minute),
+	}})
+	if err != nil || inserted != 1 {
+		t.Fatalf("expected 1 inserted on cloud_code burn, got %d (err=%v)", inserted, err)
+	}
+
+	// Synthetic snapshot prior to anchor cutoff must be ignored by ListLatestSnapshotsBefore
+	_, _ = quotaRepo.RecordSnapshotsIfChanged(ctx, []*domain.QuotaSnapshot{{
+		AccountID:         acc.ID,
+		BucketID:          "acc-1-gemini-weekly",
+		DisplayName:       "Gemini (weekly)",
+		Window:            "WEEKLY",
+		RemainingFraction: 0.55,
+		ResetTime:         reset1.Add(7 * 24 * time.Hour),
+		Source:            "synthetic",
+		CapturedAt:        t0.Add(2 * time.Minute),
+	}})
+
+	allSnaps, err := quotaRepo.ListSnapshots(ctx, acc.ID, time.Time{})
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if allSnaps[0].Window != "5h" || allSnaps[0].Category != "claude_gpt" {
+		t.Fatalf("expected normalized 5h/claude_gpt on first snapshot, got %s/%s", allSnaps[0].Window, allSnaps[0].Category)
+	}
+	if allSnaps[1].Window != "5h" || allSnaps[1].Category != "claude_gpt" {
+		t.Fatalf("expected normalized 5h/claude_gpt on second snapshot, got %s/%s", allSnaps[1].Window, allSnaps[1].Category)
+	}
+
+	anchors, err := quotaRepo.ListLatestSnapshotsBefore(ctx, acc.ID, t0.Add(8*time.Minute))
+	if err != nil {
+		t.Fatalf("ListLatestSnapshotsBefore: %v", err)
+	}
+	if len(anchors) != 1 {
+		t.Fatalf("expected 1 non-synthetic anchor prior to t0+8m, got %d (%+v)", len(anchors), anchors)
+	}
+	if anchors[0].RemainingFraction != 1.0 || anchors[0].Source != "language_server" {
+		t.Fatalf("unexpected anchor: %+v", anchors[0])
 	}
 }

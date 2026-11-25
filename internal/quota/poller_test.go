@@ -861,3 +861,118 @@ func TestParseQuotaResponse_GroupsSnakeCaseRemainingAmount(t *testing.T) {
 		t.Fatalf("expected 1 bucket with RemainingAmount=150, got %+v", buckets)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestPoller_LanguageServerAttributionFollowsClaudeGPTCategory(t *testing.T) {
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	accRepo := sqlite.NewAccountRepository(db)
+	quotaRepo := sqlite.NewQuotaRepository(db)
+	ctx := context.Background()
+
+	accA := &domain.Account{
+		ID:          "acc-global-active",
+		Email:       "a@example.com",
+		AccessToken: "tok-a",
+		TokenExpiry: time.Now().Add(1 * time.Hour),
+		Status:      domain.AccountStatusActive,
+		IsActive:    true,
+	}
+	accB := &domain.Account{
+		ID:          "acc-claude-owner",
+		Email:       "b@example.com",
+		AccessToken: "tok-b",
+		TokenExpiry: time.Now().Add(1 * time.Hour),
+		Status:      domain.AccountStatusActive,
+	}
+	if err := accRepo.Create(ctx, accA); err != nil {
+		t.Fatalf("Create accA: %v", err)
+	}
+	if err := accRepo.Create(ctx, accB); err != nil {
+		t.Fatalf("Create accB: %v", err)
+	}
+	// Make global is_active = accA, but primary Claude/GPT category owner = accB.
+	if err := accRepo.SetActive(ctx, accA.ID); err != nil {
+		t.Fatalf("SetActive accA: %v", err)
+	}
+	if err := accRepo.SetActiveForCategory(ctx, domain.CategoryClaudeGPT, accB.ID); err != nil {
+		t.Fatalf("SetActiveForCategory accB: %v", err)
+	}
+
+	var mu sync.Mutex
+	var lsCalledFor []string
+	var httpTokens []string
+
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			mu.Lock()
+			httpTokens = append(httpTokens, r.Header.Get("Authorization"))
+			mu.Unlock()
+			payload := `{"groups":[{"displayName":"Claude & GPT","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.66}]}]}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(payload)),
+			}, nil
+		}),
+	}
+
+	p, err := NewPoller(
+		accRepo,
+		quotaRepo,
+		WithHTTPClient(httpClient),
+		WithLanguageServerQueryFunc(func(_ context.Context, accountID string) ([]*domain.QuotaBucket, error) {
+			mu.Lock()
+			lsCalledFor = append(lsCalledFor, accountID)
+			mu.Unlock()
+			return []*domain.QuotaBucket{{
+				AccountID:         accountID,
+				BucketID:          accountID + "-3p-5h",
+				DisplayName:       "Claude & GPT (5h)",
+				Window:            domain.QuotaWindow("5H"),
+				RemainingFraction: 0.42,
+				Source:            "language_server",
+				UpdatedAt:         time.Now().UTC(),
+			}}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+
+	// Polling accA (globally is_active, but NOT CategoryClaudeGPT) must skip language_server and use direct HTTP.
+	bucketsA, err := p.PollAccount(ctx, accA.ID)
+	if err != nil {
+		t.Fatalf("PollAccount accA: %v", err)
+	}
+	if len(bucketsA) != 1 || bucketsA[0].RemainingFraction != 0.66 {
+		t.Fatalf("expected direct HTTP fraction 0.66 for accA, got %+v", bucketsA)
+	}
+
+	// Polling accB (CategoryClaudeGPT owner) must use language_server.
+	bucketsB, err := p.PollAccount(ctx, accB.ID)
+	if err != nil {
+		t.Fatalf("PollAccount accB: %v", err)
+	}
+	if len(bucketsB) != 1 || bucketsB[0].RemainingFraction != 0.42 {
+		t.Fatalf("expected language_server fraction 0.42 for accB, got %+v", bucketsB)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lsCalledFor) != 1 || lsCalledFor[0] != accB.ID {
+		t.Fatalf("expected lsQueryFunc called once for %s, got %v", accB.ID, lsCalledFor)
+	}
+	if len(httpTokens) != 1 || httpTokens[0] != "Bearer tok-a" {
+		t.Fatalf("expected direct HTTP fetch once for tok-a, got %v", httpTokens)
+	}
+}

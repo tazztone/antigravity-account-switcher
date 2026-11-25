@@ -329,6 +329,11 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			return 1, fmt.Errorf("failed to initialize quota poller: %w", err)
 		}
 		poller = pollerInstance
+		if failoverEngine != nil && poller != nil {
+			failoverEngine.SetExhaustionPoller(func(pCtx context.Context, accID string) {
+				_, _ = poller.PollAccount(pCtx, accID)
+			})
+		}
 
 		metricsService = metrics.NewService(metricsRepo, accRepo)
 		metricsService.SetQuotaRepository(quotaRepo)

@@ -58,10 +58,21 @@ func CategorizeBucket(bucketID, displayName string) ModelCategory {
 	return CategoryUnknown
 }
 
+// NormalizeQuotaWindow maps API and language_server quota window strings to canonical "5h" or "weekly".
+func NormalizeQuotaWindow(window, bucketID string) string {
+	wLower := strings.ToLower(window)
+	idLower := strings.ToLower(bucketID)
+	if strings.Contains(wLower, "weekly") || strings.Contains(idLower, "weekly") {
+		return "weekly"
+	}
+	return "5h"
+}
+
 // QuotaSnapshotRepository persists and queries append-only quota snapshots.
 type QuotaSnapshotRepository interface {
 	RecordSnapshotsIfChanged(ctx context.Context, snapshots []*QuotaSnapshot) (int, error)
 	ListSnapshots(ctx context.Context, accountID string, since time.Time) ([]*QuotaSnapshot, error)
+	ListLatestSnapshotsBefore(ctx context.Context, accountID string, before time.Time) ([]*QuotaSnapshot, error)
 }
 
 // IsExhausted returns true if remaining quota fraction is zero or negligible.
